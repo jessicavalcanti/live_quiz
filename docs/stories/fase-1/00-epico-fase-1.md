@@ -67,16 +67,25 @@ depois.
 
 ### Fluxo de trabalho
 
-- `main` protegida; uma branch por story: `feature/<numero>-<slug>` (ex.: `feature/06-contexto-quiz-crud`).
-- Um PR por story, com CI verde, squash merge.
-- Commits em inglês, no imperativo.
+O projeto segue **git flow**. O procedimento completo está em [`AGENTS.md`](../../../AGENTS.md) —
+leia antes de começar qualquer story.
+
+- `main` = produção, protegida, recebe **apenas** PR vindo da `develop`.
+- `develop` = branch de integração e default do repositório; todo PR de story aponta para ela.
+- Uma branch por story, criada **a partir da `develop`**: `feature/<numero-da-issue>-<slug>`
+  (ou `fix/`, `chore/`, `docs/`, `refactor/`).
+- Commits em inglês seguindo **Conventional Commits** (`feat(quizzes): add quiz context`).
+- Um PR por story, com `Closes #<N>` no corpo, CI verde e squash merge.
+- Movimentação do card no board (`Todo → Doing → Review → Done`) sempre acompanhada de assignee.
 
 ### Definition of Done global
 
 Além da DoD específica de cada story:
 
 - [ ] `mix precommit` passa localmente (compile com `--warnings-as-errors`, format, credo, test);
-- [ ] CI verde no PR;
+- [ ] cobertura de testes **acima de 80%** (`mix coveralls`);
+- [ ] CI verde no PR aberto contra a `develop`;
+- [ ] card movido para `Review` e issue atribuída ao responsável;
 - [ ] sem warnings de compilação;
 - [ ] textos de UI em pt-BR;
 - [ ] nenhuma regra de negócio implementada dentro de LiveView ou Controller — sempre no contexto;
@@ -101,6 +110,8 @@ Além da DoD específica de cada story:
 | AD-11 | Quiz pode existir vazio; a **pergunta** é a unidade transacional | Fluxo natural de editor sem persistir pergunta incompleta |
 | AD-12 | API em `/api/v1` com envelope `data`/`errors` e autenticação **JWT via Guardian** (access 15min + refresh 30 dias, sem `Guardian.DB`) | Viabiliza o app mobile citado no documento sem sessão por cookie |
 | AD-13 | Documentação da API com `open_api_spex` + Swagger UI | Contrato explícito e versionado para o cliente mobile futuro |
+| AD-17 | Git flow com `main` protegida e `develop` como branch de integração e default; PR obrigatório e Conventional Commits | Histórico legível, `main` sempre estável e nenhum PR mirando produção por engano |
+| AD-18 | CI reprova cobertura de testes abaixo de 80% (`excoveralls`) | Garante que os cenários de teste obrigatórios de cada story sejam de fato escritos |
 | AD-15 | Toda função de leitura de quiz retorna o campo virtual `questions_count` preenchido; `playable?/1` apenas o interpreta | Contrato único para UI e API, sem query adicional por linha do dashboard |
 | AD-16 | Cascata de exclusão declarada **somente** no banco (`ON DELETE CASCADE`); as associações Ecto não usam `on_delete:` | Evita que o Ecto emita deletes redundantes a partir da aplicação |
 | AD-14 | Sem `time_limit_seconds`, sem pontuação, sem status de publicação, sem duplicação de quiz, sem visibilidade pública | Escopo das fases 3 e 4; migrations futuras são baratas |

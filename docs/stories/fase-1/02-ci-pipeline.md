@@ -18,21 +18,28 @@ Esta story cria esse portão logo no início, quando ainda é barato.
 ## 3. Escopo
 
 ### Dentro
-- Workflow do GitHub Actions rodando em `push` na `main` e em `pull_request`.
+- Workflow do GitHub Actions rodando em `push` e `pull_request` para `main` e `develop`.
 - Serviço Postgres no CI.
-- Verificações: `mix format --check-formatted`, `mix compile --warnings-as-errors`, `mix credo --strict`, `mix test`.
-- Dependência `credo` e alias `mix precommit`.
+- Verificações: `mix format --check-formatted`, `mix compile --warnings-as-errors`,
+  `mix credo --strict` e `mix coveralls` com mínimo de **80%** de cobertura.
+- Job que reprova PR para a `main` que não venha da `develop`.
+- Dependências `credo` e `excoveralls`; aliases `mix precommit` e `mix coveralls`.
 - Cache de dependências e de build.
 
+> O arquivo `.github/workflows/ci.yml` **já existe** no repositório, criado junto com a configuração
+> de git flow, e hoje detecta a ausência de `mix.exs` e passa sem executar as etapas. Esta story
+> **remove esse desvio** e liga o pipeline de verdade, agora que a aplicação existe.
+
 ### Fora
-- Dialyzer, `sobelow`, cobertura de testes, deploy, publicação de artefatos.
+- Dialyzer, `sobelow`, deploy, publicação de artefatos.
 
 ## 4. Decisões de arquitetura
 
 - **GitHub Actions** por ser onde as issues e PRs deste projeto vivem.
 - **Sem Dialyzer** nesta fase: tempo de CI alto e ruído elevado em projeto novo.
-- **Sem meta de cobertura**: a qualidade é garantida pelos cenários de teste obrigatórios definidos
-  em cada story, não por percentual.
+- **Cobertura mínima de 80% via `excoveralls`** (AD-18): os cenários de teste obrigatórios de cada
+  story continuam sendo o critério principal de qualidade, e o percentual é o piso automatizado que
+  impede uma story chegar à `develop` sem teste nenhum.
 - `mix precommit` existe para que o mesmo conjunto de verificações rode localmente antes do push.
 
 ## 5. Modelo de dados e migrations
@@ -47,7 +54,19 @@ Não se aplica.
 defp deps do
   [
     # ...
-    {:credo, "~> 1.7", only: [:dev, :test], runtime: false}
+    {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
+    {:excoveralls, "~> 0.18", only: :test}
+  ]
+end
+
+def project do
+  [
+    # ...
+    test_coverage: [tool: ExCoveralls],
+    preferred_cli_env: [
+      coveralls: :test,
+      "coveralls.html": :test
+    ]
   ]
 end
 
@@ -60,6 +79,7 @@ defp aliases do
       "credo --strict",
       "test"
     ]
+    # `mix coveralls` já é definido pelo excoveralls
   ]
 end
 ```
@@ -68,6 +88,15 @@ end
 
 Gerar com `mix credo.gen.config`. Ajustes permitidos: desabilitar checks que conflitem com o código
 gerado pelo Phoenix, documentando o motivo em comentário no próprio arquivo.
+
+### `coveralls.json`
+
+```json
+{
+  "coverage_options": { "minimum_coverage": 80 },
+  "skip_files": ["test/support", "lib/live_quiz_web/telemetry.ex"]
+}
+```
 
 ### `.github/workflows/ci.yml`
 
@@ -112,7 +141,7 @@ jobs:
       - run: mix format --check-formatted
       - run: mix compile --warnings-as-errors
       - run: mix credo --strict
-      - run: mix test
+      - run: mix coveralls
 ```
 
 ### README
@@ -142,6 +171,17 @@ Cenário: PR com warning de compilação
   Quando o workflow de CI executa
   Então a etapa "mix compile --warnings-as-errors" falha
 
+Cenário: PR com cobertura abaixo do mínimo
+  Dado um PR cuja suíte cobre menos de 80% do código
+  Quando o workflow de CI executa
+  Então a etapa "mix coveralls" falha
+  E o PR é bloqueado
+
+Cenário: PR de feature apontando para a main
+  Dado um PR aberto de uma branch de feature diretamente para a main
+  Quando o workflow de CI executa
+  Então o job de proteção da main falha informando que a origem deve ser a develop
+
 Cenário: Verificação local
   Dado o projeto na máquina do desenvolvedor
   Quando eu executo "mix precommit"
@@ -164,6 +204,8 @@ Cenário: Verificação local
 
 - [ ] `.github/workflows/ci.yml` versionado e executando com sucesso no PR desta story.
 - [ ] `credo` instalado, `.credo.exs` versionado e `mix credo --strict` sem apontamentos.
+- [ ] `excoveralls` instalado, `coveralls.json` versionado e mínimo de 80% aplicado.
+- [ ] Desvio de "mix.exs ausente" removido do workflow.
 - [ ] Alias `precommit` disponível e documentado no README.
 - [ ] Proteção da branch `main` exigindo o check de CI configurada no repositório.
 - [ ] DoD global do épico atendida.
@@ -180,4 +222,4 @@ Cenário: Verificação local
 
 ## 14. Estimativa
 
-**2 pontos** — configuração pequena e bem conhecida.
+**2 pontos** — configuração pequena e bem conhecida; o esqueleto do workflow já existe no repositório.
