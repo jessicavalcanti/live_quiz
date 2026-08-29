@@ -2,7 +2,7 @@
 
 > **Labels:** `epic`, `fase-1`
 > **Documento de origem:** `plataforma_quiz_4_fases.md` (seção 3)
-> **Stories:** 16 · **Total estimado:** 67 pontos
+> **Stories:** 16 · **Total estimado:** 72 pontos
 
 ---
 
@@ -110,6 +110,8 @@ Além da DoD específica de cada story:
 | AD-11 | Quiz pode existir vazio; a **pergunta** é a unidade transacional | Fluxo natural de editor sem persistir pergunta incompleta |
 | AD-12 | API em `/api/v1` com envelope `data`/`errors` e autenticação **JWT via Guardian** (access 15min + refresh 30 dias, sem `Guardian.DB`) | Viabiliza o app mobile citado no documento sem sessão por cookie |
 | AD-13 | Documentação da API com `open_api_spex` + Swagger UI | Contrato explícito e versionado para o cliente mobile futuro |
+| AD-19 | Versão declarada no `mix.exs`; merge na `main` gera tag e release automaticamente. Entrega de fase = minor (`0.1.0`, `0.2.0`, `0.3.0`, `1.0.0`); demais merges = patch | Toda entrega vira um artefato reproduzível e identificável, e a release de fase é reconhecível por terminar em `.0` |
+| AD-20 | Release empacotado com `mix release` em imagem Docker, levantável por versão com `bin/demo <tag>` em worktree isolado | Permite gravar a demonstração de uma fase meses depois, sem tocar na branch de trabalho nem no banco de desenvolvimento |
 | AD-17 | Git flow com `main` protegida e `develop` como branch de integração e default; PR obrigatório e Conventional Commits | Histórico legível, `main` sempre estável e nenhum PR mirando produção por engano |
 | AD-18 | CI reprova cobertura de testes abaixo de 80% (`excoveralls`) | Garante que os cenários de teste obrigatórios de cada story sejam de fato escritos |
 | AD-15 | Toda função de leitura de quiz retorna o campo virtual `questions_count` preenchido; `playable?/1` apenas o interpreta | Contrato único para UI e API, sem query adicional por linha do dashboard |
@@ -164,7 +166,7 @@ Regras garantidas no banco:
 
 | # | Story | Tipo | Depende de | Pts |
 |---|---|---|---|---|
-| 01 | Bootstrap do projeto Phoenix e ambiente de desenvolvimento | infra | — | 3 |
+| 01 | Bootstrap do projeto Phoenix, ambiente de desenvolvimento e empacotamento de release | infra | — | 8 |
 | 02 | Pipeline de CI e alias `mix precommit` | infra | 01 | 2 |
 | 03 | Autenticação: cadastro, login, logout, confirmação e redefinição de senha | habilitador | 01 | 8 |
 | 04 | Landing pública, layout autenticado e proteção de rotas | habilitador | 03 | 3 |
@@ -186,7 +188,15 @@ As trilhas `frontend` (09–12) e `api` (13–16) podem correr em paralelo depoi
 
 ---
 
-## 8. Critério de conclusão do épico
+## 8. Entrega da fase
+
+A fase 1 é entregue quando a `develop` for mergeada na `main` com `version: "0.1.0"` no `mix.exs`,
+gerando automaticamente a tag `v0.1.0` e a release **"v0.1.0 — Fase 1: Criação e gerenciamento de
+quizzes"**. A demonstração é gravada a partir de `bin/demo v0.1.0`.
+
+---
+
+## 9. Critério de conclusão do épico
 
 - [ ] autenticação funcionando (cadastro, login, logout, reset de senha);
 - [ ] usuário cria quiz;
@@ -198,4 +208,5 @@ As trilhas `frontend` (09–12) e `api` (13–16) podem correr em paralelo depoi
 - [ ] usuário exclui quiz e perguntas;
 - [ ] API v1 disponível e documentada;
 - [ ] testes de backend e de frontend existem e passam no CI;
-- [ ] nenhuma operação da fase exige intervenção manual no banco.
+- [ ] nenhuma operação da fase exige intervenção manual no banco;
+- [ ] release `v0.1.0` publicada e `bin/demo v0.1.0` sobe a aplicação entregue.
