@@ -162,7 +162,6 @@ que é quando o `Dockerfile` e o `docker-compose.demo.yml` passam a existir no c
 lib/live_quiz/       domínio: contextos, schemas e tarefas de release
 lib/live_quiz_web/   interface: router, controllers, LiveViews e componentes
 config/              configuração por ambiente (dev, test, prod, runtime)
-docs/stories/        stories refinadas de cada fase
 priv/repo/           migrations e seeds
 ```
 
@@ -175,4 +174,7 @@ LiveView ou Controller, e nenhum acesso ao `Repo` acontece fora deles.
 
 - [Plano das 4 fases](plataforma_quiz_4_fases.md)
 - [Instruções de trabalho no repositório](AGENTS.md)
-- [Stories da Fase 1](docs/stories/fase-1/)
+- [Stories da Fase 1](https://github.com/jessicavalcanti/live_quiz/issues/1) — o épico e suas 16 sub-issues
+
+O refinamento de cada story vive na issue correspondente no GitHub, que é a versão definitiva:
+`gh issue view <N> --repo jessicavalcanti/live_quiz`.

@@ -29,8 +29,11 @@ completa. O plano completo está em [`plataforma_quiz_4_fases.md`](plataforma_qu
 | **Board (GitHub Project)** | https://github.com/users/jessicavalcanti/projects/3 — *Live Quiz — Roadmap* |
 | **Issues** | https://github.com/jessicavalcanti/live_quiz/issues |
 | **Épico da fase 1** | [issue #1](https://github.com/jessicavalcanti/live_quiz/issues/1) — as 16 stories são sub-issues dele |
-| **Stories em markdown** | [`docs/stories/fase-1/`](docs/stories/fase-1/) — mesmo conteúdo das issues, versionado |
 | **Convenções globais da fase** | card de épico (stack, nomenclatura, `scope`, DoD global) |
+
+> **A issue no GitHub é a versão definitiva de uma story.** Não existe cópia em markdown no
+> repositório: refinamento, contratos técnicos e critérios de aceite vivem só na issue, e é lá que
+> qualquer mudança de escopo deve ser registrada. Leia com `gh issue view <N>`.
 
 ### Estrutura do board
 
