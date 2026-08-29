@@ -1,0 +1,195 @@
+#!/usr/bin/env bash
+# Levanta localmente qualquer versão já entregue do Live Quiz, sem tocar na sua
+# branch de trabalho nem no banco de desenvolvimento.
+#
+#   bin/demo <tag>   sobe a aplicação naquela versão em http://localhost:4000
+#   bin/demo list    lista as versões disponíveis
+#   bin/demo stop    derruba a demonstração em execução
+set -euo pipefail
+
+COMPOSE_FILE="docker-compose.demo.yml"
+PROJECT_PREFIX="live_quiz_demo"
+WORKTREE_DIR=".demo"
+# Portas do host; ajuste quando a 4000 ou a 8025 já estiverem ocupadas.
+DEMO_PORT="${DEMO_PORT:-4000}"
+MAILPIT_UI_PORT="${MAILPIT_UI_PORT:-8025}"
+export DEMO_PORT MAILPIT_UI_PORT
+APP_URL="http://localhost:${DEMO_PORT}"
+MAIL_URL="http://localhost:${MAILPIT_UI_PORT}"
+DEMO_LOGIN="demo@livequiz.dev / demo123456789"
+BOOT_TIMEOUT_SECONDS=300
+
+RED=$'\033[31m'; GREEN=$'\033[32m'; YELLOW=$'\033[33m'; DIM=$'\033[2m'; RESET=$'\033[0m'
+
+die() { printf '%s✗ %s%s\n' "$RED" "$1" "$RESET" >&2; exit 1; }
+info() { printf '%s%s%s\n' "$DIM" "$1" "$RESET"; }
+
+require_tools() {
+  command -v git >/dev/null 2>&1 || die "git não encontrado no PATH."
+  command -v docker >/dev/null 2>&1 || die "docker não encontrado no PATH."
+  docker compose version >/dev/null 2>&1 || die "docker compose (v2) não está disponível."
+}
+
+repo_root() {
+  git rev-parse --show-toplevel 2>/dev/null || die "execute o bin/demo de dentro do repositório."
+}
+
+# Nome de projeto Compose válido: minúsculas, dígitos, hífen e underscore.
+sanitize() {
+  printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9_-]/_/g'
+}
+
+phase_of() {
+  case "$1" in
+    v0.1.0) printf 'Fase 1 — Criação e gerenciamento de quizzes' ;;
+    v0.2.0) printf 'Fase 2 — Sala de quiz e lobby em tempo real' ;;
+    v0.3.0) printf 'Fase 3 — Execução do quiz em tempo real' ;;
+    v1.0.0) printf 'Fase 4 — Pontuação, ranking e histórico' ;;
+    *) printf '' ;;
+  esac
+}
+
+cmd_list() {
+  local root; root="$(repo_root)"
+  git -C "$root" fetch --tags --quiet 2>/dev/null || info "sem acesso ao remoto; listando apenas as tags locais."
+
+  local tags; tags="$(git -C "$root" tag --list 'v*' --sort=-v:refname)"
+  if [ -z "$tags" ]; then
+    printf '%sNenhuma versão publicada ainda.%s\n' "$YELLOW" "$RESET"
+    printf 'A primeira tag é criada automaticamente no merge da develop na main.\n'
+    return 0
+  fi
+
+  printf 'Versões disponíveis:\n\n'
+  while IFS= read -r tag; do
+    local phase; phase="$(phase_of "$tag")"
+    if [ -n "$phase" ]; then
+      printf '  %-10s %s%s%s\n' "$tag" "$DIM" "$phase" "$RESET"
+    else
+      printf '  %s\n' "$tag"
+    fi
+  done <<< "$tags"
+  printf '\nPara levantar uma delas: bin/demo <tag>\n'
+}
+
+running_projects() {
+  docker compose ls --all --format json 2>/dev/null \
+    | python3 -c "
+import json, sys
+try:
+    data = json.load(sys.stdin)
+except ValueError:
+    sys.exit(0)
+for project in data:
+    name = project.get('Name', '')
+    if name.startswith('${PROJECT_PREFIX}'):
+        print(name, project.get('ConfigFiles', ''))
+"
+}
+
+cmd_stop() {
+  local root; root="$(repo_root)"
+  local found=0
+
+  while read -r project config; do
+    [ -n "$project" ] || continue
+    found=1
+    info "derrubando $project…"
+    local file="${config%%,*}"
+    [ -f "$file" ] || file="$root/$COMPOSE_FILE"
+    docker compose -f "$file" --project-name "$project" down --remove-orphans >/dev/null
+  done < <(running_projects)
+
+  if [ "$found" -eq 0 ]; then
+    printf '%sNenhuma demonstração em execução.%s\n' "$YELLOW" "$RESET"
+  else
+    printf '%s✓ Demonstração encerrada. As portas %s e %s estão livres.%s\n' \
+      "$GREEN" "$DEMO_PORT" "$MAILPIT_UI_PORT" "$RESET"
+    info "os volumes de banco das demos foram preservados; use 'docker volume ls' para inspecioná-los."
+  fi
+}
+
+cmd_up() {
+  local tag="$1"
+  local root; root="$(repo_root)"
+
+  git -C "$root" fetch --tags --quiet 2>/dev/null || info "sem acesso ao remoto; usando as tags locais."
+
+  if ! git -C "$root" rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
+    printf '%s✗ A versão %s não existe.%s\n' "$RED" "$tag" "$RESET" >&2
+    printf 'Use "bin/demo list" para ver as versões disponíveis.\n' >&2
+    exit 1
+  fi
+
+  local slug; slug="$(sanitize "$tag")"
+  local project="${PROJECT_PREFIX}_${slug}"
+  local worktree="${root}/${WORKTREE_DIR}/${tag}"
+
+  if [ -d "$worktree" ]; then
+    info "reaproveitando o worktree em ${WORKTREE_DIR}/${tag}"
+  else
+    info "materializando ${tag} em ${WORKTREE_DIR}/${tag} (sua branch não é alterada)"
+    git -C "$root" worktree add --detach --quiet "$worktree" "refs/tags/${tag}"
+  fi
+
+  [ -f "${worktree}/${COMPOSE_FILE}" ] || die "a versão ${tag} é anterior ao empacotamento de release e não pode ser demonstrada."
+
+  info "construindo e subindo a imagem de ${tag} (a primeira vez leva alguns minutos)…"
+  docker compose --project-directory "$worktree" -f "${worktree}/${COMPOSE_FILE}" \
+    --project-name "$project" up --build -d
+
+  wait_for_app "$project" "$worktree" || {
+    printf '%s✗ A aplicação não respondeu em %ss.%s\n' "$RED" "$BOOT_TIMEOUT_SECONDS" "$RESET" >&2
+    printf 'Logs: docker compose --project-name %s logs app\n' "$project" >&2
+    exit 1
+  }
+
+  local phase; phase="$(phase_of "$tag")"
+  printf '\n%s✓ Live Quiz %s%s' "$GREEN" "$tag" "$RESET"
+  [ -n "$phase" ] && printf ' %s(%s)%s' "$DIM" "$phase" "$RESET"
+  printf '\n'
+  printf '  Aplicação : %s\n' "$APP_URL"
+  printf '  E-mails   : %s\n' "$MAIL_URL"
+  printf '  Login demo: %s\n' "$DEMO_LOGIN"
+  printf '  Encerrar  : bin/demo stop\n'
+}
+
+wait_for_app() {
+  local project="$1" worktree="$2"
+  local deadline=$(( SECONDS + BOOT_TIMEOUT_SECONDS ))
+
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    if curl -fsS -o /dev/null "$APP_URL" 2>/dev/null; then
+      return 0
+    fi
+    if [ -z "$(docker compose --project-directory "$worktree" -f "${worktree}/${COMPOSE_FILE}" \
+                 --project-name "$project" ps --status running --services 2>/dev/null | grep -x app || true)" ]; then
+      return 1
+    fi
+    sleep 2
+  done
+
+  return 1
+}
+
+usage() {
+  cat <<'USAGE'
+Uso:
+  bin/demo <tag>   sobe a aplicação naquela versão em http://localhost:4000
+  bin/demo list    lista as versões disponíveis
+  bin/demo stop    derruba a demonstração em execução
+USAGE
+}
+
+main() {
+  require_tools
+
+  case "${1:-}" in
+    ""|-h|--help|help) usage ;;
+    list) cmd_list ;;
+    stop) cmd_stop ;;
+    *) cmd_up "$1" ;;
+  esac
+}
+
+main "$@"

@@ -1,0 +1,29 @@
+# Version control and CI
+.git
+.gitignore
+.github
+
+# Local build artifacts and dependencies
+_build
+deps
+.elixir_ls
+.lexical
+
+# Node artifacts of the asset pipeline
+assets/node_modules
+
+# Compiled/digested assets are rebuilt inside the image
+priv/static/assets
+priv/static/cache_manifest.json
+
+# Demonstration worktrees
+.demo
+
+# Documentation and planning
+docs
+*.md
+!mix.exs
+
+# Local environment
+docker-compose.yml
+docker-compose.demo.yml

@@ -1,0 +1,47 @@
+# Levanta uma versão já entregue (app + banco + e-mail) isolada do ambiente de
+# desenvolvimento. Use sempre pelo script `bin/demo`, que define o project name
+# e o worktree da tag.
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: live_quiz_demo
+    volumes: ["demo_pgdata:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  mailpit:
+    image: axllent/mailpit
+    ports: ["${MAILPIT_UI_PORT:-8025}:8025"]
+
+  app:
+    build:
+      context: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: ecto://postgres:postgres@db/live_quiz_demo
+      SECRET_KEY_BASE: ${SECRET_KEY_BASE:-demo-secret-key-base-com-no-minimo-64-caracteres-para-a-demonstracao-local}
+      PHX_HOST: localhost
+      PORT: "4000"
+      SMTP_HOST: mailpit
+      SMTP_PORT: "1025"
+    ports: ["${DEMO_PORT:-4000}:4000"]
+    command: >
+      sh -c "bin/live_quiz eval 'LiveQuiz.Release.migrate(); LiveQuiz.Release.seed()' &&
+             bin/live_quiz start"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:4000/ >/dev/null 2>&1 || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+
+volumes:
+  demo_pgdata:
