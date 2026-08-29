@@ -94,7 +94,7 @@ cmd_stop() {
   while read -r project config; do
     [ -n "$project" ] || continue
     found=1
-    info "derrubando $project…"
+    info "derrubando ${project}…"
     local file="${config%%,*}"
     [ -f "$file" ] || file="$root/$COMPOSE_FILE"
     docker compose -f "$file" --project-name "$project" down --remove-orphans >/dev/null
