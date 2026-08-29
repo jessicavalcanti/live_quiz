@@ -70,6 +70,20 @@ mix coveralls    # cobertura de testes (mínimo de 80%)
 Rode `mix precommit` antes de cada push: é o mesmo conjunto de verificações que o CI executa em todo
 PR para a `develop` e para a `main`.
 
+O workflow [`.github/workflows/ci.yml`](.github/workflows/ci.yml) roda, nesta ordem:
+
+| Etapa | Comando |
+|---|---|
+| Dependências travadas | `mix deps.get --check-locked` |
+| Formatação | `mix format --check-formatted` |
+| Compilação sem warnings | `mix compile --warnings-as-errors` |
+| Análise estática | `mix credo --strict` |
+| Testes + cobertura | `mix coveralls` |
+| Proteção da main | reprova PR para a `main` que não venha da `develop` |
+
+A `main` é protegida no GitHub: exige PR, exige esses checks verdes e a branch atualizada, e não
+aceita `force push` nem exclusão.
+
 A cobertura mede o código que nós escrevemos. O andaime gerado pelo `mix phx.new` (biblioteca de
 componentes, layouts, macros de `live_quiz_web.ex`, telemetria) e o código que só roda fora da suíte
 (`application.ex`, `release.ex`) ficam de fora — a lista e o motivo estão em

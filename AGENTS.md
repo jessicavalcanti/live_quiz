@@ -273,19 +273,20 @@ O workflow [`.github/workflows/ci.yml`](.github/workflows/ci.yml) roda em todo p
 
 | Etapa | Comando |
 |---|---|
+| Dependências travadas | `mix deps.get --check-locked` |
 | Formatação | `mix format --check-formatted` |
 | Compilação sem warnings | `mix compile --warnings-as-errors` |
 | Análise estática | `mix credo --strict` |
-| Testes + cobertura | `mix coveralls` (mínimo **80%**) |
+| Testes + cobertura | `mix coveralls` (mínimo **80%**, definido em `coveralls.json`) |
 | Proteção da main | reprova PR para `main` que não venha da `develop` |
 
-> Enquanto a aplicação Phoenix não existir (story F1-01), o job detecta a ausência de `mix.exs` e
-> passa sem executar as etapas — mantendo o check verde sem mascarar falhas reais depois.
+A `main` é protegida no GitHub: exige PR, exige os checks **Lint e cobertura** e **Proteção da
+main** verdes, exige a branch atualizada e não aceita `force push` nem exclusão.
 
 Localmente, o equivalente é:
 
 ```bash
-mix precommit   # compile --warnings-as-errors + format + credo --strict + test
+mix precommit   # compile --warnings-as-errors + deps.unlock --unused + format + credo --strict + test
 mix coveralls   # cobertura
 ```
 
