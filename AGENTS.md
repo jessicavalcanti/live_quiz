@@ -199,7 +199,71 @@ O corpo do PR **deve** conter `Closes #<N>` para fechar a issue automaticamente 
 
 ---
 
-## 5. Qualidade e CI
+## 5. Releases e demonstrações
+
+### Versionamento
+
+A versão é declarada **apenas** em `mix.exs`. Todo merge na `main` dispara
+[`.github/workflows/release.yml`](.github/workflows/release.yml), que lê essa versão, cria a tag
+`vX.Y.Z` e publica a release com notas geradas a partir dos PRs.
+
+| Versão | Significado |
+|---|---|
+| `0.0.x` | desenvolvimento antes da primeira entrega |
+| `0.1.0` | **entrega da Fase 1** — criação e gerenciamento de quizzes |
+| `0.2.0` | **entrega da Fase 2** — sala e lobby em tempo real |
+| `0.3.0` | **entrega da Fase 3** — execução do quiz em tempo real |
+| `1.0.0` | **entrega da Fase 4** — produto completo |
+| `0.1.1`, `0.2.3`, … | correções pontuais mergeadas na `main` entre fases |
+
+Regra: **entrega de fase = minor; qualquer outro merge na `main` = patch.**
+Se a versão do `mix.exs` já tiver tag, o workflow não cria release nova — ele avisa e encerra.
+
+### Procedimento de release
+
+```bash
+# 1. Subir a versão na develop, via PR normal
+git checkout develop && git pull origin develop
+git checkout -b chore/bump-0.1.0
+# editar mix.exs: version: "0.1.0"
+git commit -am "chore(release): bump version to 0.1.0"
+gh pr create --base develop --title "chore(release): bump version to 0.1.0"
+
+# 2. Depois do merge, abrir o PR de release para a main
+gh pr create --base main --head develop \
+  --title "release: v0.1.0 — Fase 1" \
+  --body "Entrega da Fase 1. Fecha o épico #1."
+
+# 3. Ao mergear, a tag v0.1.0 e a release são criadas automaticamente
+```
+
+> O PR para a `main` **só é aceito a partir da `develop`** — há um job de CI que reprova qualquer
+> outra origem.
+
+### Gravar a demonstração de uma versão
+
+```bash
+bin/demo list       # lista as versões disponíveis
+bin/demo v0.1.0     # sobe a aplicação exatamente naquela versão
+bin/demo stop       # encerra
+```
+
+O script materializa a tag em um worktree isolado (`.demo/<tag>/`), constrói a imagem daquele código
+e sobe app + banco + Mailpit com volume próprio. **Sua branch de trabalho e o banco de
+desenvolvimento não são tocados** — dá para desenvolver e demonstrar ao mesmo tempo.
+
+| | Endereço |
+|---|---|
+| Aplicação da demo | http://localhost:4000 |
+| E-mails da demo | http://localhost:8025 |
+| Login de demonstração | `demo@livequiz.dev` / `demo123456789` |
+
+> `bin/demo`, o `Dockerfile` e o `docker-compose.demo.yml` são entregues pela story F1-01; só há
+> versões demonstráveis a partir da primeira release.
+
+---
+
+## 6. Qualidade e CI
 
 O workflow [`.github/workflows/ci.yml`](.github/workflows/ci.yml) roda em todo push e PR para
 `main` e `develop`:
@@ -224,7 +288,7 @@ mix coveralls   # cobertura
 
 ---
 
-## 6. Ambiente de desenvolvimento
+## 7. Ambiente de desenvolvimento
 
 ```bash
 docker compose up -d    # PostgreSQL 16 + Mailpit
@@ -241,7 +305,7 @@ mix phx.server          # http://localhost:4000
 
 ---
 
-## 7. Convenções de código
+## 8. Convenções de código
 
 | Item | Convenção |
 |---|---|
@@ -256,7 +320,7 @@ mix phx.server          # http://localhost:4000
 
 ---
 
-## 8. Comandos úteis
+## 9. Comandos úteis
 
 ```bash
 # Listar as stories prontas para desenvolvimento

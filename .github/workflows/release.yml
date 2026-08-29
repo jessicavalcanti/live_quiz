@@ -1,0 +1,108 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Publicar release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Ler a versão do mix.exs
+        id: version
+        run: |
+          if [ ! -f mix.exs ]; then
+            echo "::notice::Ainda não existe mix.exs. A automação de release passa a valer a partir da story F1-01."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          VERSION=$(grep -m1 -E '^\s*version:' mix.exs | sed -E 's/.*"([0-9]+\.[0-9]+\.[0-9]+)".*/\1/')
+          if [ -z "$VERSION" ]; then
+            echo "::error::Não foi possível ler a versão do mix.exs."
+            exit 1
+          fi
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Versão detectada: v$VERSION"
+
+      - name: A tag já existe?
+        id: check
+        if: steps.version.outputs.skip != 'true'
+        run: |
+          if git rev-parse "${{ steps.version.outputs.tag }}" >/dev/null 2>&1; then
+            echo "::notice::A tag ${{ steps.version.outputs.tag }} já existe. Suba a versão no mix.exs para gerar uma release nova."
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Identificar entrega de fase
+        id: phase
+        if: steps.version.outputs.skip != 'true' && steps.check.outputs.exists == 'false'
+        run: |
+          case "${{ steps.version.outputs.version }}" in
+            0.1.0) NAME="Fase 1 — Criação e gerenciamento de quizzes"; PHASE=1 ;;
+            0.2.0) NAME="Fase 2 — Sala de quiz e lobby em tempo real"; PHASE=2 ;;
+            0.3.0) NAME="Fase 3 — Execução do quiz em tempo real";     PHASE=3 ;;
+            1.0.0) NAME="Fase 4 — Pontuação, ranking e histórico";      PHASE=4 ;;
+            *)     NAME=""; PHASE="" ;;
+          esac
+          if [ -n "$PHASE" ]; then
+            echo "title=${{ steps.version.outputs.tag }} — $NAME" >> "$GITHUB_OUTPUT"
+            echo "is_phase=true" >> "$GITHUB_OUTPUT"
+            echo "phase=$PHASE" >> "$GITHUB_OUTPUT"
+          else
+            echo "title=${{ steps.version.outputs.tag }}" >> "$GITHUB_OUTPUT"
+            echo "is_phase=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Criar a tag
+        if: steps.version.outputs.skip != 'true' && steps.check.outputs.exists == 'false'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "${{ steps.version.outputs.tag }}" -m "${{ steps.phase.outputs.title }}"
+          git push origin "${{ steps.version.outputs.tag }}"
+
+      - name: Montar o cabeçalho das notas
+        id: notes
+        if: steps.version.outputs.skip != 'true' && steps.check.outputs.exists == 'false'
+        run: |
+          {
+            if [ "${{ steps.phase.outputs.is_phase }}" = "true" ]; then
+              echo "## 🏁 Entrega da Fase ${{ steps.phase.outputs.phase }}"
+              echo ""
+              echo "Esta release marca a conclusão de uma fase completa do projeto."
+              echo ""
+            fi
+            echo "### Rodar esta versão localmente"
+            echo ""
+            echo '```bash'
+            echo "bin/demo ${{ steps.version.outputs.tag }}"
+            echo '```'
+            echo ""
+            echo "A aplicação sobe em http://localhost:4000 com o banco migrado e populado."
+            echo ""
+          } > header.md
+          echo "Cabeçalho gerado."
+
+      - name: Publicar a release
+        if: steps.version.outputs.skip != 'true' && steps.check.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ steps.version.outputs.tag }}" \
+            --title "${{ steps.phase.outputs.title }}" \
+            --notes-file header.md \
+            --generate-notes \
+            --verify-tag

@@ -4,8 +4,8 @@ Refinamento completo da fase 1, pronto para virar issues no GitHub.
 
 | Arquivo | Card | Tipo | Depende de | Pts |
 |---|---|---|---|---|
-| [00-epico-fase-1.md](00-epico-fase-1.md) | **[ÉPICO] Fase 1** | épico | — | 67 |
-| [01-bootstrap-projeto.md](01-bootstrap-projeto.md) | Bootstrap do projeto Phoenix e ambiente de desenvolvimento | infra | — | 3 |
+| [00-epico-fase-1.md](00-epico-fase-1.md) | **[ÉPICO] Fase 1** | épico | — | 72 |
+| [01-bootstrap-projeto.md](01-bootstrap-projeto.md) | Bootstrap do projeto Phoenix, ambiente de desenvolvimento e empacotamento de release | infra | — | 8 |
 | [02-ci-pipeline.md](02-ci-pipeline.md) | Pipeline de CI e alias `mix precommit` | infra | 01 | 2 |
 | [03-autenticacao.md](03-autenticacao.md) | Autenticação: cadastro, login, logout, confirmação e redefinição de senha | habilitador | 01 | 8 |
 | [04-landing-layout-rotas.md](04-landing-layout-rotas.md) | Landing pública, layout autenticado e proteção de rotas | habilitador | 03 | 3 |
