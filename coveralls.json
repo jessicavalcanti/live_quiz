@@ -1,0 +1,16 @@
+{
+  "coverage_options": {
+    "minimum_coverage": 80,
+    "treat_no_relevant_lines_as_covered": true
+  },
+  "//": "A cobertura mede o código que nós escrevemos. O andaime gerado pelo phx.new e o que só roda fora da suíte ficam de fora — cada exclusão está justificada abaixo.",
+  "skip_files": [
+    "test/support",
+    "lib/live_quiz/application.ex",
+    "lib/live_quiz/release.ex",
+    "lib/live_quiz_web.ex",
+    "lib/live_quiz_web/telemetry.ex",
+    "lib/live_quiz_web/components/core_components.ex",
+    "lib/live_quiz_web/components/layouts.ex"
+  ]
+}
