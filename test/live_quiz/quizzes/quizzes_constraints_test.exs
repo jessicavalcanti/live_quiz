@@ -28,16 +28,14 @@ defmodule LiveQuiz.Quizzes.QuizzesConstraintsTest do
 
   describe "answer option uniqueness" do
     test "rejects a second correct option for the same question", %{scope: scope, quiz: quiz} do
-      options = [
-        %{text: "Brasília", position: 1, is_correct: true},
-        %{text: "Recife", position: 2, is_correct: false}
-      ]
+      question = question_fixture(scope, quiz)
 
-      question = question_fixture(scope, quiz, %{answer_options: options})
-
+      # Positions 1..4 are already taken, so this option also duplicates one.
+      # That constraint is deferred and stays quiet until commit; the partial
+      # unique index on the correct option is the one that fires right here.
       assert {:error, changeset} =
                %AnswerOption{question_id: question.id}
-               |> AnswerOption.changeset(%{text: "Belém", position: 3, is_correct: true})
+               |> AnswerOption.changeset(%{text: "Belém", position: 2, is_correct: true})
                |> Repo.insert()
 
       assert "já existe uma alternativa correta" in errors_on(changeset).question_id

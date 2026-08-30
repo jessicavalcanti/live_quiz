@@ -31,6 +31,7 @@ defmodule LiveQuiz.Quizzes.AnswerOption do
   def changeset(answer_option, attrs) do
     answer_option
     |> cast(attrs, [:text, :position, :is_correct])
+    |> update_change(:text, &trim/1)
     |> validate_required([:text, :position, :is_correct])
     |> validate_length(:text, min: 1, max: 200)
     |> validate_inclusion(:position, 1..4)
@@ -39,4 +40,7 @@ defmodule LiveQuiz.Quizzes.AnswerOption do
       message: "já existe uma alternativa correta"
     )
   end
+
+  defp trim(value) when is_binary(value), do: String.trim(value)
+  defp trim(value), do: value
 end

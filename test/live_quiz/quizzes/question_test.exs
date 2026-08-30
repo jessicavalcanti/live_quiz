@@ -79,13 +79,56 @@ defmodule LiveQuiz.Quizzes.QuestionTest do
       assert [%{text: ["can't be blank"]}] = errors_on(changeset).answer_options
     end
 
-    test "does not enforce the set rules that belong to F1-07" do
+    test "requires exactly four answer options" do
       options = [
         %{text: "Brasília", position: 1, is_correct: true},
         %{text: "Recife", position: 2, is_correct: false}
       ]
 
-      assert Question.changeset(%Question{}, valid_attrs(%{answer_options: options})).valid?
+      changeset = Question.changeset(%Question{}, valid_attrs(%{answer_options: options}))
+
+      refute changeset.valid?
+
+      assert "a pergunta deve ter exatamente 4 alternativas" in errors_on(changeset).answer_options
+    end
+
+    test "requires exactly one correct answer option" do
+      none_correct =
+        Enum.map(valid_answer_options_attributes(), &Map.put(&1, :is_correct, false))
+
+      changeset = Question.changeset(%Question{}, valid_attrs(%{answer_options: none_correct}))
+
+      refute changeset.valid?
+      assert "marque a alternativa correta" in errors_on(changeset).answer_options
+    end
+
+    test "rejects repeated answer option texts regardless of case and padding" do
+      options = [
+        %{text: "Brasil", position: 1, is_correct: true},
+        %{text: "  brasil ", position: 2, is_correct: false},
+        %{text: "Argentina", position: 3, is_correct: false},
+        %{text: "Chile", position: 4, is_correct: false}
+      ]
+
+      changeset = Question.changeset(%Question{}, valid_attrs(%{answer_options: options}))
+
+      refute changeset.valid?
+
+      assert "as alternativas não podem ter textos repetidos" in errors_on(changeset).answer_options
+    end
+
+    test "keeps a text cleared on an existing question as blank" do
+      changeset = Question.changeset(%Question{text: "Antigo"}, valid_attrs(%{text: nil}))
+
+      refute changeset.valid?
+      assert "can't be blank" in errors_on(changeset).text
+    end
+
+    test "trims the question text before validating it" do
+      changeset = Question.changeset(%Question{}, valid_attrs(%{text: "  Qual é a capital?  "}))
+
+      assert changeset.valid?
+      assert get_change(changeset, :text) == "Qual é a capital?"
     end
   end
 end
