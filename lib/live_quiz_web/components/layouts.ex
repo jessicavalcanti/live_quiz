@@ -35,40 +35,83 @@ defmodule LiveQuizWeb.Layouts do
 
   def app(assigns) do
     ~H"""
-    <header class="navbar px-4 sm:px-6 lg:px-8">
+    <header class="navbar gap-2 px-4 sm:px-6 lg:px-8">
       <div class="flex-1">
-        <a href="/" class="flex-1 flex w-fit items-center gap-2">
-          <img src={~p"/images/logo.svg"} width="36" />
-          <span class="text-sm font-semibold">v{Application.spec(:phoenix, :vsn)}</span>
-        </a>
+        <.link navigate={home_path(@current_scope)} class="text-lg font-semibold">
+          LiveQuiz
+        </.link>
       </div>
-      <div class="flex-none">
-        <ul class="flex flex-column px-1 space-x-4 items-center">
-          <li>
-            <a href="https://phoenixframework.org/" class="btn btn-ghost">Website</a>
-          </li>
-          <li>
-            <a href="https://github.com/phoenixframework/phoenix" class="btn btn-ghost">GitHub</a>
-          </li>
+
+      <nav class="flex-none" aria-label="Menu do usuário">
+        <ul class="flex items-center gap-2 sm:gap-4">
+          <%= if @current_scope do %>
+            <li class="hidden text-sm font-medium sm:block">
+              {@current_scope.user.name}
+            </li>
+            <li>
+              <.link navigate={~p"/users/settings"} class="btn btn-ghost btn-sm">
+                Minha conta
+              </.link>
+            </li>
+            <li>
+              <.link href={~p"/users/log-out"} method="delete" class="btn btn-ghost btn-sm">
+                Sair
+              </.link>
+            </li>
+          <% else %>
+            <li>
+              <.link navigate={~p"/users/log-in"} class="btn btn-ghost btn-sm">
+                Entrar
+              </.link>
+            </li>
+            <li>
+              <.link navigate={~p"/users/register"} class="btn btn-primary btn-sm">
+                Criar conta
+              </.link>
+            </li>
+          <% end %>
           <li>
             <.theme_toggle />
           </li>
-          <li>
-            <a href="https://phoenix.hexdocs.pm/overview.html" class="btn btn-primary">
-              Get Started <span aria-hidden="true">&rarr;</span>
-            </a>
-          </li>
         </ul>
-      </div>
+      </nav>
     </header>
 
-    <main class="px-4 py-20 sm:px-6 lg:px-8">
+    <main class="px-4 py-12 sm:px-6 sm:py-20 lg:px-8">
       <div class="mx-auto max-w-2xl space-y-4">
+        <.unconfirmed_email_notice current_scope={@current_scope} />
         {render_slot(@inner_block)}
       </div>
     </main>
 
     <.flash_group flash={@flash} />
+    """
+  end
+
+  defp home_path(%{user: %{}}), do: ~p"/quizzes"
+  defp home_path(_current_scope), do: ~p"/"
+
+  @doc """
+  Reminds the user to confirm their e-mail address.
+
+  The reminder never blocks navigation: confirming is encouraged, not required
+  (see AD-03 of the phase 1 epic).
+  """
+  attr :current_scope, :map, default: nil
+
+  def unconfirmed_email_notice(%{current_scope: %{user: %{confirmed_at: nil}}} = assigns) do
+    ~H"""
+    <div class="alert alert-warning" role="status">
+      <.icon name="hero-envelope" class="size-5 shrink-0" />
+      <span>
+        Confirme seu e-mail para manter sua conta segura. Enviamos um link para {@current_scope.user.email}.
+      </span>
+    </div>
+    """
+  end
+
+  def unconfirmed_email_notice(assigns) do
+    ~H"""
     """
   end
 
@@ -135,6 +178,7 @@ defmodule LiveQuizWeb.Layouts do
         class="flex p-2 cursor-pointer w-1/3"
         phx-click={JS.dispatch("phx:set-theme")}
         data-phx-theme="system"
+        aria-label="Usar o tema do sistema"
       >
         <.icon name="hero-computer-desktop-micro" class="size-4 opacity-75 hover:opacity-100" />
       </button>
@@ -143,6 +187,7 @@ defmodule LiveQuizWeb.Layouts do
         class="flex p-2 cursor-pointer w-1/3"
         phx-click={JS.dispatch("phx:set-theme")}
         data-phx-theme="light"
+        aria-label="Usar o tema claro"
       >
         <.icon name="hero-sun-micro" class="size-4 opacity-75 hover:opacity-100" />
       </button>
@@ -151,6 +196,7 @@ defmodule LiveQuizWeb.Layouts do
         class="flex p-2 cursor-pointer w-1/3"
         phx-click={JS.dispatch("phx:set-theme")}
         data-phx-theme="dark"
+        aria-label="Usar o tema escuro"
       >
         <.icon name="hero-moon-micro" class="size-4 opacity-75 hover:opacity-100" />
       </button>

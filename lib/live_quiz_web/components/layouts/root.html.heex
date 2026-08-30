@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="pt-BR">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="csrf-token" content={get_csrf_token()} />
-    <.live_title default="LiveQuiz" suffix=" · Phoenix Framework" phx-no-format>{assigns[:page_title]}</.live_title>
+    <.live_title default="LiveQuiz" suffix=" · LiveQuiz" phx-no-format>{assigns[:page_title]}</.live_title>
     <link phx-track-static rel="stylesheet" href={~p"/assets/css/app.css"} />
     <script defer phx-track-static type="text/javascript" src={~p"/assets/js/app.js"}>
     </script>
@@ -38,26 +38,6 @@
     </script>
   </head>
   <body>
-    <ul class="menu menu-horizontal w-full relative z-10 flex items-center gap-4 px-4 sm:px-6 lg:px-8 justify-end">
-      <%= if @current_scope do %>
-        <li>
-          {@current_scope.user.name}
-        </li>
-        <li>
-          <.link href={~p"/users/settings"}>Configurações</.link>
-        </li>
-        <li>
-          <.link href={~p"/users/log-out"} method="delete">Sair</.link>
-        </li>
-      <% else %>
-        <li>
-          <.link href={~p"/users/register"}>Cadastrar-se</.link>
-        </li>
-        <li>
-          <.link href={~p"/users/log-in"}>Entrar</.link>
-        </li>
-      <% end %>
-    </ul>
     {@inner_content}
   </body>
 </html>

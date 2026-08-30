@@ -19,10 +19,10 @@ defmodule LiveQuizWeb.UserSessionControllerTest do
         })
 
       assert get_session(conn, :user_token)
-      assert redirected_to(conn) == ~p"/"
+      assert redirected_to(conn) == ~p"/quizzes"
 
       # Now do a logged in request and assert on the menu
-      conn = get(conn, ~p"/")
+      conn = get(conn, ~p"/quizzes")
       response = html_response(conn, 200)
       assert response =~ user.name
       assert response =~ ~p"/users/settings"
@@ -38,7 +38,7 @@ defmodule LiveQuizWeb.UserSessionControllerTest do
         })
 
       assert get_session(conn, :user_token)
-      assert redirected_to(conn) == ~p"/"
+      assert redirected_to(conn) == ~p"/quizzes"
     end
 
     test "logs the user in with remember me", %{conn: conn, user: user} do
@@ -52,7 +52,7 @@ defmodule LiveQuizWeb.UserSessionControllerTest do
         })
 
       assert conn.resp_cookies["_live_quiz_web_user_remember_me"]
-      assert redirected_to(conn) == ~p"/"
+      assert redirected_to(conn) == ~p"/quizzes"
     end
 
     test "logs the user in with return to", %{conn: conn, user: user} do
@@ -77,7 +77,7 @@ defmodule LiveQuizWeb.UserSessionControllerTest do
         })
 
       assert Phoenix.Flash.get(conn.assigns.flash, :info) =~ "Conta criada com sucesso!"
-      assert redirected_to(conn) == ~p"/"
+      assert redirected_to(conn) == ~p"/quizzes"
     end
 
     test "redirects to login page with a generic error on invalid credentials", %{

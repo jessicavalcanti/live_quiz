@@ -84,7 +84,7 @@ defmodule LiveQuizWeb.UserLive.ConfirmationTest do
 
       conn = log_in_user(conn, user)
 
-      assert html_response(get(conn, ~p"/"), 200) =~ user.name
+      assert html_response(get(conn, ~p"/quizzes"), 200) =~ user.name
 
       {:ok, _lv, html} = live(conn, ~p"/users/settings")
       assert html =~ "Configurações da conta"
