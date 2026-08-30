@@ -14,21 +14,62 @@ defmodule LiveQuizWeb.Api.V1.QuestionController do
   """
 
   use LiveQuizWeb, :controller
+  use OpenApiSpex.ControllerSpecs
 
   alias LiveQuiz.Accounts.Scope
   alias LiveQuiz.Quizzes
   alias LiveQuiz.Quizzes.Question
   alias LiveQuiz.Quizzes.Quiz
+  alias LiveQuizWeb.Api.V1.Schemas.ErrorResponse
+  alias LiveQuizWeb.Api.V1.Schemas.MoveRequest
+  alias LiveQuizWeb.Api.V1.Schemas.QuestionListResponse
+  alias LiveQuizWeb.Api.V1.Schemas.QuestionRequest
+  alias LiveQuizWeb.Api.V1.Schemas.QuestionResponse
+  alias LiveQuizWeb.Api.V1.Schemas.ValidationErrorResponse
 
   action_fallback LiveQuizWeb.Api.FallbackController
 
+  tags ["Perguntas"]
+  security [%{"bearerAuth" => []}]
+
   @directions %{"up" => :up, "down" => :down}
+
+  @quiz_id_parameter [
+    in: :path,
+    description: "Identificador do quiz",
+    type: :integer,
+    required: true,
+    example: 1
+  ]
+
+  @question_id_parameter [
+    in: :path,
+    description: "Identificador da pergunta",
+    type: :integer,
+    required: true,
+    example: 7
+  ]
+
+  @not_found_response {"Quiz ou pergunta inexistente, ou de outro dono", "application/json",
+                       ErrorResponse}
+  @unauthorized_response {"Não autenticado", "application/json", ErrorResponse}
 
   @doc """
   Lists every question of the quiz, ordered by position, with its answer
   options. There is no pagination: the limit of
   #{Quizzes.max_questions()} questions keeps the list naturally small.
   """
+  operation :index,
+    summary: "Lista as perguntas de um quiz",
+    description:
+      "As perguntas vêm ordenadas por posição, com as suas alternativas. Sem paginação.",
+    parameters: [quiz_id: @quiz_id_parameter],
+    responses: [
+      ok: {"Perguntas do quiz", "application/json", QuestionListResponse},
+      unauthorized: @unauthorized_response,
+      not_found: @not_found_response
+    ]
+
   def index(conn, %{"quiz_id" => quiz_id}) do
     with {:ok, %Quiz{} = quiz} <- fetch_quiz_with_questions(scope(conn), quiz_id) do
       render(conn, :index, questions: quiz.questions)
@@ -38,6 +79,15 @@ defmodule LiveQuizWeb.Api.V1.QuestionController do
   @doc """
   Shows one question of the quiz with its answer options.
   """
+  operation :show,
+    summary: "Detalha uma pergunta",
+    parameters: [quiz_id: @quiz_id_parameter, id: @question_id_parameter],
+    responses: [
+      ok: {"Pergunta encontrada", "application/json", QuestionResponse},
+      unauthorized: @unauthorized_response,
+      not_found: @not_found_response
+    ]
+
   def show(conn, %{"quiz_id" => quiz_id, "id" => id}) do
     scope = scope(conn)
 
@@ -54,6 +104,22 @@ defmodule LiveQuizWeb.Api.V1.QuestionController do
   quiz that already holds #{Quizzes.max_questions()} questions answers 422 and
   nothing is written.
   """
+  operation :create,
+    summary: "Cria uma pergunta ao final do quiz",
+    description:
+      "A posição é calculada pelo contexto e um `position` enviado no corpo é ignorado. " <>
+        "Um quiz que já atingiu o limite de perguntas responde 422 e nada é gravado.",
+    parameters: [quiz_id: @quiz_id_parameter],
+    request_body: {"Atributos da pergunta", "application/json", QuestionRequest, required: true},
+    responses: [
+      created: {"Pergunta criada, com o header Location", "application/json", QuestionResponse},
+      unauthorized: @unauthorized_response,
+      not_found: @not_found_response,
+      unprocessable_entity:
+        {"Pergunta inválida ou limite de perguntas atingido", "application/json",
+         ValidationErrorResponse}
+    ]
+
   def create(conn, %{"quiz_id" => quiz_id} = params) do
     scope = scope(conn)
 
@@ -75,6 +141,20 @@ defmodule LiveQuizWeb.Api.V1.QuestionController do
   Each answer option must carry its `id`, so the stored rows are updated
   instead of replaced.
   """
+  operation :update,
+    summary: "Atualiza o texto e as alternativas de uma pergunta",
+    description:
+      "`PUT` e `PATCH` se comportam da mesma forma e nenhum dos dois muda a posição. " <>
+        "Cada alternativa deve trazer o seu `id`.",
+    parameters: [quiz_id: @quiz_id_parameter, id: @question_id_parameter],
+    request_body: {"Atributos da pergunta", "application/json", QuestionRequest, required: true},
+    responses: [
+      ok: {"Pergunta atualizada", "application/json", QuestionResponse},
+      unauthorized: @unauthorized_response,
+      not_found: @not_found_response,
+      unprocessable_entity: {"Pergunta inválida", "application/json", ValidationErrorResponse}
+    ]
+
   def update(conn, %{"quiz_id" => quiz_id, "id" => id} = params) do
     scope = scope(conn)
 
@@ -90,6 +170,17 @@ defmodule LiveQuizWeb.Api.V1.QuestionController do
   Deletes one question. The answer options go with it and the remaining
   questions are renumbered by the context, keeping a dense `1..n` sequence.
   """
+  operation :delete,
+    summary: "Exclui uma pergunta",
+    description:
+      "As alternativas vão junto e as perguntas restantes são renumeradas, mantendo a sequência densa.",
+    parameters: [quiz_id: @quiz_id_parameter, id: @question_id_parameter],
+    responses: [
+      no_content: "Pergunta excluída",
+      unauthorized: @unauthorized_response,
+      not_found: @not_found_response
+    ]
+
   def delete(conn, %{"quiz_id" => quiz_id, "id" => id}) do
     scope = scope(conn)
 
@@ -107,6 +198,20 @@ defmodule LiveQuizWeb.Api.V1.QuestionController do
   Moving the question that already sits at the matching edge is a successful
   no-op: 200 with the list unchanged.
   """
+  operation :move,
+    summary: "Move uma pergunta uma casa para cima ou para baixo",
+    description:
+      "Responde com a lista inteira já reordenada. Mover a pergunta que já está na ponta " <>
+        "correspondente é um sucesso sem efeito.",
+    parameters: [quiz_id: @quiz_id_parameter, id: @question_id_parameter],
+    request_body: {"Direção do movimento", "application/json", MoveRequest, required: true},
+    responses: [
+      ok: {"Perguntas do quiz, já reordenadas", "application/json", QuestionListResponse},
+      unauthorized: @unauthorized_response,
+      not_found: @not_found_response,
+      unprocessable_entity: {"Direção inválida", "application/json", ErrorResponse}
+    ]
+
   def move(conn, %{"quiz_id" => quiz_id, "id" => id} = params) do
     scope = scope(conn)
 

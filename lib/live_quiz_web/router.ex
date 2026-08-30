@@ -15,6 +15,7 @@ defmodule LiveQuizWeb.Router do
 
   pipeline :api do
     plug :accepts, ["json"]
+    plug OpenApiSpex.Plug.PutApiSpec, module: LiveQuizWeb.ApiSpec
   end
 
   pipeline :api_authenticated do
@@ -22,6 +23,20 @@ defmodule LiveQuizWeb.Router do
   end
 
   ## JSON API
+
+  # The specification goes through the `:api` pipeline, which is where it is
+  # built; the Swagger UI is plain HTML and therefore goes through `:browser`.
+  scope "/api" do
+    pipe_through :api
+
+    get "/openapi", OpenApiSpex.Plug.RenderSpec, []
+  end
+
+  scope "/api/docs" do
+    pipe_through :browser
+
+    get "/", OpenApiSpex.Plug.SwaggerUI, path: "/api/openapi"
+  end
 
   scope "/api/v1", LiveQuizWeb.Api.V1 do
     pipe_through :api

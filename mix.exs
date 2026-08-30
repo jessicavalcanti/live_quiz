@@ -80,6 +80,7 @@ defmodule LiveQuiz.MixProject do
       {:gettext, "~> 1.0"},
       {:guardian, "~> 2.3"},
       {:jason, "~> 1.2"},
+      {:open_api_spex, "~> 3.18"},
       {:tz, "~> 0.28"},
       {:dns_cluster, "~> 0.2.0"},
       {:bandit, "~> 1.5"},
