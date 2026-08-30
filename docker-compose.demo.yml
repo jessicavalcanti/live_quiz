@@ -28,6 +28,7 @@ services:
     environment:
       DATABASE_URL: ecto://postgres:postgres@db/live_quiz_demo
       SECRET_KEY_BASE: ${SECRET_KEY_BASE:-demo-secret-key-base-com-no-minimo-64-caracteres-para-a-demonstracao-local}
+      GUARDIAN_SECRET_KEY: ${GUARDIAN_SECRET_KEY:-demo-guardian-secret-key-apenas-para-a-demonstracao-local}
       PHX_HOST: localhost
       PORT: "4000"
       SMTP_HOST: mailpit

@@ -78,6 +78,7 @@ defmodule LiveQuiz.MixProject do
       {:telemetry_metrics, "~> 1.0"},
       {:telemetry_poller, "~> 1.0"},
       {:gettext, "~> 1.0"},
+      {:guardian, "~> 2.3"},
       {:jason, "~> 1.2"},
       {:tz, "~> 0.28"},
       {:dns_cluster, "~> 0.2.0"},

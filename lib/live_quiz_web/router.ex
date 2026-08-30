@@ -17,10 +17,25 @@ defmodule LiveQuizWeb.Router do
     plug :accepts, ["json"]
   end
 
-  # Other scopes may use custom stacks.
-  # scope "/api", LiveQuizWeb do
-  #   pipe_through :api
-  # end
+  pipeline :api_authenticated do
+    plug LiveQuizWeb.Api.AuthPipeline
+  end
+
+  ## JSON API
+
+  scope "/api/v1", LiveQuizWeb.Api.V1 do
+    pipe_through :api
+
+    post "/session", SessionController, :create
+    post "/session/refresh", SessionController, :refresh
+  end
+
+  scope "/api/v1", LiveQuizWeb.Api.V1 do
+    pipe_through [:api, :api_authenticated]
+
+    delete "/session", SessionController, :delete
+    get "/me", SessionController, :me
+  end
 
   # Enable LiveDashboard and Swoosh mailbox preview in development
   if Application.compile_env(:live_quiz, :dev_routes) do
