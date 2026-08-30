@@ -7,9 +7,25 @@
 # General application configuration
 import Config
 
+config :live_quiz, :scopes,
+  user: [
+    default: true,
+    module: LiveQuiz.Accounts.Scope,
+    assign_key: :current_scope,
+    access_path: [:user, :id],
+    schema_key: :user_id,
+    schema_type: :id,
+    schema_table: :users,
+    test_data_fixture: LiveQuiz.AccountsFixtures,
+    test_setup_helper: :register_and_log_in_user
+  ]
+
 config :live_quiz,
   ecto_repos: [LiveQuiz.Repo],
   generators: [timestamp_type: :utc_datetime]
+
+# The UI is written in pt-BR, so are the Ecto error messages.
+config :live_quiz, LiveQuizWeb.Gettext, default_locale: "pt_BR", locales: ~w(pt_BR)
 
 # Configure the endpoint
 config :live_quiz, LiveQuizWeb.Endpoint,
