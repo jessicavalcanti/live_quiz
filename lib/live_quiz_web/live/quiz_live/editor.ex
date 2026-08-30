@@ -1,17 +1,26 @@
 defmodule LiveQuizWeb.QuizLive.Editor do
   @moduledoc """
-  Editor of a single quiz: its title and description now, its questions from
-  F1-11 on.
+  Editor of a single quiz: its title and description, and the list of its
+  questions.
 
   The quiz is loaded through the context with the caller scope, so a quiz that
   belongs to somebody else raises `Ecto.NoResultsError` and the request ends as
   a 404 — the same answer a quiz that never existed would get.
+
+  Adding and editing a question happen in modals with routes of their own, so
+  the address bar keeps describing the screen and the back button works. Each
+  question is saved on its own: there is no "save everything" button, and the
+  list is read back from the context after every write instead of being patched
+  in memory.
   """
   use LiveQuizWeb, :live_view
 
   alias LiveQuiz.Quizzes
+  alias LiveQuizWeb.QuizLive.QuestionFormComponent
 
   @description_limit 500
+  @letters ~w(A B C D)
+  @text_preview_limit 120
 
   @impl true
   def mount(%{"id" => id}, _session, socket) do
@@ -21,9 +30,44 @@ defmodule LiveQuizWeb.QuizLive.Editor do
      socket
      |> assign(:page_title, quiz.title)
      |> assign(:quiz, quiz)
+     |> assign(:question, nil)
      |> assign(:invalid_field, nil)
      |> assign(:attempt, 0)
      |> assign_form(Quizzes.change_quiz(quiz))}
+  end
+
+  @impl true
+  def handle_params(params, _uri, socket) do
+    {:noreply, apply_action(socket, socket.assigns.live_action, params)}
+  end
+
+  defp apply_action(socket, :edit, _params) do
+    socket
+    |> assign(:page_title, socket.assigns.quiz.title)
+    |> assign(:question, nil)
+  end
+
+  defp apply_action(socket, :new_question, _params) do
+    quiz = socket.assigns.quiz
+
+    if limit_reached?(quiz) do
+      socket
+      |> put_flash(:error, limit_message())
+      |> push_patch(to: ~p"/quizzes/#{quiz}/edit")
+    else
+      socket
+      |> assign(:page_title, "Nova pergunta")
+      |> assign(:question, Quizzes.new_question())
+    end
+  end
+
+  defp apply_action(socket, :edit_question, %{"question_id" => question_id}) do
+    question =
+      Quizzes.get_question!(socket.assigns.current_scope, socket.assigns.quiz, question_id)
+
+    socket
+    |> assign(:page_title, "Editar pergunta")
+    |> assign(:question, question)
   end
 
   @impl true
@@ -39,7 +83,7 @@ defmodule LiveQuizWeb.QuizLive.Editor do
         {:noreply,
          socket
          |> put_flash(:info, "Alterações salvas")
-         |> assign(:quiz, quiz)
+         |> assign(:quiz, %{quiz | questions: socket.assigns.quiz.questions})
          |> assign(:page_title, quiz.title)
          |> assign(:invalid_field, nil)
          |> assign_form(Quizzes.change_quiz(quiz))}
@@ -51,6 +95,30 @@ defmodule LiveQuizWeb.QuizLive.Editor do
          |> assign(:invalid_field, first_invalid_field(changeset))
          |> update(:attempt, &(&1 + 1))}
     end
+  end
+
+  # The list is the context's answer, never a local edit of what was on screen.
+  @impl true
+  def handle_info({QuestionFormComponent, {:saved, message}}, socket) do
+    quiz =
+      Quizzes.get_quiz_with_questions!(socket.assigns.current_scope, socket.assigns.quiz.id)
+
+    {:noreply,
+     socket
+     |> assign(:quiz, quiz)
+     |> put_flash(:info, message)
+     |> push_patch(to: ~p"/quizzes/#{quiz}/edit")}
+  end
+
+  def handle_info({QuestionFormComponent, :question_limit_reached}, socket) do
+    quiz =
+      Quizzes.get_quiz_with_questions!(socket.assigns.current_scope, socket.assigns.quiz.id)
+
+    {:noreply,
+     socket
+     |> assign(:quiz, quiz)
+     |> put_flash(:error, limit_message())
+     |> push_patch(to: ~p"/quizzes/#{quiz}/edit")}
   end
 
   @impl true
@@ -101,15 +169,131 @@ defmodule LiveQuizWeb.QuizLive.Editor do
       </.form>
 
       <section class="mt-10" aria-labelledby="questions-heading">
-        <h2 id="questions-heading" class="text-lg font-semibold">Perguntas</h2>
+        <div class="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 id="questions-heading" class="text-lg font-semibold">Perguntas</h2>
+            <p class="text-sm text-base-content/70">{questions_summary(@quiz)}</p>
+          </div>
 
-        <p class="mt-2 text-base-content/70">
-          {questions_summary(@quiz)}
-        </p>
+          <div class="flex flex-col items-start gap-1 sm:items-end">
+            <.button
+              :if={not limit_reached?(@quiz)}
+              id="add-question-button"
+              variant="primary"
+              patch={~p"/quizzes/#{@quiz}/questions/new"}
+              phx-click={JS.push_focus()}
+            >
+              Adicionar pergunta
+            </.button>
+
+            <button
+              :if={limit_reached?(@quiz)}
+              id="add-question-button"
+              type="button"
+              disabled
+              class="btn btn-primary btn-disabled"
+            >
+              Adicionar pergunta
+            </button>
+
+            <p :if={limit_reached?(@quiz)} id="question-limit-hint" class="text-sm text-warning">
+              {limit_hint()}
+            </p>
+          </div>
+        </div>
+
+        <div :if={@quiz.questions == []} id="questions-empty" class="mt-6 text-center">
+          <p class="text-base-content/70">Este quiz ainda não tem perguntas</p>
+
+          <div class="mt-4">
+            <.button
+              id="first-question-button"
+              variant="primary"
+              patch={~p"/quizzes/#{@quiz}/questions/new"}
+              phx-click={JS.push_focus()}
+            >
+              Adicionar pergunta
+            </.button>
+          </div>
+        </div>
+
+        <ol :if={@quiz.questions != []} id="questions" class="mt-6 space-y-3">
+          <li
+            :for={question <- @quiz.questions}
+            id={"question-#{question.id}"}
+            class="flex flex-wrap items-start justify-between gap-3 rounded-lg border border-base-300 p-4"
+          >
+            <div class="flex min-w-0 items-start gap-3">
+              <span class="badge badge-neutral shrink-0">{question.position}</span>
+
+              <div class="min-w-0">
+                <p class="font-medium break-words">{preview(question.text)}</p>
+                <p class="mt-1 text-sm text-success break-words">
+                  Correta: {correct_answer(question)}
+                </p>
+              </div>
+            </div>
+
+            <.link
+              patch={~p"/quizzes/#{@quiz}/questions/#{question}/edit"}
+              phx-click={JS.push_focus()}
+              class="btn btn-ghost btn-sm"
+            >
+              Editar
+            </.link>
+          </li>
+        </ol>
       </section>
+
+      <.modal
+        :if={@live_action in [:new_question, :edit_question] and @question}
+        id="question-modal"
+        title={modal_title(@live_action)}
+        on_cancel={JS.patch(~p"/quizzes/#{@quiz}/edit") |> JS.pop_focus()}
+      >
+        <.live_component
+          module={QuestionFormComponent}
+          id={"question-form-#{@question.id || :new}"}
+          quiz={@quiz}
+          question={@question}
+          current_scope={@current_scope}
+          action={form_action(@live_action)}
+          patch={~p"/quizzes/#{@quiz}/edit"}
+        />
+      </.modal>
     </Layouts.app>
     """
   end
+
+  defp modal_title(:new_question), do: "Nova pergunta"
+  defp modal_title(:edit_question), do: "Editar pergunta"
+
+  defp form_action(:new_question), do: :new
+  defp form_action(:edit_question), do: :edit
+
+  defp limit_reached?(%{questions: questions}) when is_list(questions),
+    do: length(questions) >= Quizzes.max_questions()
+
+  defp limit_message, do: "Este quiz já atingiu o limite de #{Quizzes.max_questions()} perguntas"
+
+  defp limit_hint, do: "Limite de #{Quizzes.max_questions()} perguntas atingido"
+
+  defp preview(text) when is_binary(text) do
+    if String.length(text) > @text_preview_limit do
+      String.slice(text, 0, @text_preview_limit) <> "…"
+    else
+      text
+    end
+  end
+
+  defp correct_answer(%{answer_options: options}) do
+    case Enum.find(options, & &1.is_correct) do
+      nil -> "—"
+      option -> "#{letter(option.position)}. #{option.text}"
+    end
+  end
+
+  defp letter(position), do: Enum.at(@letters, position - 1)
 
   defp assign_form(socket, changeset) do
     socket
@@ -129,9 +313,7 @@ defmodule LiveQuizWeb.QuizLive.Editor do
     end)
   end
 
-  defp questions_summary(%{questions: []}),
-    do: "Este quiz ainda não tem perguntas. A edição de perguntas chega na próxima entrega."
-
-  defp questions_summary(%{questions: questions}),
-    do: "Este quiz tem #{length(questions)} pergunta(s). A edição chega na próxima entrega."
+  defp questions_summary(%{questions: []}), do: "Este quiz ainda não tem perguntas."
+  defp questions_summary(%{questions: [_one]}), do: "1 pergunta."
+  defp questions_summary(%{questions: questions}), do: "#{length(questions)} perguntas."
 end
