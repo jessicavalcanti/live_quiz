@@ -163,6 +163,15 @@ defmodule LiveQuiz.Quizzes do
   end
 
   @doc """
+  The largest number of questions a quiz is allowed to hold.
+
+  Callers that need to disable a "new question" affordance ask here instead of
+  hardcoding the number, so the limit keeps living in one place.
+  """
+  @spec max_questions() :: pos_integer()
+  def max_questions, do: @max_questions
+
+  @doc """
   Fetches one question of the given quiz, with its answer options preloaded and
   ordered by position.
 

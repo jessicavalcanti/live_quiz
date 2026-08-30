@@ -49,6 +49,8 @@ defmodule LiveQuizWeb.Router do
       live "/quizzes", QuizLive.Index, :index
       live "/quizzes/new", QuizLive.Index, :new
       live "/quizzes/:id/edit", QuizLive.Editor, :edit
+      live "/quizzes/:id/questions/new", QuizLive.Editor, :new_question
+      live "/quizzes/:id/questions/:question_id/edit", QuizLive.Editor, :edit_question
       live "/users/settings", UserLive.Settings, :edit
       live "/users/settings/confirm-email/:token", UserLive.Settings, :confirm_email
     end
