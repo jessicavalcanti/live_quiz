@@ -76,6 +76,12 @@ A API vive em `/api/v1` e é autenticada por **JWT** (Guardian). Toda resposta u
 | `GET /api/v1/quizzes/:id` | detalhe do quiz com perguntas e alternativas |
 | `PUT`/`PATCH /api/v1/quizzes/:id` | atualiza o quiz (as duas se comportam igual) |
 | `DELETE /api/v1/quizzes/:id` | exclui o quiz e, em cascata, suas perguntas (204) |
+| `GET /api/v1/quizzes/:quiz_id/questions` | lista as perguntas do quiz, ordenadas por `position` |
+| `POST /api/v1/quizzes/:quiz_id/questions` | cria uma pergunta com suas 4 alternativas (201) |
+| `GET /api/v1/quizzes/:quiz_id/questions/:id` | detalhe de uma pergunta |
+| `PUT`/`PATCH /api/v1/quizzes/:quiz_id/questions/:id` | atualiza texto e alternativas |
+| `PATCH /api/v1/quizzes/:quiz_id/questions/:id/move` | move a pergunta uma casa (`up`/`down`) |
+| `DELETE /api/v1/quizzes/:quiz_id/questions/:id` | exclui a pergunta e renumera as seguintes (204) |
 
 ```bash
 curl -s -X POST http://localhost:4000/api/v1/session \
@@ -90,6 +96,18 @@ curl -s 'http://localhost:4000/api/v1/quizzes?page=1&per_page=20&search=geo' \
 curl -s -X POST http://localhost:4000/api/v1/quizzes \
   -H "Authorization: Bearer $ACCESS_TOKEN" -H 'Content-Type: application/json' \
   -d '{"quiz":{"title":"Geografia","description":"Capitais do mundo"}}'
+
+curl -s -X POST http://localhost:4000/api/v1/quizzes/1/questions \
+  -H "Authorization: Bearer $ACCESS_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"question":{"text":"Qual é a capital do Brasil?","answer_options":[
+        {"text":"Rio de Janeiro","position":1,"is_correct":false},
+        {"text":"Brasília","position":2,"is_correct":true},
+        {"text":"São Paulo","position":3,"is_correct":false},
+        {"text":"Salvador","position":4,"is_correct":false}]}}'
+
+curl -s -X PATCH http://localhost:4000/api/v1/quizzes/1/questions/10/move \
+  -H "Authorization: Bearer $ACCESS_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"direction":"up"}'
 ```
 
 A listagem responde com `data` (uma lista pura) e `meta` (`page`, `per_page`, `total_entries`,
@@ -101,6 +119,16 @@ Cada quiz traz `questions_count` e `playable` prontos do contexto; o detalhe (`G
 /api/v1/quizzes/:id`) ainda aninha as perguntas ordenadas por `position`, cada uma com suas quatro
 alternativas e o campo `is_correct` — o consumidor autenticado é o dono do quiz. Datas saem sempre
 em ISO 8601 UTC. Quiz de outro usuário é indistinguível de quiz inexistente: **404**.
+
+Alternativa não tem recurso próprio: como toda pergunta tem exatamente 4, elas trafegam **aninhadas
+na pergunta** e são gravadas na mesma transação — uma criação ou edição inválida não deixa registro
+parcial. A `position` da pergunta nunca é aceita do cliente: é calculada na criação e só muda pelo
+`move`, que responde com a lista inteira e reordenada do quiz (mover a pergunta que já está na borda
+é um 200 com a lista inalterada). Na atualização, **envie o `id` de cada alternativa** para que as
+linhas existentes sejam atualizadas em vez de substituídas. Erros de conjunto — nenhuma correta, duas
+corretas, quantidade diferente de 4, textos repetidos — voltam em **422** sob a chave
+`answer_options`, com as mesmas mensagens da interface web, e o 51º cadastro responde 422 com o
+limite atingido.
 
 O **access token** dura 15 minutos e o **refresh token**, 30 dias; eles são distinguidos pelo claim
 `typ`, e um refresh token não é aceito em rotas protegidas. O segredo de assinatura é independente

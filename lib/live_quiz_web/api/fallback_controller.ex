@@ -8,12 +8,25 @@ defmodule LiveQuizWeb.Api.FallbackController do
 
   use Phoenix.Controller, formats: [:json]
 
+  alias LiveQuiz.Quizzes
   alias LiveQuizWeb.Api.ErrorJSON
 
   def call(conn, {:error, %Ecto.Changeset{} = changeset}) do
     conn
     |> put_status(:unprocessable_entity)
     |> json(ErrorJSON.render("changeset.json", %{changeset: changeset}))
+  end
+
+  def call(conn, {:error, :question_limit_reached}) do
+    error(
+      conn,
+      :unprocessable_entity,
+      "Este quiz já atingiu o limite de #{Quizzes.max_questions()} perguntas"
+    )
+  end
+
+  def call(conn, {:error, :invalid_direction}) do
+    error(conn, :unprocessable_entity, ~s(A direção deve ser "up" ou "down"))
   end
 
   def call(conn, {:error, :invalid_credentials}) do

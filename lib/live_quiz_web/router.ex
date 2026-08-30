@@ -37,6 +37,14 @@ defmodule LiveQuizWeb.Router do
     get "/me", SessionController, :me
 
     resources "/quizzes", QuizController, except: [:new, :edit]
+
+    get "/quizzes/:quiz_id/questions", QuestionController, :index
+    post "/quizzes/:quiz_id/questions", QuestionController, :create
+    get "/quizzes/:quiz_id/questions/:id", QuestionController, :show
+    put "/quizzes/:quiz_id/questions/:id", QuestionController, :update
+    patch "/quizzes/:quiz_id/questions/:id", QuestionController, :update
+    delete "/quizzes/:quiz_id/questions/:id", QuestionController, :delete
+    patch "/quizzes/:quiz_id/questions/:id/move", QuestionController, :move
   end
 
   # Enable LiveDashboard and Swoosh mailbox preview in development
