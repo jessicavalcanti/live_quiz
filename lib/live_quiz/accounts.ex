@@ -60,6 +60,78 @@ defmodule LiveQuiz.Accounts do
   """
   def get_user!(id), do: Repo.get!(User, id)
 
+  @doc """
+  Gets a single user, or `nil` when there is no user with the given id.
+
+  Unlike `get_user!/1` this never raises, which is what the API token
+  verification needs: a token whose subject no longer exists is just an
+  unauthenticated request, not a crash.
+
+  ## Examples
+
+      iex> get_user(123)
+      %User{}
+
+      iex> get_user(456)
+      nil
+
+  """
+  def get_user(id) when is_integer(id), do: Repo.get(User, id)
+
+  def get_user(id) when is_binary(id) do
+    case Integer.parse(id) do
+      {integer_id, ""} -> get_user(integer_id)
+      _other -> nil
+    end
+  end
+
+  def get_user(_id), do: nil
+
+  @credentials_types %{email: :string, password: :string}
+
+  @doc """
+  Authenticates a set of e-mail and password credentials coming from the API.
+
+  Returns `{:error, changeset}` when a field is missing, so the caller can answer
+  422, and `{:error, :invalid_credentials}` for both a wrong password and an
+  unknown e-mail — the same answer either way, so the API never reveals whether
+  an address is registered.
+
+  ## Examples
+
+      iex> authenticate_by_credentials(%{"email" => "foo@example.com", "password" => "correct"})
+      {:ok, %User{}}
+
+      iex> authenticate_by_credentials(%{"email" => "foo@example.com", "password" => "wrong"})
+      {:error, :invalid_credentials}
+
+      iex> authenticate_by_credentials(%{"email" => "foo@example.com"})
+      {:error, %Ecto.Changeset{}}
+
+  """
+  @spec authenticate_by_credentials(map()) ::
+          {:ok, User.t()} | {:error, :invalid_credentials} | {:error, Ecto.Changeset.t()}
+  def authenticate_by_credentials(params) when is_map(params) do
+    changeset =
+      {%{}, @credentials_types}
+      |> Ecto.Changeset.cast(params, Map.keys(@credentials_types))
+      |> Ecto.Changeset.validate_required([:email, :password])
+
+    case Ecto.Changeset.apply_action(changeset, :validate) do
+      {:ok, credentials} -> authenticate(credentials)
+      {:error, invalid_changeset} -> {:error, invalid_changeset}
+    end
+  end
+
+  def authenticate_by_credentials(_params), do: {:error, :invalid_credentials}
+
+  defp authenticate(%{email: email, password: password}) do
+    case get_user_by_email_and_password(email, password) do
+      %User{} = user -> {:ok, user}
+      nil -> {:error, :invalid_credentials}
+    end
+  end
+
   ## User registration
 
   @doc """

@@ -30,6 +30,13 @@ config :live_quiz, LiveQuizWeb.Gettext, default_locale: "pt_BR", locales: ~w(pt_
 # Timestamps are stored in UTC and converted to America/Sao_Paulo only for display.
 config :elixir, :time_zone_database, Tz.TimeZoneDatabase
 
+# JWT da API: o access token dura 15 minutos; o refresh token tem TTL próprio,
+# definido em `LiveQuiz.Accounts.Guardian`. A `secret_key` é fixa em dev e test e
+# vem de variável de ambiente em produção (`config/runtime.exs`).
+config :live_quiz, LiveQuiz.Accounts.Guardian,
+  issuer: "live_quiz",
+  ttl: {15, :minutes}
+
 # Configure the endpoint
 config :live_quiz, LiveQuizWeb.Endpoint,
   url: [host: "localhost"],

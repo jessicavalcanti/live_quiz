@@ -24,6 +24,10 @@ config :live_quiz, LiveQuizWeb.Endpoint,
   secret_key_base: "qYDwZYcRKTuPkH+vHHzYiVzKDqD/SsmyDKW+9gT3mfWtOVAwBOFM/+A+298LlXCY",
   server: false
 
+# Segredo dos JWTs da API na suíte de testes.
+config :live_quiz, LiveQuiz.Accounts.Guardian,
+  secret_key: "1fTLJh9jj4MBtLmE5jCO5ujxW7NT8DYsoplU0tivequcjlouqSKDMhmgE3Luw609"
+
 # In test we don't send emails
 config :live_quiz, LiveQuiz.Mailer, adapter: Swoosh.Adapters.Test
 

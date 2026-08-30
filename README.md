@@ -60,6 +60,38 @@ Exportar a variável no seu shell (`export DB_PORT=5433`) evita repeti-la em cad
 
 ---
 
+## API JSON
+
+A API vive em `/api/v1` e é autenticada por **JWT** (Guardian). Toda resposta usa o envelope
+`data` para sucesso e `errors` para falha.
+
+| Rota | Descrição |
+|---|---|
+| `POST /api/v1/session` | troca e-mail e senha por um par de tokens |
+| `POST /api/v1/session/refresh` | troca o refresh token por um novo access token |
+| `DELETE /api/v1/session` | encerra a sessão do lado do cliente (204) |
+| `GET /api/v1/me` | dados do usuário autenticado |
+
+```bash
+curl -s -X POST http://localhost:4000/api/v1/session \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"voce@example.com","password":"sua-senha"}'
+
+curl -s http://localhost:4000/api/v1/me -H "Authorization: Bearer $ACCESS_TOKEN"
+```
+
+O **access token** dura 15 minutos e o **refresh token**, 30 dias; eles são distinguidos pelo claim
+`typ`, e um refresh token não é aceito em rotas protegidas. O segredo de assinatura é independente
+do `secret_key_base` do Phoenix e vem de `GUARDIAN_SECRET_KEY` em produção.
+
+> **Dívida técnica — não há revogação de token no servidor.** O projeto não usa `Guardian.DB`, então
+> nenhum token é persistido e nenhuma consulta ao banco acontece por requisição. A contrapartida é
+> que `DELETE /api/v1/session` só orienta o cliente a descartar os tokens: um token vazado continua
+> válido até expirar. Uma revogação real (lista de negação ou `Guardian.DB`) fica para uma fase
+> futura.
+
+---
+
 ## Qualidade
 
 ```bash

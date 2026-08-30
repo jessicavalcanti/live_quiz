@@ -48,6 +48,63 @@ defmodule LiveQuiz.AccountsTest do
     end
   end
 
+  describe "get_user/1" do
+    test "returns the user with the given id" do
+      %{id: id} = user = user_fixture()
+
+      assert %User{id: ^id} = Accounts.get_user(user.id)
+      assert %User{id: ^id} = Accounts.get_user(to_string(user.id))
+    end
+
+    test "returns nil instead of raising when the user does not exist" do
+      refute Accounts.get_user(-1)
+    end
+
+    test "returns nil when the id is not a number" do
+      refute Accounts.get_user("abc")
+      refute Accounts.get_user("1abc")
+      refute Accounts.get_user(nil)
+    end
+  end
+
+  describe "authenticate_by_credentials/1" do
+    test "returns the user with the right credentials" do
+      %{id: id} = user = user_fixture()
+
+      assert {:ok, %User{id: ^id}} =
+               Accounts.authenticate_by_credentials(%{
+                 "email" => user.email,
+                 "password" => valid_user_password()
+               })
+    end
+
+    test "returns invalid_credentials with the wrong password" do
+      user = user_fixture()
+
+      assert Accounts.authenticate_by_credentials(%{
+               "email" => user.email,
+               "password" => "errada"
+             }) == {:error, :invalid_credentials}
+    end
+
+    test "returns invalid_credentials when the email is unknown" do
+      assert Accounts.authenticate_by_credentials(%{
+               "email" => "unknown@example.com",
+               "password" => valid_user_password()
+             }) == {:error, :invalid_credentials}
+    end
+
+    test "returns a changeset when a field is missing" do
+      assert {:error, changeset} = Accounts.authenticate_by_credentials(%{})
+
+      assert %{email: ["can't be blank"], password: ["can't be blank"]} = errors_on(changeset)
+    end
+
+    test "returns invalid_credentials when the params are not a map" do
+      assert Accounts.authenticate_by_credentials("nada") == {:error, :invalid_credentials}
+    end
+  end
+
   describe "register_user/1" do
     test "requires name, email and password to be set" do
       {:error, changeset} = Accounts.register_user(%{})
