@@ -83,7 +83,7 @@ defmodule LiveQuizWeb.UserLive.ResetPasswordTest do
         |> form("#login_form", user: %{email: user.email, password: "new valid password"})
         |> submit_form(conn)
 
-      assert redirected_to(conn) == ~p"/"
+      assert redirected_to(conn) == ~p"/quizzes"
       assert get_session(conn, :user_token)
     end
 

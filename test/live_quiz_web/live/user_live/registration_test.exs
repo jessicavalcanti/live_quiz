@@ -20,7 +20,7 @@ defmodule LiveQuizWeb.UserLive.RegistrationTest do
         conn
         |> log_in_user(user_fixture())
         |> live(~p"/users/register")
-        |> follow_redirect(conn, ~p"/")
+        |> follow_redirect(conn, ~p"/quizzes")
 
       assert {:ok, _conn} = result
     end
@@ -50,7 +50,7 @@ defmodule LiveQuizWeb.UserLive.RegistrationTest do
       render_submit(form)
       conn = follow_trigger_action(form, conn)
 
-      assert redirected_to(conn) == ~p"/"
+      assert redirected_to(conn) == ~p"/quizzes"
       assert Phoenix.Flash.get(conn.assigns.flash, :info) == "Conta criada com sucesso!"
       assert get_session(conn, :user_token)
 

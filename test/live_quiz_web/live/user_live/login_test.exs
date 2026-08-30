@@ -28,7 +28,7 @@ defmodule LiveQuizWeb.UserLive.LoginTest do
 
       conn = submit_form(form, conn)
 
-      assert redirected_to(conn) == ~p"/"
+      assert redirected_to(conn) == ~p"/quizzes"
       assert Phoenix.Flash.get(conn.assigns.flash, :info) == "Bem-vindo de volta!"
       assert conn.resp_cookies["_live_quiz_web_user_remember_me"]
     end
