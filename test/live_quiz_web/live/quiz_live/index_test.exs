@@ -7,6 +7,7 @@ defmodule LiveQuizWeb.QuizLive.IndexTest do
   import Phoenix.LiveViewTest
 
   alias LiveQuiz.Accounts.Scope
+  alias LiveQuiz.Quizzes
 
   describe "route protection" do
     test "redirects a visitor to the log in page", %{conn: conn} do
@@ -331,6 +332,239 @@ defmodule LiveQuizWeb.QuizLive.IndexTest do
       {:ok, _lv, html} = live(conn, ~p"/quizzes?page=abc")
 
       assert html =~ "Página 1 de 2"
+    end
+  end
+
+  describe "creating a quiz" do
+    setup :register_and_log_in_user
+
+    setup %{user: user} do
+      %{scope: Scope.for_user(user)}
+    end
+
+    test "opening the modal changes the URL", %{conn: conn} do
+      {:ok, lv, _html} = live(conn, ~p"/quizzes")
+
+      html = lv |> element("#new-quiz-button") |> render_click()
+
+      assert_patch(lv, ~p"/quizzes/new")
+      assert html =~ "Criar quiz"
+      assert lv |> element("#new-quiz-form") |> has_element?()
+    end
+
+    test "renders the modal on a direct visit", %{conn: conn} do
+      {:ok, lv, html} = live(conn, ~p"/quizzes/new")
+
+      assert html =~ ~s(role="dialog")
+      assert lv |> element("#new-quiz-form") |> has_element?()
+    end
+
+    test "creates the quiz and sends the user to the editor", %{conn: conn, scope: scope} do
+      {:ok, lv, _html} = live(conn, ~p"/quizzes/new")
+
+      params = %{"quiz" => %{"title" => "Geografia", "description" => "Capitais do mundo"}}
+
+      result = lv |> form("#new-quiz-form", params) |> render_submit()
+
+      quiz = Quizzes.list_quizzes(scope).entries |> hd()
+
+      assert {:ok, _editor, html} = follow_redirect(result, conn, ~p"/quizzes/#{quiz}/edit")
+      assert html =~ "Quiz criado com sucesso"
+      assert quiz.title == "Geografia"
+      assert quiz.description == "Capitais do mundo"
+    end
+
+    test "keeps the modal open and reports a blank title", %{conn: conn, scope: scope} do
+      {:ok, lv, _html} = live(conn, ~p"/quizzes/new")
+
+      html = lv |> form("#new-quiz-form", %{"quiz" => %{"title" => ""}}) |> render_submit()
+
+      assert html =~ "não pode ficar em branco"
+      assert lv |> element("#new-quiz-form") |> has_element?()
+      assert Quizzes.list_quizzes(scope).total_entries == 0
+    end
+
+    test "reports a title that is too short", %{conn: conn, scope: scope} do
+      {:ok, lv, _html} = live(conn, ~p"/quizzes/new")
+
+      html = lv |> form("#new-quiz-form", %{"quiz" => %{"title" => "AB"}}) |> render_submit()
+
+      assert html =~ "deve ter pelo menos 3 caracteres"
+      assert Quizzes.list_quizzes(scope).total_entries == 0
+    end
+
+    test "reports a description that is too long", %{conn: conn, scope: scope} do
+      {:ok, lv, _html} = live(conn, ~p"/quizzes/new")
+
+      params = %{
+        "quiz" => %{"title" => "Geografia", "description" => String.duplicate("a", 501)}
+      }
+
+      html = lv |> form("#new-quiz-form", params) |> render_submit()
+
+      assert html =~ "deve ter no máximo 500 caracteres"
+      assert Quizzes.list_quizzes(scope).total_entries == 0
+    end
+
+    test "validates on change without creating anything", %{conn: conn, scope: scope} do
+      {:ok, lv, _html} = live(conn, ~p"/quizzes/new")
+
+      html = lv |> form("#new-quiz-form", %{"quiz" => %{"title" => "AB"}}) |> render_change()
+
+      assert html =~ "deve ter pelo menos 3 caracteres"
+      assert Quizzes.list_quizzes(scope).total_entries == 0
+    end
+
+    test "moves focus to the first field with an error", %{conn: conn} do
+      {:ok, lv, _html} = live(conn, ~p"/quizzes/new")
+
+      html = lv |> form("#new-quiz-form", %{"quiz" => %{"title" => ""}}) |> render_submit()
+
+      assert html =~ "phx-mounted"
+      assert html =~ "quiz_title"
+      assert html =~ "Corrija os campos destacados."
+    end
+
+    test "cancelling returns to the dashboard", %{conn: conn} do
+      {:ok, lv, _html} = live(conn, ~p"/quizzes/new")
+
+      lv |> element("#new-quiz-form a", "Cancelar") |> render_click()
+
+      assert_patch(lv, ~p"/quizzes")
+      refute lv |> element("#new-quiz-form") |> has_element?()
+    end
+
+    test "guards the submit button against double submission", %{conn: conn} do
+      {:ok, _lv, html} = live(conn, ~p"/quizzes/new")
+
+      assert html =~ ~s(phx-disable-with="Salvando...")
+    end
+  end
+
+  describe "deleting a quiz" do
+    setup :register_and_log_in_user
+
+    setup %{user: user} do
+      %{scope: Scope.for_user(user)}
+    end
+
+    test "asks for confirmation reporting how many questions go with it", %{
+      conn: conn,
+      scope: scope
+    } do
+      quiz = quiz_fixture(scope, %{title: "Geografia"})
+      for _ <- 1..3, do: question_fixture(scope, quiz)
+
+      {:ok, lv, _html} = live(conn, ~p"/quizzes")
+
+      html = lv |> element("#quiz-#{quiz.id} button", "Excluir") |> render_click()
+
+      assert html =~ "Excluir o quiz &quot;Geografia&quot;?"
+      assert html =~ "Esta ação também removerá 3 perguntas e não pode ser desfeita."
+    end
+
+    test "does not promise to remove questions when there are none", %{
+      conn: conn,
+      scope: scope
+    } do
+      quiz = quiz_fixture(scope)
+
+      {:ok, lv, _html} = live(conn, ~p"/quizzes")
+
+      html = lv |> element("#quiz-#{quiz.id} button", "Excluir") |> render_click()
+
+      assert html =~ "Esta ação não pode ser desfeita."
+      refute html =~ "removerá"
+    end
+
+    test "confirming removes the quiz from the list and the database", %{
+      conn: conn,
+      scope: scope
+    } do
+      quiz = quiz_fixture(scope, %{title: "Geografia"})
+      question_fixture(scope, quiz)
+      quiz_fixture(scope, %{title: "História"})
+
+      {:ok, lv, _html} = live(conn, ~p"/quizzes")
+
+      lv |> element("#quiz-#{quiz.id} button", "Excluir") |> render_click()
+      html = lv |> element("button", "Excluir quiz") |> render_click()
+
+      assert html =~ "Quiz excluído"
+      refute html =~ "Geografia"
+      assert html =~ "História"
+
+      assert_raise Ecto.NoResultsError, fn -> Quizzes.get_quiz!(scope, quiz.id) end
+    end
+
+    test "cancelling keeps the quiz", %{conn: conn, scope: scope} do
+      quiz = quiz_fixture(scope, %{title: "Geografia"})
+
+      {:ok, lv, _html} = live(conn, ~p"/quizzes")
+
+      lv |> element("#quiz-#{quiz.id} button", "Excluir") |> render_click()
+      html = lv |> element("#delete-quiz button", "Cancelar") |> render_click()
+
+      refute html =~ "Excluir o quiz"
+      assert html =~ "Geografia"
+      assert Quizzes.get_quiz!(scope, quiz.id).id == quiz.id
+    end
+
+    test "deleting the only item of page 2 lands on a page that exists", %{
+      conn: conn,
+      scope: scope
+    } do
+      # Ordering is newest first, so the oldest quiz is the one left alone on
+      # page 2 — it has to be created before the other twenty.
+      last = quiz_fixture(scope, %{title: "Sozinho na página 2"})
+
+      for index <- 1..20 do
+        quiz_fixture(scope, %{title: "Quiz #{String.pad_leading("#{index}", 2, "0")}"})
+      end
+
+      {:ok, lv, html} = live(conn, ~p"/quizzes?page=2")
+      assert html =~ "Sozinho na página 2"
+
+      lv |> element("#quiz-#{last.id} button", "Excluir") |> render_click()
+      lv |> element("button", "Excluir quiz") |> render_click()
+
+      assert_patch(lv, ~p"/quizzes")
+
+      html = render(lv)
+      assert html =~ "Quiz 01"
+      refute html =~ "Sozinho na página 2"
+    end
+
+    test "stays on the current page when it still has quizzes", %{conn: conn, scope: scope} do
+      for index <- 1..25 do
+        quiz_fixture(scope, %{title: "Quiz #{String.pad_leading("#{index}", 2, "0")}"})
+      end
+
+      {:ok, lv, _html} = live(conn, ~p"/quizzes?page=2")
+
+      [target | _] = Quizzes.list_quizzes(scope, page: 2).entries
+
+      lv |> element("#quiz-#{target.id} button", "Excluir") |> render_click()
+      html = lv |> element("button", "Excluir quiz") |> render_click()
+
+      assert html =~ "Página 2 de 2"
+      refute html =~ target.title
+    end
+
+    @tag :capture_log
+    test "refuses a forged delete of a quiz of another user", %{conn: conn} do
+      foreign = quiz_fixture(user_scope_fixture(), %{title: "Quiz do Bruno"})
+
+      {:ok, lv, html} = live(conn, ~p"/quizzes")
+
+      refute html =~ "Quiz do Bruno"
+
+      # The scoped lookup raises inside the LiveView process, which takes the
+      # process down instead of deleting somebody else's quiz.
+      Process.flag(:trap_exit, true)
+      assert catch_exit(render_click(lv, "delete_quiz", %{"id" => foreign.id}))
+
+      assert LiveQuiz.Repo.get(LiveQuiz.Quizzes.Quiz, foreign.id)
     end
   end
 
