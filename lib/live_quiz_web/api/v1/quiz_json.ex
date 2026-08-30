@@ -3,14 +3,15 @@ defmodule LiveQuizWeb.Api.V1.QuizJSON do
   Renders quizzes inside the `data` envelope of the API.
 
   Both the list and the detail go through the same serialization, so the two
-  can never drift apart. `questions_count` and `playable` come ready from the
-  context: this module counts nothing and touches no database.
+  can never drift apart. Nested questions are delegated to
+  `LiveQuizWeb.Api.V1.QuestionJSON`, which is the single source of that payload.
+  `questions_count` and `playable` come ready from the context: this module
+  counts nothing and touches no database.
   """
 
   alias LiveQuiz.Quizzes
-  alias LiveQuiz.Quizzes.AnswerOption
-  alias LiveQuiz.Quizzes.Question
   alias LiveQuiz.Quizzes.Quiz
+  alias LiveQuizWeb.Api.V1.QuestionJSON
 
   @doc """
   Renders a page of quizzes: the entries in `data`, the pagination in `meta`.
@@ -49,26 +50,8 @@ defmodule LiveQuizWeb.Api.V1.QuizJSON do
   # in both cases the key is simply absent from the payload instead of lying
   # with an empty list.
   defp maybe_put_questions(data, %Quiz{questions: questions}) when is_list(questions) do
-    Map.put(data, :questions, Enum.map(questions, &question/1))
+    Map.put(data, :questions, Enum.map(questions, &QuestionJSON.data/1))
   end
 
   defp maybe_put_questions(data, %Quiz{}), do: data
-
-  defp question(%Question{} = question) do
-    %{
-      id: question.id,
-      text: question.text,
-      position: question.position,
-      answer_options: Enum.map(question.answer_options, &answer_option/1)
-    }
-  end
-
-  defp answer_option(%AnswerOption{} = option) do
-    %{
-      id: option.id,
-      text: option.text,
-      position: option.position,
-      is_correct: option.is_correct
-    }
-  end
 end

@@ -24,6 +24,22 @@ defmodule LiveQuizWeb.Api.FallbackControllerTest do
              }
     end
 
+    test "renders 422 when the quiz reached the question limit" do
+      conn = call({:error, :question_limit_reached})
+
+      assert json_response(conn, 422) == %{
+               "errors" => %{"detail" => "Este quiz já atingiu o limite de 50 perguntas"}
+             }
+    end
+
+    test "renders 422 for a move direction that is neither up nor down" do
+      conn = call({:error, :invalid_direction})
+
+      assert json_response(conn, 422) == %{
+               "errors" => %{"detail" => ~s(A direção deve ser "up" ou "down")}
+             }
+    end
+
     test "renders 401 for invalid credentials" do
       conn = call({:error, :invalid_credentials})
 
