@@ -26,6 +26,20 @@ defmodule LiveQuiz.Quizzes.AnswerOptionTest do
       assert "can't be blank" in errors_on(changeset).text
     end
 
+    test "keeps a text cleared on an existing option as blank" do
+      changeset = AnswerOption.changeset(%AnswerOption{text: "Antiga"}, valid_attrs(%{text: nil}))
+
+      refute changeset.valid?
+      assert "can't be blank" in errors_on(changeset).text
+    end
+
+    test "trims the text before validating it" do
+      changeset = AnswerOption.changeset(%AnswerOption{}, valid_attrs(%{text: "  Brasília  "}))
+
+      assert changeset.valid?
+      assert get_change(changeset, :text) == "Brasília"
+    end
+
     test "rejects text longer than 200 characters" do
       attrs = valid_attrs(%{text: String.duplicate("a", 201)})
       changeset = AnswerOption.changeset(%AnswerOption{}, attrs)

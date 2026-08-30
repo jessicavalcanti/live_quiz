@@ -12,6 +12,7 @@ defmodule LiveQuiz.Quizzes do
 
   alias Ecto.Changeset
   alias LiveQuiz.Accounts.Scope
+  alias LiveQuiz.Quizzes.AnswerOption
   alias LiveQuiz.Quizzes.Question
   alias LiveQuiz.Quizzes.Quiz
   alias LiveQuiz.Repo
@@ -19,6 +20,7 @@ defmodule LiveQuiz.Quizzes do
   @default_page 1
   @default_per_page 20
   @max_per_page 100
+  @max_questions 50
 
   @typedoc "A page of quizzes, as returned by `list_quizzes/2`."
   @type page :: %{
@@ -159,6 +161,183 @@ defmodule LiveQuiz.Quizzes do
     raise ArgumentError,
           "playable?/1 exige um quiz com questions_count preenchido, recebido: #{inspect(quiz)}"
   end
+
+  @doc """
+  Fetches one question of the given quiz, with its answer options preloaded and
+  ordered by position.
+
+  Raises `Ecto.NoResultsError` when the question does not exist or the quiz
+  belongs to somebody else.
+  """
+  @spec get_question!(Scope.t(), Quiz.t(), integer() | String.t()) :: Question.t()
+  def get_question!(%Scope{} = scope, %Quiz{} = quiz, id) do
+    scope
+    |> owned_questions()
+    |> where([q, quiz: quiz], quiz.id == ^quiz.id and q.id == ^id)
+    |> Repo.one!()
+    |> Repo.preload(:answer_options)
+  end
+
+  @doc """
+  Creates a question with exactly #{Question.options_per_question()} answer
+  options, in a single transaction.
+
+  The position is computed on the server as the quiz's highest position plus
+  one, and is never read from `attrs`. A quiz that already holds
+  #{@max_questions} questions returns `{:error, :question_limit_reached}` and
+  nothing is written.
+  """
+  @spec create_question(Scope.t(), Quiz.t(), map()) ::
+          {:ok, Question.t()} | {:error, Changeset.t()} | {:error, :question_limit_reached}
+  def create_question(%Scope{} = scope, %Quiz{} = quiz, attrs) do
+    true = quiz.owner_id == scope.user.id
+
+    Repo.transaction(fn ->
+      if count_questions(quiz) >= @max_questions do
+        Repo.rollback(:question_limit_reached)
+      else
+        insert_question(quiz, attrs)
+      end
+    end)
+  end
+
+  defp insert_question(%Quiz{} = quiz, attrs) do
+    %Question{quiz_id: quiz.id}
+    |> Question.changeset(put_position(attrs, next_question_position(quiz)))
+    |> Repo.insert()
+    |> case do
+      {:ok, question} -> Repo.preload(question, :answer_options)
+      {:error, changeset} -> Repo.rollback(changeset)
+    end
+  end
+
+  @doc """
+  Updates the question text and its answer options, in a single transaction.
+
+  The position is not touched: reordering belongs to F1-08.
+
+  Raises `Ecto.NoResultsError` when the question belongs to somebody else.
+  """
+  @spec update_question(Scope.t(), Question.t(), map()) ::
+          {:ok, Question.t()} | {:error, Changeset.t()}
+  def update_question(%Scope{} = scope, %Question{} = question, attrs) do
+    question = fetch_owned_question!(scope, question.id)
+
+    Repo.transaction(fn ->
+      question
+      |> clear_correct_option(attrs)
+      |> Question.changeset(drop_position(attrs))
+      |> Repo.update()
+      |> case do
+        {:ok, updated} -> Repo.preload(updated, :answer_options, force: true)
+        {:error, changeset} -> Repo.rollback(changeset)
+      end
+    end)
+  end
+
+  # Clears the current correct option before applying a new set, so marking a
+  # different one can never trip the partial unique index halfway through.
+  # Reloading afterwards is what makes it safe: the option that stays correct
+  # becomes a real change again instead of being skipped as a no-op.
+  #
+  # Only worth doing when the caller actually sent options — an edit that just
+  # rewrites the question text must leave the stored set exactly as it is.
+  defp clear_correct_option(%Question{} = question, attrs) do
+    if carries_options?(attrs) do
+      Repo.update_all(
+        from(o in AnswerOption, where: o.question_id == ^question.id and o.is_correct),
+        set: [is_correct: false]
+      )
+
+      Repo.preload(question, :answer_options, force: true)
+    else
+      Repo.preload(question, :answer_options)
+    end
+  end
+
+  defp carries_options?(attrs) do
+    Map.has_key?(attrs, :answer_options) or Map.has_key?(attrs, "answer_options")
+  end
+
+  @doc """
+  Returns a changeset for tracking question changes in a form.
+
+  A brand new question gets its #{Question.options_per_question()} blank options
+  so the form has rows to render.
+  """
+  @spec change_question(Question.t(), map()) :: Changeset.t()
+  def change_question(%Question{} = question, attrs \\ %{}) do
+    question
+    |> prepare_options_for_form(attrs)
+    |> Question.changeset(attrs)
+  end
+
+  @doc """
+  Returns a new question carrying #{Question.options_per_question()} blank
+  options in positions 1..#{Question.options_per_question()}.
+  """
+  @spec new_question() :: Question.t()
+  def new_question do
+    %Question{answer_options: blank_options()}
+  end
+
+  defp fetch_owned_question!(%Scope{} = scope, id) do
+    scope
+    |> owned_questions()
+    |> where([q], q.id == ^id)
+    |> Repo.one!()
+  end
+
+  defp owned_questions(%Scope{} = scope) do
+    from q in Question,
+      join: quiz in assoc(q, :quiz),
+      as: :quiz,
+      where: quiz.owner_id == ^scope.user.id
+  end
+
+  defp count_questions(%Quiz{} = quiz) do
+    Repo.aggregate(from(q in Question, where: q.quiz_id == ^quiz.id), :count)
+  end
+
+  defp next_question_position(%Quiz{} = quiz) do
+    highest = Repo.one(from q in Question, where: q.quiz_id == ^quiz.id, select: max(q.position))
+
+    (highest || 0) + 1
+  end
+
+  # The blank options exist only so an empty form has rows to render. Once the
+  # form comes back with options in the params, they have to go: matching four
+  # unsaved blanks against four id-less params would collapse them by their nil
+  # primary key.
+  defp prepare_options_for_form(%Question{id: nil} = question, attrs) do
+    if carries_options?(attrs) do
+      %{question | answer_options: []}
+    else
+      %{question | answer_options: blank_options()}
+    end
+  end
+
+  defp prepare_options_for_form(%Question{} = question, _attrs), do: question
+
+  defp blank_options do
+    for position <- 1..Question.options_per_question() do
+      %AnswerOption{position: position, is_correct: false}
+    end
+  end
+
+  defp put_position(attrs, position) do
+    if string_keyed?(attrs) do
+      Map.put(attrs, "position", position)
+    else
+      Map.put(attrs, :position, position)
+    end
+  end
+
+  defp drop_position(attrs) do
+    attrs |> Map.delete(:position) |> Map.delete("position")
+  end
+
+  defp string_keyed?(attrs), do: Enum.any?(Map.keys(attrs), &is_binary/1)
 
   defp owned_quizzes(%Scope{} = scope) do
     from q in Quiz, where: q.owner_id == ^scope.user.id
