@@ -260,6 +260,103 @@ defmodule LiveQuiz.Quizzes do
   end
 
   @doc """
+  Deletes the question and closes the gap it leaves, so the quiz keeps a dense
+  `1..n` sequence. Runs in a single transaction; the answer options go with it
+  through the database cascade.
+
+  Raises `Ecto.NoResultsError` when the question belongs to somebody else.
+  """
+  @spec delete_question(Scope.t(), Question.t()) ::
+          {:ok, Question.t()} | {:error, Changeset.t()}
+  def delete_question(%Scope{} = scope, %Question{} = question) do
+    Repo.transaction(fn -> remove_question(scope, question.id) end)
+  end
+
+  @doc """
+  Moves the question one place up or down inside its quiz.
+
+  Returns `{:ok, :unchanged}` when the question already sits at the matching
+  edge — moving the first one up is a successful no-op, not an error.
+
+  Raises `Ecto.NoResultsError` when the question belongs to somebody else.
+  """
+  @spec move_question(Scope.t(), Question.t(), :up | :down) ::
+          {:ok, Question.t()} | {:ok, :unchanged} | {:error, term()}
+  def move_question(%Scope{} = scope, %Question{} = question, direction)
+      when direction in [:up, :down] do
+    Repo.transaction(fn -> relocate_question(scope, question.id, direction) end)
+  end
+
+  defp remove_question(%Scope{} = scope, id) do
+    question = lock_owned_question!(scope, id)
+
+    case Repo.delete(question) do
+      {:ok, deleted} -> close_position_gap(deleted)
+      {:error, changeset} -> Repo.rollback(changeset)
+    end
+  end
+
+  defp close_position_gap(%Question{} = deleted) do
+    Repo.update_all(
+      from(q in Question,
+        where: q.quiz_id == ^deleted.quiz_id and q.position > ^deleted.position
+      ),
+      inc: [position: -1]
+    )
+
+    deleted
+  end
+
+  defp relocate_question(%Scope{} = scope, id, direction) do
+    question = lock_owned_question!(scope, id)
+    target = target_position(question.position, direction)
+
+    case lock_question_at(question.quiz_id, target) do
+      nil -> :unchanged
+      neighbour -> swap_positions(question, neighbour)
+    end
+  end
+
+  defp target_position(position, :up), do: position - 1
+  defp target_position(position, :down), do: position + 1
+
+  # Both updates happen inside one transaction, so the intermediate state where
+  # two questions share a position never reaches a constraint check: the unique
+  # index on (quiz_id, position) is DEFERRABLE INITIALLY DEFERRED. No temporary
+  # position is needed.
+  defp swap_positions(%Question{} = question, %Question{} = neighbour) do
+    moved_at = DateTime.utc_now(:second)
+
+    reposition(neighbour, question.position, moved_at)
+    reposition(question, neighbour.position, moved_at)
+
+    %{question | position: neighbour.position, updated_at: moved_at}
+  end
+
+  defp reposition(%Question{} = question, position, moved_at) do
+    Repo.update_all(
+      from(q in Question, where: q.id == ^question.id),
+      set: [position: position, updated_at: moved_at]
+    )
+  end
+
+  # Ownership is checked with the join, then the row is locked on its own, so
+  # `FOR UPDATE` never reaches across to the quiz row.
+  defp lock_owned_question!(%Scope{} = scope, id) do
+    question = fetch_owned_question!(scope, id)
+
+    Repo.one!(from q in Question, where: q.id == ^question.id, lock: "FOR UPDATE")
+  end
+
+  defp lock_question_at(quiz_id, position) do
+    Repo.one(
+      from q in Question,
+        where: q.quiz_id == ^quiz_id and q.position == ^position,
+        lock: "FOR UPDATE"
+    )
+  end
+
+  @doc """
   Returns a changeset for tracking question changes in a form.
 
   A brand new question gets its #{Question.options_per_question()} blank options
