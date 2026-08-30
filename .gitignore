@@ -37,3 +37,6 @@ npm-debug.log
 
 # Worktrees isolados criados pelo "bin/demo <tag>".
 /.demo/
+
+# Diário da esteira de stories (.claude/skills/esteira).
+/.claude/esteira/
