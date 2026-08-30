@@ -12,6 +12,11 @@ defmodule LiveQuizWeb.QuizLive.Editor do
   question is saved on its own: there is no "save everything" button, and the
   list is read back from the context after every write instead of being patched
   in memory.
+
+  Reordering follows the same rule: the arrows ask the context to move the
+  question and the list is read back from the database, so the server — never
+  the socket — is the authority on the order. Deleting goes through a
+  confirmation modal, since it takes the answer options with it.
   """
   use LiveQuizWeb, :live_view
 
@@ -31,6 +36,7 @@ defmodule LiveQuizWeb.QuizLive.Editor do
      |> assign(:page_title, quiz.title)
      |> assign(:quiz, quiz)
      |> assign(:question, nil)
+     |> assign(:question_to_delete, nil)
      |> assign(:invalid_field, nil)
      |> assign(:attempt, 0)
      |> assign_form(Quizzes.change_quiz(quiz))}
@@ -97,28 +103,74 @@ defmodule LiveQuizWeb.QuizLive.Editor do
     end
   end
 
-  # The list is the context's answer, never a local edit of what was on screen.
-  @impl true
-  def handle_info({QuestionFormComponent, {:saved, message}}, socket) do
-    quiz =
-      Quizzes.get_quiz_with_questions!(socket.assigns.current_scope, socket.assigns.quiz.id)
+  # The event only carries the id, so the question is loaded through the context
+  # first: that is what proves the caller owns it — a foreign id raises
+  # `Ecto.NoResultsError` and the request ends as a 404.
+  def handle_event("move_question_up", %{"id" => id}, socket) do
+    {:noreply, move(socket, id, :up)}
+  end
+
+  def handle_event("move_question_down", %{"id" => id}, socket) do
+    {:noreply, move(socket, id, :down)}
+  end
+
+  def handle_event("delete_question", %{"id" => id}, socket) do
+    question = Quizzes.get_question!(socket.assigns.current_scope, socket.assigns.quiz, id)
+
+    {:noreply, assign(socket, :question_to_delete, question)}
+  end
+
+  def handle_event("cancel_delete_question", _params, socket) do
+    {:noreply, assign(socket, :question_to_delete, nil)}
+  end
+
+  def handle_event("confirm_delete_question", _params, socket) do
+    %{current_scope: scope, question_to_delete: question} = socket.assigns
+
+    {:ok, _deleted} = Quizzes.delete_question(scope, question)
 
     {:noreply,
      socket
-     |> assign(:quiz, quiz)
+     |> assign(:question_to_delete, nil)
+     |> put_flash(:info, "Pergunta excluída")
+     |> reload_quiz()}
+  end
+
+  # `move_question/3` answers `{:ok, :unchanged}` at the edges: a movement that
+  # had nowhere to go is a successful no-op, so both shapes end the same way.
+  defp move(socket, id, direction) do
+    %{current_scope: scope, quiz: quiz} = socket.assigns
+
+    question = Quizzes.get_question!(scope, quiz, id)
+    {:ok, _moved} = Quizzes.move_question(scope, question, direction)
+
+    reload_quiz(socket)
+  end
+
+  # The list is the context's answer, never a local edit of what was on screen.
+  defp reload_quiz(socket) do
+    quiz = Quizzes.get_quiz_with_questions!(socket.assigns.current_scope, socket.assigns.quiz.id)
+
+    assign(socket, :quiz, quiz)
+  end
+
+  @impl true
+  def handle_info({QuestionFormComponent, {:saved, message}}, socket) do
+    socket = reload_quiz(socket)
+
+    {:noreply,
+     socket
      |> put_flash(:info, message)
-     |> push_patch(to: ~p"/quizzes/#{quiz}/edit")}
+     |> push_patch(to: ~p"/quizzes/#{socket.assigns.quiz}/edit")}
   end
 
   def handle_info({QuestionFormComponent, :question_limit_reached}, socket) do
-    quiz =
-      Quizzes.get_quiz_with_questions!(socket.assigns.current_scope, socket.assigns.quiz.id)
+    socket = reload_quiz(socket)
 
     {:noreply,
      socket
-     |> assign(:quiz, quiz)
      |> put_flash(:error, limit_message())
-     |> push_patch(to: ~p"/quizzes/#{quiz}/edit")}
+     |> push_patch(to: ~p"/quizzes/#{socket.assigns.quiz}/edit")}
   end
 
   @impl true
@@ -234,13 +286,50 @@ defmodule LiveQuizWeb.QuizLive.Editor do
               </div>
             </div>
 
-            <.link
-              patch={~p"/quizzes/#{@quiz}/questions/#{question}/edit"}
-              phx-click={JS.push_focus()}
-              class="btn btn-ghost btn-sm"
-            >
-              Editar
-            </.link>
+            <div class="flex shrink-0 items-center gap-1">
+              <button
+                type="button"
+                id={"move-question-up-#{question.id}"}
+                disabled={question.position == 1}
+                phx-click="move_question_up"
+                phx-value-id={question.id}
+                phx-disable-with="…"
+                aria-label={"Mover pergunta #{question.position} para cima"}
+                class="btn btn-ghost btn-sm"
+              >
+                <.icon name="hero-arrow-up" class="size-4" />
+              </button>
+
+              <button
+                type="button"
+                id={"move-question-down-#{question.id}"}
+                disabled={question.position == last_position(@quiz)}
+                phx-click="move_question_down"
+                phx-value-id={question.id}
+                phx-disable-with="…"
+                aria-label={"Mover pergunta #{question.position} para baixo"}
+                class="btn btn-ghost btn-sm"
+              >
+                <.icon name="hero-arrow-down" class="size-4" />
+              </button>
+
+              <.link
+                patch={~p"/quizzes/#{@quiz}/questions/#{question}/edit"}
+                phx-click={JS.push_focus()}
+                class="btn btn-ghost btn-sm"
+              >
+                Editar
+              </.link>
+
+              <button
+                type="button"
+                id={"delete-question-#{question.id}"}
+                phx-click={JS.push_focus() |> JS.push("delete_question", value: %{id: question.id})}
+                class="btn btn-ghost btn-sm text-error"
+              >
+                Excluir
+              </button>
+            </div>
           </li>
         </ol>
       </section>
@@ -261,9 +350,45 @@ defmodule LiveQuizWeb.QuizLive.Editor do
           patch={~p"/quizzes/#{@quiz}/edit"}
         />
       </.modal>
+
+      <.modal
+        :if={@question_to_delete}
+        id="delete-question"
+        title="Excluir esta pergunta?"
+        on_cancel={JS.push("cancel_delete_question") |> JS.pop_focus()}
+      >
+        <p class="font-medium break-words">{preview(@question_to_delete.text)}</p>
+
+        <p class="mt-2 text-base-content/70">
+          As 4 alternativas também serão removidas. Esta ação não pode ser desfeita.
+        </p>
+
+        <:actions>
+          <button
+            type="button"
+            phx-click={JS.push("cancel_delete_question") |> JS.pop_focus()}
+            class="btn btn-ghost"
+          >
+            Cancelar
+          </button>
+
+          <button
+            type="button"
+            phx-click="confirm_delete_question"
+            phx-disable-with="Excluindo..."
+            class="btn btn-error"
+          >
+            Excluir pergunta
+          </button>
+        </:actions>
+      </.modal>
     </Layouts.app>
     """
   end
+
+  # Only ever called from inside the list, which the template skips when the
+  # quiz has no questions.
+  defp last_position(%{questions: questions}), do: List.last(questions).position
 
   defp modal_title(:new_question), do: "Nova pergunta"
   defp modal_title(:edit_question), do: "Editar pergunta"

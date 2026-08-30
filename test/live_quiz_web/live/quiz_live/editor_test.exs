@@ -504,6 +504,244 @@ defmodule LiveQuizWeb.QuizLive.EditorTest do
     end
   end
 
+  describe "reordering questions" do
+    setup %{scope: scope, quiz: quiz} do
+      %{
+        first: question_fixture(scope, quiz, %{text: "Pergunta A"}),
+        second: question_fixture(scope, quiz, %{text: "Pergunta B"}),
+        third: question_fixture(scope, quiz, %{text: "Pergunta C"})
+      }
+    end
+
+    test "moving a question up reorders the list and the database", %{
+      conn: conn,
+      scope: scope,
+      quiz: quiz,
+      first: first,
+      second: second,
+      third: third
+    } do
+      {:ok, lv, _html} = live(conn, ~p"/quizzes/#{quiz}/edit")
+
+      lv |> element("#move-question-up-#{second.id}") |> render_click()
+
+      assert positions_in_order(lv, [second, first, third])
+      assert displayed_positions(lv, [second, first, third]) == ["1", "2", "3"]
+      assert stored_order(scope, quiz) == [second.id, first.id, third.id]
+    end
+
+    test "moving a question down reorders the list and the database", %{
+      conn: conn,
+      scope: scope,
+      quiz: quiz,
+      first: first,
+      second: second,
+      third: third
+    } do
+      {:ok, lv, _html} = live(conn, ~p"/quizzes/#{quiz}/edit")
+
+      lv |> element("#move-question-down-#{first.id}") |> render_click()
+
+      assert positions_in_order(lv, [second, first, third])
+      assert displayed_positions(lv, [second, first, third]) == ["1", "2", "3"]
+      assert stored_order(scope, quiz) == [second.id, first.id, third.id]
+    end
+
+    test "the arrows at the edges are disabled", %{
+      conn: conn,
+      quiz: quiz,
+      first: first,
+      second: second,
+      third: third
+    } do
+      {:ok, lv, _html} = live(conn, ~p"/quizzes/#{quiz}/edit")
+
+      assert has_element?(lv, "#move-question-up-#{first.id}[disabled]")
+      assert has_element?(lv, "#move-question-down-#{third.id}[disabled]")
+
+      refute has_element?(lv, "#move-question-down-#{first.id}[disabled]")
+      refute has_element?(lv, "#move-question-up-#{second.id}[disabled]")
+      refute has_element?(lv, "#move-question-down-#{second.id}[disabled]")
+      refute has_element?(lv, "#move-question-up-#{third.id}[disabled]")
+    end
+
+    test "the arrows describe what they do", %{conn: conn, quiz: quiz, second: second} do
+      {:ok, lv, _html} = live(conn, ~p"/quizzes/#{quiz}/edit")
+
+      assert has_element?(
+               lv,
+               ~s{#move-question-up-#{second.id}[aria-label="Mover pergunta 2 para cima"]}
+             )
+
+      assert has_element?(
+               lv,
+               ~s{#move-question-down-#{second.id}[aria-label="Mover pergunta 2 para baixo"]}
+             )
+    end
+
+    test "the new order survives a reload", %{
+      conn: conn,
+      quiz: quiz,
+      first: first,
+      second: second,
+      third: third
+    } do
+      {:ok, lv, _html} = live(conn, ~p"/quizzes/#{quiz}/edit")
+
+      lv |> element("#move-question-up-#{third.id}") |> render_click()
+
+      {:ok, reloaded, _html} = live(conn, ~p"/quizzes/#{quiz}/edit")
+
+      assert positions_in_order(reloaded, [first, third, second])
+      assert displayed_positions(reloaded, [first, third, second]) == ["1", "2", "3"]
+    end
+
+    test "several moves keep the numbering dense", %{
+      conn: conn,
+      scope: scope,
+      quiz: quiz,
+      first: first,
+      second: second,
+      third: third
+    } do
+      {:ok, lv, _html} = live(conn, ~p"/quizzes/#{quiz}/edit")
+
+      # A B C -> B A C -> B C A -> C B A
+      lv |> element("#move-question-down-#{first.id}") |> render_click()
+      lv |> element("#move-question-down-#{first.id}") |> render_click()
+      lv |> element("#move-question-up-#{third.id}") |> render_click()
+
+      assert positions_in_order(lv, [third, second, first])
+      assert displayed_positions(lv, [third, second, first]) == ["1", "2", "3"]
+      assert stored_order(scope, quiz) == [third.id, second.id, first.id]
+    end
+
+    @tag :capture_log
+    test "refuses a forged move of a question of another user", %{conn: conn, quiz: quiz} do
+      foreign_scope = user_scope_fixture()
+      foreign = question_fixture(foreign_scope, quiz_fixture(foreign_scope))
+
+      {:ok, lv, _html} = live(conn, ~p"/quizzes/#{quiz}/edit")
+
+      # The scoped lookup raises inside the LiveView process, which takes the
+      # process down instead of touching somebody else's question.
+      Process.flag(:trap_exit, true)
+
+      assert {{%Ecto.NoResultsError{}, _stacktrace}, _call} =
+               catch_exit(render_click(lv, "move_question_up", %{"id" => foreign.id}))
+
+      assert LiveQuiz.Repo.get(LiveQuiz.Quizzes.Question, foreign.id).position == 1
+    end
+  end
+
+  describe "deleting a question" do
+    setup %{scope: scope, quiz: quiz} do
+      %{
+        first: question_fixture(scope, quiz, %{text: "Pergunta A"}),
+        second: question_fixture(scope, quiz, %{text: "Pergunta B"}),
+        third: question_fixture(scope, quiz, %{text: "Pergunta C"})
+      }
+    end
+
+    test "asks for confirmation showing the question", %{
+      conn: conn,
+      quiz: quiz,
+      second: second
+    } do
+      {:ok, lv, _html} = live(conn, ~p"/quizzes/#{quiz}/edit")
+
+      html = lv |> element("#delete-question-#{second.id}") |> render_click()
+
+      assert has_element?(lv, "#delete-question")
+      assert html =~ "Excluir esta pergunta?"
+      assert html =~ "Pergunta B"
+      assert html =~ "As 4 alternativas também serão removidas."
+    end
+
+    test "confirming deletes it, renumbers the list and says so", %{
+      conn: conn,
+      scope: scope,
+      quiz: quiz,
+      first: first,
+      second: second,
+      third: third
+    } do
+      {:ok, lv, _html} = live(conn, ~p"/quizzes/#{quiz}/edit")
+
+      lv |> element("#delete-question-#{second.id}") |> render_click()
+      html = lv |> element("#delete-question button", "Excluir pergunta") |> render_click()
+
+      assert html =~ "Pergunta excluída"
+      refute has_element?(lv, "#delete-question")
+      refute has_element?(lv, "#question-#{second.id}")
+
+      assert stored_order(scope, quiz) == [first.id, third.id]
+      assert displayed_positions(lv, [first, third]) == ["1", "2"]
+      refute LiveQuiz.Repo.get(LiveQuiz.Quizzes.Question, second.id)
+    end
+
+    test "cancelling keeps the question", %{conn: conn, scope: scope, quiz: quiz, second: second} do
+      {:ok, lv, _html} = live(conn, ~p"/quizzes/#{quiz}/edit")
+
+      lv |> element("#delete-question-#{second.id}") |> render_click()
+      html = lv |> element("#delete-question button", "Cancelar") |> render_click()
+
+      refute has_element?(lv, "#delete-question")
+      refute html =~ "Excluir esta pergunta?"
+      assert has_element?(lv, "#question-#{second.id}")
+      assert length(stored_order(scope, quiz)) == 3
+    end
+
+    @tag :capture_log
+    test "refuses a forged delete of a question of another user", %{conn: conn, quiz: quiz} do
+      foreign_scope = user_scope_fixture()
+      foreign = question_fixture(foreign_scope, quiz_fixture(foreign_scope))
+
+      {:ok, lv, _html} = live(conn, ~p"/quizzes/#{quiz}/edit")
+
+      Process.flag(:trap_exit, true)
+
+      assert {{%Ecto.NoResultsError{}, _stacktrace}, _call} =
+               catch_exit(render_click(lv, "delete_question", %{"id" => foreign.id}))
+
+      assert LiveQuiz.Repo.get(LiveQuiz.Quizzes.Question, foreign.id)
+    end
+  end
+
+  describe "deleting the last question" do
+    test "brings the empty state back", %{conn: conn, scope: scope, quiz: quiz} do
+      question = question_fixture(scope, quiz, %{text: "Única pergunta"})
+
+      {:ok, lv, _html} = live(conn, ~p"/quizzes/#{quiz}/edit")
+
+      lv |> element("#delete-question-#{question.id}") |> render_click()
+      lv |> element("#delete-question button", "Excluir pergunta") |> render_click()
+
+      assert has_element?(lv, "#questions-empty")
+      assert has_element?(lv, "#first-question-button")
+      refute has_element?(lv, "#questions")
+      assert stored_order(scope, quiz) == []
+    end
+  end
+
+  describe "deleting a question of a full quiz" do
+    test "frees the add button again", %{conn: conn, scope: scope, quiz: quiz} do
+      fill_quiz(scope, quiz, Quizzes.max_questions())
+      [target | _rest] = Quizzes.get_quiz_with_questions!(scope, quiz.id).questions
+
+      {:ok, lv, _html} = live(conn, ~p"/quizzes/#{quiz}/edit")
+
+      assert has_element?(lv, "#add-question-button[disabled]")
+
+      lv |> element("#delete-question-#{target.id}") |> render_click()
+      lv |> element("#delete-question button", "Excluir pergunta") |> render_click()
+
+      refute has_element?(lv, "#add-question-button[disabled]")
+      refute has_element?(lv, "#question-limit-hint")
+      assert length(stored_order(scope, quiz)) == Quizzes.max_questions() - 1
+    end
+  end
+
   defp question_params do
     %{
       "text" => "Qual é a capital do Brasil?",
@@ -528,6 +766,24 @@ defmodule LiveQuizWeb.QuizLive.EditorTest do
     |> Enum.map(&:binary.match(html, ~s(id="question-#{&1.id}")))
     |> Enum.map(fn {start, _length} -> start end)
     |> then(&(&1 == Enum.sort(&1)))
+  end
+
+  defp stored_order(scope, quiz) do
+    scope
+    |> Quizzes.get_quiz_with_questions!(quiz.id)
+    |> Map.fetch!(:questions)
+    |> Enum.map(& &1.id)
+  end
+
+  defp displayed_positions(lv, questions) do
+    Enum.map(questions, fn question ->
+      lv
+      |> element("#question-#{question.id} span.badge")
+      |> render()
+      |> LazyHTML.from_fragment()
+      |> LazyHTML.text()
+      |> String.trim()
+    end)
   end
 
   defp fill_quiz(scope, quiz, count) do
