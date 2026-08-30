@@ -313,6 +313,89 @@ defmodule LiveQuizWeb.CoreComponents do
   end
 
   @doc """
+  Renders a modal dialog.
+
+  The modal is driven entirely by server state: it exists in the DOM only while
+  the LiveView renders it, so there is no show/hide JavaScript to keep in sync.
+  `on_cancel` is the command that closes it — a patch back to the previous
+  route, or an event — and it is wired to the close button, the Escape key and a
+  click outside the box.
+
+  ## Examples
+
+      <.modal id="new-quiz" title="Novo quiz" on_cancel={JS.patch(~p"/quizzes")}>
+        <p>Conteúdo</p>
+        <:actions>
+          <.button phx-click={JS.patch(~p"/quizzes")}>Cancelar</.button>
+        </:actions>
+      </.modal>
+  """
+  attr :id, :string, required: true
+  attr :title, :string, required: true
+  attr :on_cancel, JS, default: %JS{}
+
+  slot :inner_block, required: true
+  slot :actions
+
+  def modal(assigns) do
+    ~H"""
+    <div
+      id={@id}
+      class="modal modal-open"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby={"#{@id}-title"}
+      phx-window-keydown={@on_cancel}
+      phx-key="escape"
+    >
+      <div class="modal-box" phx-mounted={JS.focus_first()} phx-click-away={@on_cancel}>
+        <div class="flex items-start justify-between gap-4">
+          <h2 id={"#{@id}-title"} class="text-lg font-semibold">{@title}</h2>
+
+          <button
+            type="button"
+            phx-click={@on_cancel}
+            class="btn btn-ghost btn-sm btn-circle"
+            aria-label="Fechar"
+          >
+            <.icon name="hero-x-mark" class="size-5" />
+          </button>
+        </div>
+
+        <div class="mt-4">{render_slot(@inner_block)}</div>
+
+        <div :if={@actions != []} class="modal-action">{render_slot(@actions)}</div>
+      </div>
+    </div>
+    """
+  end
+
+  @doc """
+  Moves focus to the field a failed submission should send the user to.
+
+  Rendering it is what does the work: `phx-mounted` fires when the element
+  enters the DOM, and `token` changes on every failed attempt so a second
+  failure mounts a fresh element instead of reusing the previous one. The text
+  is also announced to screen readers.
+  """
+  attr :target, :string, default: nil, doc: "DOM id of the first field with an error"
+  attr :token, :integer, default: 0, doc: "changes on every failed attempt"
+
+  def focus_on_error(assigns) do
+    ~H"""
+    <div
+      :if={@target}
+      id={"focus-on-error-#{@token}"}
+      phx-mounted={JS.focus(to: "##{@target}")}
+      role="status"
+      class="sr-only"
+    >
+      Corrija os campos destacados.
+    </div>
+    """
+  end
+
+  @doc """
   Renders a header with title.
   """
   slot :inner_block, required: true
