@@ -65,6 +65,28 @@ Exportar a variável no seu shell (`export DB_PORT=5433`) evita repeti-la em cad
 A API vive em `/api/v1` e é autenticada por **JWT** (Guardian). Toda resposta usa o envelope
 `data` para sucesso e `errors` para falha.
 
+### Documentação OpenAPI
+
+O contrato completo é gerado a partir do próprio router e das anotações dos controllers — não existe
+YAML mantido à mão, então a documentação não diverge da implementação em silêncio.
+
+| Recurso | Endereço |
+|---|---|
+| Swagger UI | http://localhost:4000/api/docs |
+| Especificação OpenAPI 3 em JSON | http://localhost:4000/api/openapi |
+
+Para experimentar um endpoint autenticado direto no Swagger UI:
+
+1. abra `POST /api/v1/session` e envie e-mail e senha — ele não exige token;
+2. copie o `access_token` do corpo da resposta;
+3. clique em **Authorize**, cole o token e confirme (o esquema `bearerAuth` já manda o cabeçalho
+   `Authorization: Bearer <token>` nas chamadas seguintes);
+4. quando o token expirar, use `POST /api/v1/session/refresh` com o `refresh_token` para obter outro.
+
+A especificação é servida pela mesma pipeline `:api` dos endpoints e um teste de contrato
+(`test/live_quiz_web/api_spec_test.exs`) confere no CI que ela é gerada, cobre todas as rotas e
+declara `bearerAuth` onde é preciso.
+
 | Rota | Descrição |
 |---|---|
 | `POST /api/v1/session` | troca e-mail e senha por um par de tokens |

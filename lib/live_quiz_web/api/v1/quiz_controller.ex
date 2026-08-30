@@ -9,12 +9,29 @@ defmodule LiveQuizWeb.Api.V1.QuizController do
   """
 
   use LiveQuizWeb, :controller
+  use OpenApiSpex.ControllerSpecs
 
   alias LiveQuiz.Accounts.Scope
   alias LiveQuiz.Quizzes
   alias LiveQuiz.Quizzes.Quiz
+  alias LiveQuizWeb.Api.V1.Schemas.ErrorResponse
+  alias LiveQuizWeb.Api.V1.Schemas.QuizListResponse
+  alias LiveQuizWeb.Api.V1.Schemas.QuizRequest
+  alias LiveQuizWeb.Api.V1.Schemas.QuizResponse
+  alias LiveQuizWeb.Api.V1.Schemas.ValidationErrorResponse
 
   action_fallback LiveQuizWeb.Api.FallbackController
+
+  tags ["Quizzes"]
+  security [%{"bearerAuth" => []}]
+
+  @quiz_id_parameter [
+    in: :path,
+    description: "Identificador do quiz",
+    type: :integer,
+    required: true,
+    example: 1
+  ]
 
   @doc """
   Lists the quizzes of the authenticated user.
@@ -22,6 +39,25 @@ defmodule LiveQuizWeb.Api.V1.QuizController do
   Accepts `page`, `per_page` and `search`; invalid or missing values fall back
   to the defaults of the context instead of failing.
   """
+  operation :index,
+    summary: "Lista os quizzes do usuário autenticado",
+    description:
+      "Página os quizzes do dono do token. Valores inválidos de paginação caem no padrão em vez de falhar.",
+    parameters: [
+      page: [in: :query, type: :integer, description: "Página (padrão 1)", example: 1],
+      per_page: [
+        in: :query,
+        type: :integer,
+        description: "Itens por página (padrão 20, máximo 100)",
+        example: 20
+      ],
+      search: [in: :query, type: :string, description: "Filtra pelo título", example: "geo"]
+    ],
+    responses: [
+      ok: {"Página de quizzes", "application/json", QuizListResponse},
+      unauthorized: {"Não autenticado", "application/json", ErrorResponse}
+    ]
+
   def index(conn, params) do
     page = Quizzes.list_quizzes(scope(conn), list_opts(params))
 
@@ -31,6 +67,15 @@ defmodule LiveQuizWeb.Api.V1.QuizController do
   @doc """
   Shows one quiz with its questions and answer options, ordered by position.
   """
+  operation :show,
+    summary: "Detalha um quiz com as suas perguntas",
+    parameters: [id: @quiz_id_parameter],
+    responses: [
+      ok: {"Quiz encontrado", "application/json", QuizResponse},
+      unauthorized: {"Não autenticado", "application/json", ErrorResponse},
+      not_found: {"Quiz inexistente ou de outro dono", "application/json", ErrorResponse}
+    ]
+
   def show(conn, %{"id" => id}) do
     with {:ok, %Quiz{} = quiz} <- fetch_quiz_with_questions(scope(conn), id) do
       render(conn, :show, quiz: quiz)
@@ -42,6 +87,16 @@ defmodule LiveQuizWeb.Api.V1.QuizController do
 
   An `owner_id` sent in the body is ignored: the owner comes from the token.
   """
+  operation :create,
+    summary: "Cria um quiz",
+    description: "O dono vem do token: um `owner_id` enviado no corpo é ignorado.",
+    request_body: {"Atributos do quiz", "application/json", QuizRequest, required: true},
+    responses: [
+      created: {"Quiz criado, com o header Location", "application/json", QuizResponse},
+      unauthorized: {"Não autenticado", "application/json", ErrorResponse},
+      unprocessable_entity: {"Quiz inválido", "application/json", ValidationErrorResponse}
+    ]
+
   def create(conn, params) do
     with {:ok, %Quiz{} = quiz} <- Quizzes.create_quiz(scope(conn), quiz_params(params)) do
       conn
@@ -55,6 +110,18 @@ defmodule LiveQuizWeb.Api.V1.QuizController do
   Updates one quiz of the authenticated user. `PUT` and `PATCH` behave the same
   way: whatever the body carries is applied, the rest is left untouched.
   """
+  operation :update,
+    summary: "Atualiza um quiz",
+    description: "`PUT` e `PATCH` se comportam da mesma forma.",
+    parameters: [id: @quiz_id_parameter],
+    request_body: {"Atributos do quiz", "application/json", QuizRequest, required: true},
+    responses: [
+      ok: {"Quiz atualizado", "application/json", QuizResponse},
+      unauthorized: {"Não autenticado", "application/json", ErrorResponse},
+      not_found: {"Quiz inexistente ou de outro dono", "application/json", ErrorResponse},
+      unprocessable_entity: {"Quiz inválido", "application/json", ValidationErrorResponse}
+    ]
+
   def update(conn, %{"id" => id} = params) do
     scope = scope(conn)
 
@@ -68,6 +135,16 @@ defmodule LiveQuizWeb.Api.V1.QuizController do
   Deletes one quiz of the authenticated user, along with its questions and
   answer options.
   """
+  operation :delete,
+    summary: "Exclui um quiz",
+    description: "As perguntas e as alternativas do quiz vão junto, em cascata.",
+    parameters: [id: @quiz_id_parameter],
+    responses: [
+      no_content: "Quiz excluído",
+      unauthorized: {"Não autenticado", "application/json", ErrorResponse},
+      not_found: {"Quiz inexistente ou de outro dono", "application/json", ErrorResponse}
+    ]
+
   def delete(conn, %{"id" => id}) do
     scope = scope(conn)
 
