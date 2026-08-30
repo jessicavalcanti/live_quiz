@@ -35,6 +35,8 @@ defmodule LiveQuizWeb.Router do
 
     delete "/session", SessionController, :delete
     get "/me", SessionController, :me
+
+    resources "/quizzes", QuizController, except: [:new, :edit]
   end
 
   # Enable LiveDashboard and Swoosh mailbox preview in development

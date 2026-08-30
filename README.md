@@ -71,6 +71,11 @@ A API vive em `/api/v1` e é autenticada por **JWT** (Guardian). Toda resposta u
 | `POST /api/v1/session/refresh` | troca o refresh token por um novo access token |
 | `DELETE /api/v1/session` | encerra a sessão do lado do cliente (204) |
 | `GET /api/v1/me` | dados do usuário autenticado |
+| `GET /api/v1/quizzes` | lista os quizzes do usuário do token, paginados |
+| `POST /api/v1/quizzes` | cria um quiz (201, com header `Location`) |
+| `GET /api/v1/quizzes/:id` | detalhe do quiz com perguntas e alternativas |
+| `PUT`/`PATCH /api/v1/quizzes/:id` | atualiza o quiz (as duas se comportam igual) |
+| `DELETE /api/v1/quizzes/:id` | exclui o quiz e, em cascata, suas perguntas (204) |
 
 ```bash
 curl -s -X POST http://localhost:4000/api/v1/session \
@@ -78,7 +83,24 @@ curl -s -X POST http://localhost:4000/api/v1/session \
   -d '{"email":"voce@example.com","password":"sua-senha"}'
 
 curl -s http://localhost:4000/api/v1/me -H "Authorization: Bearer $ACCESS_TOKEN"
+
+curl -s 'http://localhost:4000/api/v1/quizzes?page=1&per_page=20&search=geo' \
+  -H "Authorization: Bearer $ACCESS_TOKEN"
+
+curl -s -X POST http://localhost:4000/api/v1/quizzes \
+  -H "Authorization: Bearer $ACCESS_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"quiz":{"title":"Geografia","description":"Capitais do mundo"}}'
 ```
+
+A listagem responde com `data` (uma lista pura) e `meta` (`page`, `per_page`, `total_entries`,
+`total_pages`). `page` vale 1 por padrão e `per_page`, 20, com **teto de 100** — valores fora da
+faixa ou não numéricos voltam para o padrão, sem erro. `search` faz busca por título, sem
+diferenciar maiúsculas, e um termo em branco não filtra nada.
+
+Cada quiz traz `questions_count` e `playable` prontos do contexto; o detalhe (`GET
+/api/v1/quizzes/:id`) ainda aninha as perguntas ordenadas por `position`, cada uma com suas quatro
+alternativas e o campo `is_correct` — o consumidor autenticado é o dono do quiz. Datas saem sempre
+em ISO 8601 UTC. Quiz de outro usuário é indistinguível de quiz inexistente: **404**.
 
 O **access token** dura 15 minutos e o **refresh token**, 30 dias; eles são distinguidos pelo claim
 `typ`, e um refresh token não é aceito em rotas protegidas. O segredo de assinatura é independente
