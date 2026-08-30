@@ -27,6 +27,9 @@ config :live_quiz,
 # The UI is written in pt-BR, so are the Ecto error messages.
 config :live_quiz, LiveQuizWeb.Gettext, default_locale: "pt_BR", locales: ~w(pt_BR)
 
+# Timestamps are stored in UTC and converted to America/Sao_Paulo only for display.
+config :elixir, :time_zone_database, Tz.TimeZoneDatabase
+
 # Configure the endpoint
 config :live_quiz, LiveQuizWeb.Endpoint,
   url: [host: "localhost"],
