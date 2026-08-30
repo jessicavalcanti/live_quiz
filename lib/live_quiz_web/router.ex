@@ -46,7 +46,7 @@ defmodule LiveQuizWeb.Router do
 
     live_session :require_authenticated_user,
       on_mount: [{LiveQuizWeb.UserAuth, :require_authenticated}] do
-      live "/quizzes", QuizzesLive, :index
+      live "/quizzes", QuizLive.Index, :index
       live "/users/settings", UserLive.Settings, :edit
       live "/users/settings/confirm-email/:token", UserLive.Settings, :confirm_email
     end
