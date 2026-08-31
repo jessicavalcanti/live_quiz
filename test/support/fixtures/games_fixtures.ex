@@ -2,9 +2,9 @@ defmodule LiveQuiz.GamesFixtures do
   @moduledoc """
   Test helpers for creating game sessions and participants.
 
-  They insert through the schemas directly because the `LiveQuiz.Games` context
-  does not exist yet (F2-02 onwards), mirroring what `LiveQuiz.QuizzesFixtures`
-  did while `LiveQuiz.Quizzes` was still being built.
+  They insert through the schemas directly rather than through `LiveQuiz.Games`:
+  a fixture has to place a room in any status and pin its code, which is exactly
+  what the context refuses to do.
 
   Join codes and nicknames come from `System.unique_integer/1`, so parallel
   ExUnit runs never trip over the partial unique indexes.
