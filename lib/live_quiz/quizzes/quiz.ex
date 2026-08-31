@@ -12,6 +12,7 @@ defmodule LiveQuiz.Quizzes.Quiz do
   import Ecto.Changeset
 
   alias LiveQuiz.Accounts.User
+  alias LiveQuiz.Games.GameSession
   alias LiveQuiz.Quizzes.Question
 
   @type t :: %__MODULE__{}
@@ -23,6 +24,7 @@ defmodule LiveQuiz.Quizzes.Quiz do
 
     belongs_to :owner, User
     has_many :questions, Question, preload_order: [asc: :position]
+    has_many :game_sessions, GameSession
 
     timestamps(type: :utc_datetime)
   end
