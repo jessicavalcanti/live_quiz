@@ -30,10 +30,49 @@ defmodule LiveQuizWeb.ApiSpecTest do
     {"/api/v1/quizzes/{quiz_id}/questions/{id}/move", "patch"}
   ]
 
+  @host_operations [
+    {"/api/v1/game-sessions", "post"},
+    {"/api/v1/game-sessions/{code}/host", "get"},
+    {"/api/v1/game-sessions/{code}/start", "post"},
+    {"/api/v1/game-sessions/{code}/cancel", "post"}
+  ]
+
+  @participant_operations [
+    {"/api/v1/game-sessions/{code}/me", "get"},
+    {"/api/v1/game-sessions/{code}/rejoin", "post"},
+    {"/api/v1/game-sessions/{code}/leave", "delete"}
+  ]
+
+  # The lobby list is the one operation either identity may open, and entering a
+  # room is the one that takes any of the three — including none at all.
+  @either_operations [{"/api/v1/game-sessions/{code}/participants", "get"}]
+
+  @open_operations [{"/api/v1/game-sessions/{code}/join", "post"}]
+
+  @room_operations @host_operations ++
+                     @participant_operations ++
+                     @either_operations ++
+                     @open_operations ++ [{"/api/v1/game-sessions/{code}", "get"}]
+
   @public_operations [
     {"/api/v1/session", "post"},
-    {"/api/v1/session/refresh", "post"}
+    {"/api/v1/session/refresh", "post"},
+    {"/api/v1/game-sessions/{code}", "get"}
   ]
+
+  # The statuses of the error map of F2-11, per operation, on top of the success.
+  @room_error_statuses %{
+    {"/api/v1/game-sessions", "post"} => ["401", "404", "409", "422", "503"],
+    {"/api/v1/game-sessions/{code}", "get"} => ["404"],
+    {"/api/v1/game-sessions/{code}/host", "get"} => ["401", "404"],
+    {"/api/v1/game-sessions/{code}/join", "post"} => ["404", "409", "422"],
+    {"/api/v1/game-sessions/{code}/start", "post"} => ["401", "404", "409"],
+    {"/api/v1/game-sessions/{code}/cancel", "post"} => ["401", "404", "409"],
+    {"/api/v1/game-sessions/{code}/participants", "get"} => ["401", "403", "404"],
+    {"/api/v1/game-sessions/{code}/me", "get"} => ["401", "404"],
+    {"/api/v1/game-sessions/{code}/rejoin", "post"} => ["401", "404", "409", "410"],
+    {"/api/v1/game-sessions/{code}/leave", "delete"} => ["401", "404"]
+  }
 
   describe "GET /api/openapi" do
     test "answers 200 with an OpenAPI 3 document", %{conn: conn} do
@@ -53,7 +92,7 @@ defmodule LiveQuizWeb.ApiSpecTest do
     test "documents every implemented path", %{conn: conn} do
       spec = conn |> get(~p"/api/openapi") |> json_response(200)
 
-      documented = @authenticated_operations ++ @public_operations
+      documented = @authenticated_operations ++ @public_operations ++ @room_operations
 
       for {path, verb} <- documented do
         assert %{"summary" => summary} = spec["paths"][path][verb]
@@ -86,13 +125,13 @@ defmodule LiveQuizWeb.ApiSpecTest do
     test "requires bearerAuth on every authenticated operation", %{conn: conn} do
       spec = conn |> get(~p"/api/openapi") |> json_response(200)
 
-      for {path, verb} <- @authenticated_operations do
+      for {path, verb} <- @authenticated_operations ++ @host_operations do
         assert spec["paths"][path][verb]["security"] == [%{"bearerAuth" => []}],
                "#{String.upcase(verb)} #{path} deveria exigir bearerAuth"
       end
     end
 
-    test "exempts login and refresh from bearerAuth", %{conn: conn} do
+    test "exempts the public operations from every security scheme", %{conn: conn} do
       spec = conn |> get(~p"/api/openapi") |> json_response(200)
 
       for {path, verb} <- @public_operations do
@@ -104,10 +143,15 @@ defmodule LiveQuizWeb.ApiSpecTest do
     test "groups the operations by tag", %{conn: conn} do
       spec = conn |> get(~p"/api/openapi") |> json_response(200)
 
-      assert Enum.map(spec["tags"], & &1["name"]) == ["Sessão", "Quizzes", "Perguntas"]
+      assert Enum.map(spec["tags"], & &1["name"]) == ["Sessão", "Quizzes", "Perguntas", "Salas"]
       assert spec["paths"]["/api/v1/me"]["get"]["tags"] == ["Sessão"]
       assert spec["paths"]["/api/v1/quizzes"]["get"]["tags"] == ["Quizzes"]
       assert spec["paths"]["/api/v1/quizzes/{quiz_id}/questions"]["get"]["tags"] == ["Perguntas"]
+
+      for {path, verb} <- @room_operations do
+        assert spec["paths"][path][verb]["tags"] == ["Salas"],
+               "#{String.upcase(verb)} #{path} deveria estar na tag Salas"
+      end
     end
 
     test "documents 201, 401, 404, 409 and 422 on the creation of a question", %{conn: conn} do
@@ -147,11 +191,189 @@ defmodule LiveQuizWeb.ApiSpecTest do
 
       schemas = spec["components"]["schemas"]
 
-      assert map_size(schemas) == 18
+      assert map_size(schemas) == 28
 
       for {name, schema} <- schemas do
         assert is_binary(schema["description"]), "schema #{name} está sem description"
         assert schema["example"], "schema #{name} está sem example"
+      end
+    end
+  end
+
+  describe "specification of the rooms" do
+    test "survives the round trip through JSON and back into an OpenApi struct" do
+      spec = ApiSpec.spec()
+
+      decoded =
+        spec
+        |> OpenApiSpex.OpenApi.to_map()
+        |> Jason.encode!()
+        |> Jason.decode!()
+        |> OpenApiSpex.OpenApi.Decode.decode()
+
+      assert %OpenApiSpex.OpenApi{} = decoded
+      assert String.starts_with?(decoded.openapi, "3.")
+      assert map_size(decoded.paths) == map_size(spec.paths)
+      assert map_size(decoded.components.schemas) == map_size(spec.components.schemas)
+      assert Map.keys(decoded.components.securitySchemes) == ["bearerAuth", "participantAuth"]
+    end
+
+    test "documents the ten operations of the phase", %{conn: conn} do
+      spec = conn |> get(~p"/api/openapi") |> json_response(200)
+
+      assert length(@room_operations) == 10
+
+      for {path, verb} <- @room_operations do
+        operation = spec["paths"][path][verb]
+
+        assert is_binary(operation["summary"]), "#{String.upcase(verb)} #{path} está sem summary"
+        assert is_binary(operation["description"]), "#{String.upcase(verb)} #{path} sem descrição"
+        assert is_binary(operation["operationId"])
+      end
+    end
+
+    test "gives every operation of the whole specification a unique operationId", %{conn: conn} do
+      spec = conn |> get(~p"/api/openapi") |> json_response(200)
+
+      ids =
+        for {_path, item} <- spec["paths"],
+            {_verb, operation} <- item,
+            is_map(operation),
+            do: operation["operationId"]
+
+      assert ids != []
+      assert Enum.uniq(ids) == ids
+
+      room_ids =
+        for {path, verb} <- @room_operations, do: spec["paths"][path][verb]["operationId"]
+
+      assert length(Enum.uniq(room_ids)) == 10
+      assert room_ids -- ids == []
+    end
+
+    test "declares participantAuth alongside bearerAuth", %{conn: conn} do
+      spec = conn |> get(~p"/api/openapi") |> json_response(200)
+
+      scheme = spec["components"]["securitySchemes"]["participantAuth"]
+
+      assert scheme["type"] == "http"
+      assert scheme["scheme"] == "Participant"
+      assert scheme["description"] =~ "uma única vez"
+      assert spec["components"]["securitySchemes"]["bearerAuth"]
+    end
+
+    test "requires the participation credential where only it identifies", %{conn: conn} do
+      spec = conn |> get(~p"/api/openapi") |> json_response(200)
+
+      for {path, verb} <- @participant_operations do
+        assert spec["paths"][path][verb]["security"] == [%{"participantAuth" => []}],
+               "#{String.upcase(verb)} #{path} deveria exigir participantAuth"
+      end
+    end
+
+    test "accepts either identity on the lobby listing", %{conn: conn} do
+      spec = conn |> get(~p"/api/openapi") |> json_response(200)
+
+      for {path, verb} <- @either_operations do
+        assert spec["paths"][path][verb]["security"] ==
+                 [%{"participantAuth" => []}, %{"bearerAuth" => []}]
+      end
+    end
+
+    test "lets entering a room be called with no identity at all", %{conn: conn} do
+      spec = conn |> get(~p"/api/openapi") |> json_response(200)
+
+      for {path, verb} <- @open_operations do
+        assert spec["paths"][path][verb]["security"] ==
+                 [%{}, %{"bearerAuth" => []}, %{"participantAuth" => []}]
+      end
+    end
+
+    test "documents exactly the statuses the endpoints answer with", %{conn: conn} do
+      spec = conn |> get(~p"/api/openapi") |> json_response(200)
+
+      for {{path, verb}, errors} <- @room_error_statuses do
+        responses = spec["paths"][path][verb]["responses"]
+        documented = responses |> Map.keys() |> Enum.sort()
+
+        assert errors -- documented == [],
+               "#{String.upcase(verb)} #{path} não documenta #{inspect(errors -- documented)}"
+
+        assert Enum.all?(documented -- errors, &String.starts_with?(&1, "2")),
+               "#{String.upcase(verb)} #{path} documenta erro que não devolve"
+
+        for {status, response} <- responses do
+          assert is_binary(response["description"]), "#{path} #{verb} #{status} sem descrição"
+        end
+      end
+    end
+
+    test "keeps every participant field out of the public read of a room", %{conn: conn} do
+      spec = conn |> get(~p"/api/openapi") |> json_response(200)
+
+      public = spec["components"]["schemas"]["GameSessionPublic"]
+
+      assert Enum.sort(Map.keys(public["properties"])) ==
+               ["available", "code", "quiz_title", "status"]
+
+      refute Jason.encode!(public) =~ "articipant"
+
+      assert spec["paths"]["/api/v1/game-sessions/{code}"]["get"]["responses"]["200"]["content"][
+               "application/json"
+             ]["schema"] == %{"$ref" => "#/components/schemas/GameSessionPublicResponse"}
+    end
+
+    test "documents the credential in the answer of join and nowhere else", %{conn: conn} do
+      spec = conn |> get(~p"/api/openapi") |> json_response(200)
+
+      join = spec["components"]["schemas"]["JoinResponse"]
+      token = join["properties"]["data"]["properties"]["participant_token"]
+
+      assert token["type"] == "string"
+      assert token["description"] =~ "uma única vez"
+      assert "participant_token" in join["properties"]["data"]["required"]
+
+      carriers =
+        for {name, schema} <- spec["components"]["schemas"],
+            Jason.encode!(schema) =~ "participant_token",
+            do: name
+
+      assert carriers == ["JoinResponse"]
+
+      assert spec["paths"]["/api/v1/game-sessions/{code}/join"]["post"]["responses"]["201"][
+               "content"
+             ]["application/json"]["schema"] == %{"$ref" => "#/components/schemas/JoinResponse"}
+    end
+
+    test "explains in the tag that the API delivers no real time", %{conn: conn} do
+      spec = conn |> get(~p"/api/openapi") |> json_response(200)
+
+      rooms = Enum.find(spec["tags"], &(&1["name"] == "Salas"))
+
+      assert rooms["description"] =~ "não entrega eventos"
+      assert rooms["description"] =~ "Channels"
+    end
+
+    test "rejects a join without a nickname by the schema itself" do
+      spec = ApiSpec.spec()
+      schema = spec.components.schemas["JoinRequest"]
+
+      assert {:error, [%OpenApiSpex.Cast.Error{reason: :missing_field, name: :nickname}]} =
+               OpenApiSpex.cast_value(%{}, schema, spec)
+
+      assert {:error, [%OpenApiSpex.Cast.Error{reason: :min_length}]} =
+               OpenApiSpex.cast_value(%{"nickname" => "A"}, schema, spec)
+
+      assert {:ok, %{nickname: "Ana"}} =
+               OpenApiSpex.cast_value(%{"nickname" => "Ana"}, schema, spec)
+    end
+
+    test "declares examples that are valid against their own schema" do
+      spec = ApiSpec.spec()
+
+      for {name, schema} <- spec.components.schemas, example = schema.example do
+        assert {:ok, _cast} = OpenApiSpex.cast_value(example, schema, spec),
+               "o exemplo do schema #{name} não é válido contra ele mesmo"
       end
     end
   end

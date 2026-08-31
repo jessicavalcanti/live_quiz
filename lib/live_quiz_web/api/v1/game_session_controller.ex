@@ -26,14 +26,32 @@ defmodule LiveQuizWeb.Api.V1.GameSessionController do
   """
 
   use LiveQuizWeb, :controller
+  use OpenApiSpex.ControllerSpecs
 
   alias LiveQuiz.Accounts.Scope
   alias LiveQuiz.Games
   alias LiveQuiz.Games.GameSession
   alias LiveQuiz.Games.Presence
   alias LiveQuizWeb.Api.ParticipantAuth
+  alias LiveQuizWeb.Api.V1.Schemas.ErrorResponse
+  alias LiveQuizWeb.Api.V1.Schemas.GameSessionPublicResponse
+  alias LiveQuizWeb.Api.V1.Schemas.GameSessionRequest
+  alias LiveQuizWeb.Api.V1.Schemas.GameSessionResponse
+  alias LiveQuizWeb.Api.V1.Schemas.JoinRequest
+  alias LiveQuizWeb.Api.V1.Schemas.JoinResponse
+  alias LiveQuizWeb.Api.V1.Schemas.ValidationErrorResponse
 
   action_fallback LiveQuizWeb.Api.FallbackController
+
+  tags ["Salas"]
+
+  @code_parameter [
+    in: :path,
+    description: "Código de acesso da sala, com 6 caracteres",
+    type: :string,
+    required: true,
+    example: "K7P4Q2"
+  ]
 
   # Entering a room is open to whoever has no account at all, so nothing is
   # required here. The plug still resolves what is presented: a JWT ties the
@@ -44,6 +62,30 @@ defmodule LiveQuizWeb.Api.V1.GameSessionController do
   @doc """
   Opens a room for a quiz of the authenticated user.
   """
+  operation :create,
+    summary: "Abre uma sala para um quiz do usuário autenticado",
+    security: [%{"bearerAuth" => []}],
+    description: """
+    O host vem do token. Um quiz de outra pessoa, um `quiz_id` que não é um
+    identificador e um corpo sem `quiz_id` respondem igualmente `404`: a API não
+    confirma a existência de quiz alheio (AD-10).
+    """,
+    request_body: {"Quiz da sala", "application/json", GameSessionRequest, required: true},
+    responses: [
+      created: {"Sala aberta", "application/json", GameSessionResponse},
+      unauthorized: {"Não autenticado", "application/json", ErrorResponse},
+      not_found:
+        {"Quiz inexistente, de outro dono ou não informado", "application/json", ErrorResponse},
+      conflict:
+        {"Você já possui uma sala ativa ou está participando de outra", "application/json",
+         ErrorResponse},
+      unprocessable_entity:
+        {"Quiz sem perguntas ou sala inválida", "application/json", ValidationErrorResponse},
+      service_unavailable:
+        {"Não foi possível gerar um código de acesso. Tente novamente", "application/json",
+         ErrorResponse}
+    ]
+
   def create(conn, %{"quiz_id" => quiz_id}) do
     with {:ok, %GameSession{} = session} <- open_room(conn.assigns.current_scope, quiz_id) do
       conn
@@ -58,6 +100,21 @@ defmodule LiveQuizWeb.Api.V1.GameSessionController do
   The public read of a room by its code, restricted to what somebody who has not
   entered it yet may know.
   """
+  operation :show,
+    summary: "Consulta pública de uma sala pelo código",
+    description: """
+    Aberta a qualquer pessoa, com ou sem conta. Devolve apenas título do quiz,
+    código, situação e disponibilidade — nunca quem está na sala, nem quantos
+    (AD-35).
+    """,
+    security: [],
+    parameters: [code: @code_parameter],
+    responses: [
+      ok: {"Sala encontrada", "application/json", GameSessionPublicResponse},
+      not_found:
+        {"Sala inexistente, encerrada ou código inválido", "application/json", ErrorResponse}
+    ]
+
   def show(conn, %{"code" => code}) do
     # Two reads rather than one: the availability is a rule and belongs to
     # `preview_by_code/1`, while the code and the status are plain fields of the
@@ -72,6 +129,20 @@ defmodule LiveQuizWeb.Api.V1.GameSessionController do
   @doc """
   The read of the host: the whole room, with the lobby list.
   """
+  operation :host_show,
+    summary: "Detalha a sala do host, com o lobby",
+    security: [%{"bearerAuth" => []}],
+    description: """
+    Sala de outro host responde `404`, e não `403`: não se revela a existência de
+    sala alheia (AD-10).
+    """,
+    parameters: [code: @code_parameter],
+    responses: [
+      ok: {"Sala com o lobby", "application/json", GameSessionResponse},
+      unauthorized: {"Não autenticado", "application/json", ErrorResponse},
+      not_found: {"Sala inexistente ou de outro host", "application/json", ErrorResponse}
+    ]
+
   def host_show(conn, %{"code" => code}) do
     scope = conn.assigns.current_scope
 
@@ -87,6 +158,29 @@ defmodule LiveQuizWeb.Api.V1.GameSessionController do
   The clear credential is in the answer of this action and of no other: it is
   never reissued, so losing it is losing that participation (AD-24).
   """
+  operation :join,
+    summary: "Entra em uma sala, com ou sem conta",
+    description: """
+    Não exige identidade nenhuma. Um `Bearer` vincula a participação à conta; as
+    credenciais `Participant` que o cliente já tiver são lidas para reconhecer
+    quem já está em outra sala (AD-28).
+
+    O `participant_token` da resposta é devolvido **uma única vez** e não é
+    reemitido por nenhum endpoint.
+    """,
+    security: [%{}, %{"bearerAuth" => []}, %{"participantAuth" => []}],
+    parameters: [code: @code_parameter],
+    request_body: {"Apelido na sala", "application/json", JoinRequest, required: true},
+    responses: [
+      created: {"Participação criada, com a credencial", "application/json", JoinResponse},
+      not_found:
+        {"Sala inexistente, encerrada ou código inválido", "application/json", ErrorResponse},
+      conflict:
+        {"Sala lotada, partida já iniciada, apelido em uso ou você já está em outra sala",
+         "application/json", ErrorResponse},
+      unprocessable_entity: {"Apelido inválido", "application/json", ValidationErrorResponse}
+    ]
+
   def join(conn, %{"code" => code} = params) do
     scope = conn.assigns[:current_scope]
     known = ParticipantAuth.presented_tokens(conn)
@@ -103,6 +197,23 @@ defmodule LiveQuizWeb.Api.V1.GameSessionController do
   Puts the room live. Only the host, only from the lobby, and only with somebody
   connected — counted by the server.
   """
+  operation :start,
+    summary: "Inicia a partida",
+    security: [%{"bearerAuth" => []}],
+    description: """
+    Só o host, só a partir de `waiting` e só com alguém conectado. Quem conta os
+    conectados é o servidor: um `connected_count` enviado no corpo é ignorado.
+    """,
+    parameters: [code: @code_parameter],
+    responses: [
+      ok: {"Sala iniciada", "application/json", GameSessionResponse},
+      unauthorized: {"Não autenticado", "application/json", ErrorResponse},
+      not_found: {"Sala inexistente ou de outro host", "application/json", ErrorResponse},
+      conflict:
+        {"Sala já iniciada ou encerrada, ou sem participante conectado", "application/json",
+         ErrorResponse}
+    ]
+
   def start(conn, %{"code" => code}) do
     scope = conn.assigns.current_scope
 
@@ -116,6 +227,18 @@ defmodule LiveQuizWeb.Api.V1.GameSessionController do
   @doc """
   Ends the room by the host's own decision, in the lobby or after it started.
   """
+  operation :cancel,
+    summary: "Cancela a sala",
+    security: [%{"bearerAuth" => []}],
+    description: "Só o host, em `waiting` ou `in_progress`. Uma sala já encerrada não reabre.",
+    parameters: [code: @code_parameter],
+    responses: [
+      ok: {"Sala cancelada", "application/json", GameSessionResponse},
+      unauthorized: {"Não autenticado", "application/json", ErrorResponse},
+      not_found: {"Sala inexistente ou de outro host", "application/json", ErrorResponse},
+      conflict: {"Sala já encerrada", "application/json", ErrorResponse}
+    ]
+
   def cancel(conn, %{"code" => code}) do
     scope = conn.assigns.current_scope
 
