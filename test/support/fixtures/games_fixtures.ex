@@ -16,6 +16,7 @@ defmodule LiveQuiz.GamesFixtures do
   alias LiveQuiz.Accounts.Scope
   alias LiveQuiz.Games.GameSession
   alias LiveQuiz.Games.Participant
+  alias LiveQuiz.Games.ParticipantToken
   alias LiveQuiz.Quizzes.Quiz
   alias LiveQuiz.Repo
 
@@ -93,6 +94,24 @@ defmodule LiveQuiz.GamesFixtures do
     |> Participant.join_changeset(%{nickname: Map.get(attrs, :nickname) || unique_nickname()})
     |> Participant.connection_changeset(lifecycle)
     |> Repo.insert!()
+  end
+
+  @doc """
+  Inserts a participant and answers `{participant, clear_token}`.
+
+  Only the digest ever reaches the database, so the clear credential can only be
+  known by whoever built it: this is how a test presents a token the application
+  actually recognizes without going through the whole join.
+  """
+  @spec credentialed_participant_fixture(GameSession.t(), map()) ::
+          {Participant.t(), String.t()}
+  def credentialed_participant_fixture(%GameSession{} = session, attrs \\ %{}) do
+    {token, hash} = ParticipantToken.build()
+
+    participant =
+      participant_fixture(session, attrs |> Map.new() |> Map.put(:access_token_hash, hash))
+
+    {participant, token}
   end
 
   @doc "The current instant with the second precision the schemas persist."

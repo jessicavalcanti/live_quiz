@@ -24,6 +24,14 @@ defmodule LiveQuizWeb.Router do
     plug LiveQuizWeb.Api.AuthPipeline
   end
 
+  # Somebody without an account has no JWT and never will: issuing one to a
+  # guest would be a claim about an identity that does not exist (AD-24). The
+  # credential of the participation is what identifies them here, and the plug
+  # reads an account token just as well, so a request may carry either or both.
+  pipeline :api_participant do
+    plug LiveQuizWeb.Api.ParticipantAuth
+  end
+
   ## JSON API
 
   # The specification goes through the `:api` pipeline, which is where it is
@@ -45,6 +53,13 @@ defmodule LiveQuizWeb.Router do
 
     post "/session", SessionController, :create
     post "/session/refresh", SessionController, :refresh
+
+    # Rooms are addressed by code, not by id: it is what a client holds, and it
+    # keeps a sequential identifier out of an address anybody may open. Reading
+    # a room and entering it are open to people with no account at all, which is
+    # most of the people who ever join a quiz.
+    get "/game-sessions/:code", GameSessionController, :show
+    post "/game-sessions/:code/join", GameSessionController, :join
   end
 
   scope "/api/v1", LiveQuizWeb.Api.V1 do
@@ -62,6 +77,20 @@ defmodule LiveQuizWeb.Router do
     patch "/quizzes/:quiz_id/questions/:id", QuestionController, :update
     delete "/quizzes/:quiz_id/questions/:id", QuestionController, :delete
     patch "/quizzes/:quiz_id/questions/:id/move", QuestionController, :move
+
+    post "/game-sessions", GameSessionController, :create
+    get "/game-sessions/:code/host", GameSessionController, :host_show
+    post "/game-sessions/:code/start", GameSessionController, :start
+    post "/game-sessions/:code/cancel", GameSessionController, :cancel
+  end
+
+  scope "/api/v1", LiveQuizWeb.Api.V1 do
+    pipe_through [:api, :api_participant]
+
+    get "/game-sessions/:code/participants", ParticipantController, :index
+    get "/game-sessions/:code/me", ParticipantController, :show
+    post "/game-sessions/:code/rejoin", ParticipantController, :rejoin
+    delete "/game-sessions/:code/leave", ParticipantController, :leave
   end
 
   # Enable LiveDashboard and Swoosh mailbox preview in development

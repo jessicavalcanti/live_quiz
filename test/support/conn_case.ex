@@ -96,6 +96,18 @@ defmodule LiveQuizWeb.ConnCase do
   end
 
   @doc """
+  Puts an `Authorization: Participant <token>` header on the `conn`.
+
+  It prepends instead of replacing, so a request can carry the JWT of an account
+  and the credential of a participation at the same time — which is how the API
+  recognizes somebody as both. Apply it **after** `log_in_api_user/3`, which
+  replaces the header.
+  """
+  def put_api_participant(conn, token) do
+    Plug.Conn.prepend_req_headers(conn, [{"authorization", "Participant " <> token}])
+  end
+
+  @doc """
   Setup helper that registers a user and authenticates the `conn` with a JWT.
 
       setup :register_and_log_in_api_user
