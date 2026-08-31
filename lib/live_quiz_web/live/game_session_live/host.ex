@@ -26,6 +26,7 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
   alias LiveQuiz.Games.GameSession
   alias LiveQuiz.Games.Presence
   alias LiveQuizWeb.Formatters
+  alias LiveQuizWeb.ShareSession
   alias Phoenix.Socket.Broadcast
 
   @impl true
@@ -41,6 +42,7 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
       |> assign(:show_cancel_modal?, false)
       |> assign(:expires_at, session.expires_at)
       |> assign(:max_participants, Games.max_participants())
+      |> assign(:join_url, ShareSession.join_url(session.join_code))
 
     {:ok, socket |> take_over() |> load_lobby()}
   end
@@ -126,6 +128,10 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
   # so the host projecting the screen sees that the click did something.
   def handle_event("copy_code", _params, socket) do
     {:noreply, put_flash(socket, :info, "Código copiado")}
+  end
+
+  def handle_event("copy_link", _params, socket) do
+    {:noreply, put_flash(socket, :info, "Link copiado")}
   end
 
   # `Phoenix.Presence` publishes its raw diff on the same topic. The nudge this
@@ -235,44 +241,12 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
         )} se o controle não for retomado.
       </p>
 
-      <section
+      <ShareSession.share_session
         :if={waiting?(@session)}
-        id="join-code-panel"
-        class="mt-8 rounded-2xl border border-base-300 p-8 text-center"
-      >
-        <p class="text-sm font-semibold tracking-[0.35em] text-base-content/70 uppercase">
-          Código da sala
-        </p>
-
-        <p
-          id="join-code"
-          class="mt-4 font-mono text-6xl font-black tracking-[0.25em] break-all sm:text-8xl"
-        >
-          {@session.join_code}
-        </p>
-
-        <button
-          type="button"
-          id="copy-code"
-          phx-click="copy_code"
-          phx-hook=".CopyCode"
-          data-code={@session.join_code}
-          class="btn btn-soft btn-sm mt-6"
-        >
-          <.icon name="hero-clipboard-document" class="size-4" /> Copiar código
-        </button>
-
-        <script :type={Phoenix.LiveView.ColocatedHook} name=".CopyCode">
-          export default {
-            mounted() {
-              this.el.addEventListener("click", () => {
-                const code = this.el.dataset.code
-                if (navigator.clipboard) { navigator.clipboard.writeText(code) }
-              })
-            }
-          }
-        </script>
-      </section>
+        code={@session.join_code}
+        url={@join_url}
+        class="mt-8"
+      />
 
       <section
         :if={started?(@session)}

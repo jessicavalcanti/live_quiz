@@ -1046,6 +1046,169 @@ defmodule LiveQuiz.GamesTest do
     end
   end
 
+  describe "change_join/1" do
+    test "normaliza o código antes de validar" do
+      changeset = Games.change_join(%{"code" => " k7p4q2 ", "nickname" => "Ana"})
+
+      assert changeset.valid?
+      assert Ecto.Changeset.get_change(changeset, :code) == "K7P4Q2"
+    end
+
+    test "recusa código fora do alfabeto sem tocar no banco" do
+      changeset = Games.change_join(%{"code" => "K7P4Q0", "nickname" => "Ana"})
+
+      refute changeset.valid?
+      assert %{code: [message]} = errors_on(changeset)
+      assert message =~ "código inválido"
+    end
+
+    test "recusa código com o tamanho errado" do
+      refute Games.change_join(%{"code" => "K7P4", "nickname" => "Ana"}).valid?
+      refute Games.change_join(%{"code" => "K7P4Q2X", "nickname" => "Ana"}).valid?
+    end
+
+    test "exige o código" do
+      changeset = Games.change_join(%{"nickname" => "Ana"})
+
+      assert %{code: ["informe o código da sala"]} = errors_on(changeset)
+    end
+
+    test "aplica as mesmas regras de apelido do cadastro" do
+      code = "K7P4Q2"
+
+      assert %{nickname: [_short]} =
+               errors_on(Games.change_join(%{"code" => code, "nickname" => "A"}))
+
+      assert Games.change_join(%{"code" => code, "nickname" => "Al"}).valid?
+      assert Games.change_join(%{"code" => code, "nickname" => String.duplicate("a", 20)}).valid?
+
+      assert %{nickname: [_long]} =
+               errors_on(
+                 Games.change_join(%{"code" => code, "nickname" => String.duplicate("a", 21)})
+               )
+
+      assert %{nickname: [emoji]} =
+               errors_on(Games.change_join(%{"code" => code, "nickname" => "Ana 🎉"}))
+
+      assert emoji =~ "use apenas letras"
+
+      assert %{nickname: ["can't be blank"]} =
+               errors_on(Games.change_join(%{"code" => code, "nickname" => "   "}))
+    end
+
+    test "não promete a unicidade do apelido" do
+      session = game_session_fixture()
+      participant_fixture(session, %{nickname: "Ana"})
+
+      changeset = Games.change_join(%{"code" => session.join_code, "nickname" => "Ana"})
+
+      assert changeset.valid?
+    end
+
+    test "sem argumento devolve um changeset sem erros para exibir" do
+      changeset = Games.change_join()
+
+      refute changeset.valid?
+      assert changeset.errors != []
+      assert changeset.action == nil
+    end
+  end
+
+  describe "preview_by_code/1" do
+    test "traz o título do quiz e a disponibilidade da sala" do
+      session = game_session_fixture(%{quiz_title: "Quiz de História"})
+
+      assert {:ok, preview} = Games.preview_by_code(session.join_code)
+      assert preview == %{quiz_title: "Quiz de História", available: true}
+    end
+
+    test "não vaza a lista nem a contagem de participantes" do
+      session = game_session_fixture()
+      participant_fixture(session, %{nickname: "Ana"})
+
+      assert {:ok, preview} = Games.preview_by_code(session.join_code)
+      assert Map.keys(preview) == [:available, :quiz_title]
+    end
+
+    test "aceita o código em minúsculas e com espaços" do
+      session = game_session_fixture()
+
+      assert {:ok, _preview} =
+               Games.preview_by_code(" #{String.downcase(session.join_code)} ")
+    end
+
+    test "sala lotada não está disponível" do
+      session = game_session_fixture()
+      for _seat <- 1..Games.max_participants(), do: participant_fixture(session)
+
+      assert {:ok, %{available: false}} = Games.preview_by_code(session.join_code)
+    end
+
+    test "sala em andamento não está disponível" do
+      session = game_session_fixture(%{status: :in_progress})
+
+      assert {:ok, %{available: false}} = Games.preview_by_code(session.join_code)
+    end
+
+    test "sala encerrada e código inexistente respondem a mesma coisa" do
+      cancelled = game_session_fixture(%{status: :cancelled})
+
+      assert Games.preview_by_code(cancelled.join_code) == {:error, :not_found}
+      assert Games.preview_by_code("ZZZZZZ") == {:error, :not_found}
+      assert Games.preview_by_code("nada") == {:error, :not_found}
+    end
+  end
+
+  describe "get_participant_of_session/2" do
+    setup do
+      session = game_session_fixture()
+
+      {:ok, participant, token} =
+        Games.join_game_session(nil, session.join_code, %{"nickname" => "Ana"})
+
+      %{session: session, participant: participant, token: token}
+    end
+
+    test "encontra a participação daquela sala", context do
+      %{session: session, participant: participant, token: token} = context
+
+      assert {:ok, found} = Games.get_participant_of_session(token, session.join_code)
+      assert found.id == participant.id
+    end
+
+    test "aceita o código em minúsculas", %{session: session, token: token} do
+      assert {:ok, _participant} =
+               Games.get_participant_of_session(token, String.downcase(session.join_code))
+    end
+
+    test "quem saiu continua sendo encontrado, porque a vaga é dele", context do
+      %{session: session, participant: participant, token: token} = context
+      {:ok, _participant} = Games.leave_game_session(participant)
+
+      assert {:ok, _found} = Games.get_participant_of_session(token, session.join_code)
+    end
+
+    test "credencial de outra sala não vale aqui", %{token: token} do
+      other = game_session_fixture()
+
+      assert Games.get_participant_of_session(token, other.join_code) == {:error, :not_found}
+    end
+
+    test "credencial desconhecida, ausente ou malformada não encontra nada", %{session: session} do
+      assert Games.get_participant_of_session(nil, session.join_code) == {:error, :not_found}
+      assert Games.get_participant_of_session("", session.join_code) == {:error, :not_found}
+
+      assert Games.get_participant_of_session("nao-e-base64!", session.join_code) ==
+               {:error, :not_found}
+    end
+
+    test "a credencial morre com a sala", %{session: session, token: token} do
+      {:ok, _session} = Games.expire_game_session(session)
+
+      assert Games.get_participant_of_session(token, session.join_code) == {:error, :not_found}
+    end
+  end
+
   describe "suggested_nickname/1" do
     test "devolve nil para visitante" do
       assert Games.suggested_nickname(nil) == nil

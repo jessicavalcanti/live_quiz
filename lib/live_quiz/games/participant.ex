@@ -74,6 +74,25 @@ defmodule LiveQuiz.Games.Participant do
   end
 
   @doc """
+  Applies the nickname rules to any changeset carrying a `:nickname` change.
+
+  It lives apart from `join_changeset/2` because the join screen validates the
+  nickname while it is being typed, long before there is a room, a seat or a
+  credential to build a participation with. Both paths go through here, so the
+  rules and their messages have a single home.
+  """
+  @spec validate_nickname(Ecto.Changeset.t()) :: Ecto.Changeset.t()
+  def validate_nickname(changeset) do
+    changeset
+    |> update_change(:nickname, &trim/1)
+    |> validate_required([:nickname])
+    |> validate_length(:nickname, min: @nickname_min_length, max: @nickname_max_length)
+    |> validate_format(:nickname, @nickname_regex,
+      message: "use apenas letras, números, espaços, hífen e sublinhado"
+    )
+  end
+
+  @doc """
   Casts and validates what someone types when joining a room.
 
   Only the nickname comes from outside. `game_session_id`, `user_id`,
@@ -85,12 +104,8 @@ defmodule LiveQuiz.Games.Participant do
   def join_changeset(participant, attrs) do
     participant
     |> cast(attrs, [:nickname])
-    |> update_change(:nickname, &trim/1)
-    |> validate_required([:nickname, :game_session_id, :access_token_hash, :joined_at])
-    |> validate_length(:nickname, min: @nickname_min_length, max: @nickname_max_length)
-    |> validate_format(:nickname, @nickname_regex,
-      message: "use apenas letras, números, espaços, hífen e sublinhado"
-    )
+    |> validate_nickname()
+    |> validate_required([:game_session_id, :access_token_hash, :joined_at])
     |> put_nickname_normalized()
     |> validate_access_token_hash()
     |> assoc_constraint(:game_session)

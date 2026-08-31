@@ -284,6 +284,60 @@ defmodule LiveQuiz.Games do
   end
 
   @doc """
+  Everything a room tells someone who has not entered it yet.
+
+  Only the quiz title and whether the room still takes people (AD-35): before
+  entering, nobody learns who is inside nor how many. Not even the count leaks,
+  since a room that is one seat from full and a room that is empty are equally
+  "available" here.
+
+  A code that cannot exist, or a room that is over, is `{:error, :not_found}` —
+  the same answer, because the two are indistinguishable from outside.
+  """
+  @spec preview_by_code(String.t()) ::
+          {:ok, %{quiz_title: String.t(), available: boolean()}} | {:error, :not_found}
+  def preview_by_code(code) do
+    with {:ok, %GameSession{} = session} <- get_game_session_by_code(code) do
+      available = session.status == :waiting and available_slots(session) > 0
+
+      {:ok, %{quiz_title: session.quiz_title, available: available}}
+    end
+  end
+
+  @doc """
+  Builds the changeset the join screen validates against while it is typed.
+
+  It is schemaless because there is nothing to insert yet: the code still has to
+  find a room and the nickname still has to survive the arbitration of the
+  unique index. The rules come from `LiveQuiz.Games.JoinCode` and
+  `LiveQuiz.Games.Participant`, the same ones the write path applies, so no
+  screen ever restates them.
+
+  Uniqueness is deliberately absent. Answering "available" while someone types
+  would be a promise the next keystroke of another guest can break, so it is
+  only ever settled by `join_game_session/4`.
+  """
+  @spec change_join(map()) :: Changeset.t()
+  def change_join(attrs \\ %{}) do
+    {%{}, %{code: :string, nickname: :string}}
+    |> Changeset.cast(attrs, [:code, :nickname])
+    |> Changeset.update_change(:code, &JoinCode.normalize/1)
+    |> Changeset.validate_required([:code], message: "informe o código da sala")
+    |> validate_code_format()
+    |> Participant.validate_nickname()
+  end
+
+  defp validate_code_format(changeset) do
+    Changeset.validate_change(changeset, :code, fn :code, code ->
+      if JoinCode.valid_format?(code) do
+        []
+      else
+        [code: "código inválido: são #{GameSession.join_code_length()} letras e números"]
+      end
+    end)
+  end
+
+  @doc """
   Fetches a participation from the clear token the client presents.
 
   Only participations of live rooms are returned: closing a room makes every
@@ -298,6 +352,34 @@ defmodule LiveQuiz.Games do
       :error -> {:error, :not_found}
     end
   end
+
+  @doc """
+  Fetches the participation a credential still holds **in the lobby of one room**.
+
+  The join screen asks this before offering the form: someone who is already in
+  the room has nothing left to decide, and asking for a nickname again would
+  suggest a second sign-up that is never going to happen.
+
+  Someone who walked out is found just the same, and on purpose: the seat and the
+  nickname stay reserved to them (AD-27), so asking for a nickname again would
+  only offer the one name this room can no longer give. Coming back through the
+  lobby, which is where `rejoin_game_session/2` lives, is the only path that
+  gives the participation back. A credential of another room, a dead one or none
+  at all is `{:error, :not_found}`.
+  """
+  @spec get_participant_of_session(term(), String.t()) ::
+          {:ok, Participant.t()} | {:error, :not_found}
+  def get_participant_of_session(token, code) when is_binary(code) do
+    with {:ok, %Participant{} = participant} <- get_participant_by_token(token),
+         {:ok, %GameSession{id: id}} <- get_game_session_by_code(code),
+         true <- participant.game_session_id == id do
+      {:ok, participant}
+    else
+      _elsewhere -> {:error, :not_found}
+    end
+  end
+
+  def get_participant_of_session(_token, _code), do: {:error, :not_found}
 
   @doc """
   Leaves a room on purpose, which is not the same as dropping off it.
