@@ -91,12 +91,13 @@ defmodule LiveQuizWeb.QuizLive.Index do
   def handle_event("confirm_delete", _params, socket) do
     %{current_scope: scope, quiz_to_delete: quiz, search: search, page: page} = socket.assigns
 
-    {:ok, _deleted} = Quizzes.delete_quiz(scope, quiz)
-
     socket =
-      socket
-      |> assign(:quiz_to_delete, nil)
-      |> put_flash(:info, "Quiz excluído")
+      case Quizzes.delete_quiz(scope, quiz) do
+        {:ok, _deleted} -> put_flash(socket, :info, "Quiz excluído")
+        {:error, :quiz_locked} -> put_flash(socket, :error, locked_message())
+      end
+
+    socket = assign(socket, :quiz_to_delete, nil)
 
     {:noreply, refresh_after_delete(socket, scope, search, page.page)}
   end
@@ -370,6 +371,8 @@ defmodule LiveQuizWeb.QuizLive.Index do
 
   defp deletion_impact(%{questions_count: count}),
     do: "Esta ação também removerá #{count} perguntas e não pode ser desfeita."
+
+  defp locked_message, do: "Este quiz possui uma sala ativa e não pode ser alterado"
 
   defp query(search, page) do
     search = String.trim(to_string(search))

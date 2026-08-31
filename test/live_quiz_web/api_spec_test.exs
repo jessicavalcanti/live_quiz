@@ -110,12 +110,12 @@ defmodule LiveQuizWeb.ApiSpecTest do
       assert spec["paths"]["/api/v1/quizzes/{quiz_id}/questions"]["get"]["tags"] == ["Perguntas"]
     end
 
-    test "documents 201, 401, 404 and 422 on the creation of a question", %{conn: conn} do
+    test "documents 201, 401, 404, 409 and 422 on the creation of a question", %{conn: conn} do
       spec = conn |> get(~p"/api/openapi") |> json_response(200)
 
       responses = spec["paths"]["/api/v1/quizzes/{quiz_id}/questions"]["post"]["responses"]
 
-      assert Enum.sort(Map.keys(responses)) == ["201", "401", "404", "422"]
+      assert Enum.sort(Map.keys(responses)) == ["201", "401", "404", "409", "422"]
 
       for {_status, response} <- responses do
         assert is_binary(response["description"])

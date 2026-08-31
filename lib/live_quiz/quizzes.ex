@@ -12,6 +12,7 @@ defmodule LiveQuiz.Quizzes do
 
   alias Ecto.Changeset
   alias LiveQuiz.Accounts.Scope
+  alias LiveQuiz.Games.QuizLock
   alias LiveQuiz.Quizzes.AnswerOption
   alias LiveQuiz.Quizzes.Question
   alias LiveQuiz.Quizzes.Quiz
@@ -21,6 +22,15 @@ defmodule LiveQuiz.Quizzes do
   @default_per_page 20
   @max_per_page 100
   @max_questions 50
+
+  @typedoc """
+  What a write can be refused with.
+
+  `:quiz_locked` is deliberately not a changeset: the interface has to tell
+  "there is a live room" apart from "these fields are invalid", and the API
+  answers 409 for the first and 422 for the second.
+  """
+  @type write_error :: :quiz_locked | Changeset.t()
 
   @typedoc "A page of quizzes, as returned by `list_quizzes/2`."
   @type page :: %{
@@ -36,7 +46,8 @@ defmodule LiveQuiz.Quizzes do
 
   Resolves in exactly two queries — one for the page, one for the total —
   no matter how many rows come back: the question count travels with the page
-  query as an aggregate, never as a query per row.
+  query as an aggregate and `locked?` as a correlated `EXISTS`, never as a
+  query per row.
 
   ## Options
 
@@ -57,6 +68,7 @@ defmodule LiveQuiz.Quizzes do
     entries =
       query
       |> with_questions_count()
+      |> QuizLock.with_lock_flag()
       |> order_by([q], desc: q.updated_at, desc: q.id)
       |> limit(^per_page)
       |> offset(^((page - 1) * per_page))
@@ -74,7 +86,8 @@ defmodule LiveQuiz.Quizzes do
   end
 
   @doc """
-  Fetches one of the scope user's quizzes, with `questions_count` filled in.
+  Fetches one of the scope user's quizzes, with `questions_count` and `locked?`
+  filled in.
 
   Raises `Ecto.NoResultsError` when the quiz does not exist or belongs to
   somebody else.
@@ -85,6 +98,7 @@ defmodule LiveQuiz.Quizzes do
     |> owned_quizzes()
     |> where([q], q.id == ^id)
     |> with_questions_count()
+    |> QuizLock.with_lock_flag()
     |> Repo.one!()
   end
 
@@ -113,29 +127,39 @@ defmodule LiveQuiz.Quizzes do
 
   @doc """
   Updates one of the scope user's quizzes.
+
+  Refused with `{:error, :quiz_locked}` while the quiz has a live room (F2-07).
   """
-  @spec update_quiz(Scope.t(), Quiz.t(), map()) :: {:ok, Quiz.t()} | {:error, Changeset.t()}
+  @spec update_quiz(Scope.t(), Quiz.t(), map()) :: {:ok, Quiz.t()} | {:error, write_error()}
   def update_quiz(%Scope{} = scope, %Quiz{} = quiz, attrs) do
     true = quiz.owner_id == scope.user.id
 
-    quiz
-    |> ensure_questions_count()
-    |> Quiz.changeset(attrs)
-    |> Repo.update()
+    while_unlocked(quiz.id, fn ->
+      quiz
+      |> ensure_questions_count()
+      |> Quiz.changeset(attrs)
+      |> Repo.update()
+      |> or_rollback()
+    end)
   end
 
   @doc """
   Deletes one of the scope user's quizzes.
 
   Its questions and answer options go with it, through the database cascade.
+
+  Refused with `{:error, :quiz_locked}` while the quiz has a live room (F2-07).
   """
-  @spec delete_quiz(Scope.t(), Quiz.t()) :: {:ok, Quiz.t()} | {:error, Changeset.t()}
+  @spec delete_quiz(Scope.t(), Quiz.t()) :: {:ok, Quiz.t()} | {:error, write_error()}
   def delete_quiz(%Scope{} = scope, %Quiz{} = quiz) do
     true = quiz.owner_id == scope.user.id
 
-    quiz
-    |> ensure_questions_count()
-    |> Repo.delete()
+    while_unlocked(quiz.id, fn ->
+      quiz
+      |> ensure_questions_count()
+      |> Repo.delete()
+      |> or_rollback()
+    end)
   end
 
   @doc """
@@ -195,13 +219,15 @@ defmodule LiveQuiz.Quizzes do
   one, and is never read from `attrs`. A quiz that already holds
   #{@max_questions} questions returns `{:error, :question_limit_reached}` and
   nothing is written.
+
+  Refused with `{:error, :quiz_locked}` while the quiz has a live room (F2-07).
   """
   @spec create_question(Scope.t(), Quiz.t(), map()) ::
-          {:ok, Question.t()} | {:error, Changeset.t()} | {:error, :question_limit_reached}
+          {:ok, Question.t()} | {:error, write_error()} | {:error, :question_limit_reached}
   def create_question(%Scope{} = scope, %Quiz{} = quiz, attrs) do
     true = quiz.owner_id == scope.user.id
 
-    Repo.transaction(fn ->
+    while_unlocked(quiz.id, fn ->
       if count_questions(quiz) >= @max_questions do
         Repo.rollback(:question_limit_reached)
       else
@@ -225,14 +251,16 @@ defmodule LiveQuiz.Quizzes do
 
   The position is not touched: reordering belongs to F1-08.
 
+  Refused with `{:error, :quiz_locked}` while the quiz has a live room (F2-07).
+
   Raises `Ecto.NoResultsError` when the question belongs to somebody else.
   """
   @spec update_question(Scope.t(), Question.t(), map()) ::
-          {:ok, Question.t()} | {:error, Changeset.t()}
+          {:ok, Question.t()} | {:error, write_error()}
   def update_question(%Scope{} = scope, %Question{} = question, attrs) do
     question = fetch_owned_question!(scope, question.id)
 
-    Repo.transaction(fn ->
+    while_unlocked(question.quiz_id, fn ->
       question
       |> clear_correct_option(attrs)
       |> Question.changeset(drop_position(attrs))
@@ -273,12 +301,16 @@ defmodule LiveQuiz.Quizzes do
   `1..n` sequence. Runs in a single transaction; the answer options go with it
   through the database cascade.
 
+  Refused with `{:error, :quiz_locked}` while the quiz has a live room (F2-07).
+
   Raises `Ecto.NoResultsError` when the question belongs to somebody else.
   """
   @spec delete_question(Scope.t(), Question.t()) ::
-          {:ok, Question.t()} | {:error, Changeset.t()}
+          {:ok, Question.t()} | {:error, write_error()}
   def delete_question(%Scope{} = scope, %Question{} = question) do
-    Repo.transaction(fn -> remove_question(scope, question.id) end)
+    question = fetch_owned_question!(scope, question.id)
+
+    while_unlocked(question.quiz_id, fn -> remove_question(question) end)
   end
 
   @doc """
@@ -287,17 +319,21 @@ defmodule LiveQuiz.Quizzes do
   Returns `{:ok, :unchanged}` when the question already sits at the matching
   edge — moving the first one up is a successful no-op, not an error.
 
+  Refused with `{:error, :quiz_locked}` while the quiz has a live room (F2-07).
+
   Raises `Ecto.NoResultsError` when the question belongs to somebody else.
   """
   @spec move_question(Scope.t(), Question.t(), :up | :down) ::
-          {:ok, Question.t()} | {:ok, :unchanged} | {:error, term()}
+          {:ok, Question.t()} | {:ok, :unchanged} | {:error, write_error()}
   def move_question(%Scope{} = scope, %Question{} = question, direction)
       when direction in [:up, :down] do
-    Repo.transaction(fn -> relocate_question(scope, question.id, direction) end)
+    question = fetch_owned_question!(scope, question.id)
+
+    while_unlocked(question.quiz_id, fn -> relocate_question(question, direction) end)
   end
 
-  defp remove_question(%Scope{} = scope, id) do
-    question = lock_owned_question!(scope, id)
+  defp remove_question(%Question{} = question) do
+    question = lock_question!(question.id)
 
     case Repo.delete(question) do
       {:ok, deleted} -> close_position_gap(deleted)
@@ -316,8 +352,8 @@ defmodule LiveQuiz.Quizzes do
     deleted
   end
 
-  defp relocate_question(%Scope{} = scope, id, direction) do
-    question = lock_owned_question!(scope, id)
+  defp relocate_question(%Question{} = question, direction) do
+    question = lock_question!(question.id)
     target = target_position(question.position, direction)
 
     case lock_question_at(question.quiz_id, target) do
@@ -349,12 +385,11 @@ defmodule LiveQuiz.Quizzes do
     )
   end
 
-  # Ownership is checked with the join, then the row is locked on its own, so
-  # `FOR UPDATE` never reaches across to the quiz row.
-  defp lock_owned_question!(%Scope{} = scope, id) do
-    question = fetch_owned_question!(scope, id)
-
-    Repo.one!(from q in Question, where: q.id == ^question.id, lock: "FOR UPDATE")
+  # Ownership was already proven by the caller's `fetch_owned_question!/2`, so
+  # the row is locked on its own and `FOR UPDATE` never reaches across the join
+  # to the quiz row — that one is taken separately, and always first.
+  defp lock_question!(id) do
+    Repo.one!(from q in Question, where: q.id == ^id, lock: "FOR UPDATE")
   end
 
   defp lock_question_at(quiz_id, position) do
@@ -445,8 +480,32 @@ defmodule LiveQuiz.Quizzes do
 
   defp string_keyed?(attrs), do: Enum.any?(Map.keys(attrs), &is_binary/1)
 
+  # Every write of this context goes through here: the quiz row is taken with
+  # `FOR UPDATE` first and the lock is only then read, so a room opened halfway
+  # through waits for the transaction instead of sneaking in between the check
+  # and the write. `LiveQuiz.Games` takes the same row lock before inserting a
+  # room, which is what makes the two orders exclusive.
+  defp while_unlocked(quiz_id, fun) do
+    Repo.transaction(fn ->
+      QuizLock.lock_quiz!(quiz_id)
+
+      if QuizLock.locked?(quiz_id) do
+        Repo.rollback(:quiz_locked)
+      else
+        fun.()
+      end
+    end)
+  end
+
+  # Inside a transaction an invalid changeset has to become a rollback, or the
+  # caller would get `{:ok, {:error, changeset}}` from `Repo.transaction/1`.
+  defp or_rollback({:ok, record}), do: record
+  defp or_rollback({:error, %Changeset{} = changeset}), do: Repo.rollback(changeset)
+
+  # The `:quiz` binding is the anchor `QuizLock.with_lock_flag/1` correlates its
+  # `EXISTS` against, so every read that goes through here can carry `locked?`.
   defp owned_quizzes(%Scope{} = scope) do
-    from q in Quiz, where: q.owner_id == ^scope.user.id
+    from q in Quiz, as: :quiz, where: q.owner_id == ^scope.user.id
   end
 
   defp with_questions_count(query) do

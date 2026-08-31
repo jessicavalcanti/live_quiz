@@ -25,6 +25,10 @@ defmodule LiveQuizWeb.Api.FallbackController do
     )
   end
 
+  def call(conn, {:error, :quiz_locked}) do
+    error(conn, :conflict, "Este quiz possui uma sala ativa e não pode ser alterado")
+  end
+
   def call(conn, {:error, :invalid_direction}) do
     error(conn, :unprocessable_entity, ~s(A direção deve ser "up" ou "down"))
   end
