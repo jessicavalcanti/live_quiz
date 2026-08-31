@@ -197,6 +197,51 @@ defmodule LiveQuizWeb.GameSessionLive.HostTest do
 
       assert lv |> element("#copy-code") |> render_click() =~ "Código copiado"
     end
+
+    test "confirma a cópia do link", %{conn: conn, session: session} do
+      {:ok, lv, _html} = live(conn, ~p"/game-sessions/#{session.join_code}/host")
+
+      assert lv |> element("#copy-link") |> render_click() =~ "Link copiado"
+    end
+
+    test "mostra código, link e QR code de entrada", %{conn: conn, session: session} do
+      url = LiveQuizWeb.ShareSession.join_url(session.join_code)
+
+      {:ok, lv, _html} = live(conn, ~p"/game-sessions/#{session.join_code}/host")
+
+      assert lv |> element("#join-code") |> render() =~ session.join_code
+      assert lv |> element("#join-url") |> render() =~ url
+      assert has_element?(lv, "#copy-link")
+      assert has_element?(lv, "#join-qr-code svg")
+    end
+
+    test "o QR code do lobby é o desta sala, e não o de outra", %{conn: conn, session: session} do
+      other = game_session_fixture()
+
+      {:ok, lv, _html} = live(conn, ~p"/game-sessions/#{session.join_code}/host")
+      rendered = lv |> element("#join-qr-code") |> render()
+
+      assert rendered =~ "QR code com o link de entrada da sala #{session.join_code}"
+      assert rendered =~ "<svg"
+      refute rendered =~ other.join_code
+      refute rendered =~ "<img"
+    end
+
+    test "o bloco de compartilhamento some quando a partida começa", %{
+      conn: conn,
+      session: session,
+      scope: scope
+    } do
+      {:ok, lv, _html} = live(conn, ~p"/game-sessions/#{session.join_code}/host")
+
+      participant = participant_fixture(session)
+      {:ok, _participant, _connection_id} = Games.claim_participant_connection(participant)
+      {:ok, _session} = Games.start_game_session(scope, session, 1)
+
+      render(lv)
+
+      refute has_element?(lv, "#share-session")
+    end
   end
 
   describe "contadores" do
@@ -381,7 +426,7 @@ defmodule LiveQuizWeb.GameSessionLive.HostTest do
 
       assert html =~ "A partida só começa com pelo menos uma pessoa conectada"
       assert Repo.get!(GameSession, session.id).status == :waiting
-      assert has_element?(lv, "#join-code-panel")
+      assert has_element?(lv, "#share-session")
     end
 
     test "o evento de início chegado de outra aba atualiza a tela", %{

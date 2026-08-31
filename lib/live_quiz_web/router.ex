@@ -1,6 +1,7 @@
 defmodule LiveQuizWeb.Router do
   use LiveQuizWeb, :router
 
+  import LiveQuizWeb.ParticipantAuth
   import LiveQuizWeb.UserAuth
 
   pipeline :browser do
@@ -11,6 +12,7 @@ defmodule LiveQuizWeb.Router do
     plug :protect_from_forgery
     plug :put_secure_browser_headers
     plug :fetch_current_scope_for_user
+    plug :fetch_participant_tokens
   end
 
   pipeline :api do
@@ -104,8 +106,12 @@ defmodule LiveQuizWeb.Router do
     pipe_through [:browser]
 
     live_session :current_user,
-      on_mount: [{LiveQuizWeb.UserAuth, :mount_current_scope}] do
+      on_mount: [
+        {LiveQuizWeb.UserAuth, :mount_current_scope},
+        {LiveQuizWeb.ParticipantAuth, :mount_participant_tokens}
+      ] do
       live "/", LandingLive, :index
+      live "/join", GameSessionLive.Join, :new
       live "/users/register", UserLive.Registration, :new
       live "/users/log-in", UserLive.Login, :new
       live "/users/confirm/:token", UserLive.Confirmation, :new
@@ -113,6 +119,8 @@ defmodule LiveQuizWeb.Router do
       live "/users/reset-password/:token", UserLive.ResetPassword, :edit
     end
 
+    post "/game-sessions/join", GameSessionController, :join
+    delete "/game-sessions/:code/leave", GameSessionController, :leave
     post "/users/log-in", UserSessionController, :create
     delete "/users/log-out", UserSessionController, :delete
   end

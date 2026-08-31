@@ -14,6 +14,8 @@ defmodule LiveQuizWeb.GameSessionController do
   use LiveQuizWeb, :controller
 
   alias LiveQuiz.Games
+  alias LiveQuiz.Games.JoinCode
+  alias LiveQuizWeb.ParticipantAuth
 
   def create(conn, %{"quiz_id" => quiz_id}) do
     scope = conn.assigns.current_scope
@@ -31,6 +33,51 @@ defmodule LiveQuizWeb.GameSessionController do
         |> redirect(to: ~p"/quizzes")
     end
   end
+
+  @doc """
+  Writes the credential the join screen just obtained and opens the lobby.
+
+  A LiveView cannot set a cookie, so the entry itself happens in
+  `LiveQuizWeb.GameSessionLive.Join` and only the last step lands here: the
+  screen posts the code and the clear token once, this action stores them and
+  redirects. The token never becomes part of the address it redirects to, which
+  would leave the credential sitting in the browser history.
+
+  It stores what it is given without asking whether it is real. A token that
+  buys nothing simply fails to open a lobby, and refusing it here would only
+  duplicate a check the lobby has to make anyway.
+  """
+  def join(conn, %{"code" => code, "token" => token}) when is_binary(token) do
+    normalized = JoinCode.normalize(code)
+
+    conn
+    |> ParticipantAuth.put_token(normalized, token)
+    |> redirect(to: lobby_path(normalized))
+  end
+
+  def join(conn, _params) do
+    conn
+    |> put_flash(:error, "Não foi possível entrar na sala. Tente novamente.")
+    |> redirect(to: ~p"/join")
+  end
+
+  @doc """
+  Forgets the credential of one room, leaving the credentials of the others.
+
+  Only the browser side of leaving: the participation is closed by the lobby
+  (F2-10), which is what frees the person to enter somewhere else. Dropping the
+  credential here is what stops the join screen from taking them back into the
+  room they just walked out of.
+  """
+  def leave(conn, %{"code" => code}) do
+    conn
+    |> ParticipantAuth.drop_token(code)
+    |> redirect(to: ~p"/join")
+  end
+
+  # F2-10 opens the lobby of the participant on this address. Until it is in the
+  # router, `~p` cannot verify it and the path is written by hand.
+  defp lobby_path(code), do: "/game-sessions/#{code}"
 
   # The room may have been closed between the refusal and this read, in which
   # case there is nowhere to send the host: the dashboard, with the reason, is
