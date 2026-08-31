@@ -1209,6 +1209,54 @@ defmodule LiveQuiz.GamesTest do
     end
   end
 
+  describe "get_session_by_participant_token/1" do
+    setup do
+      session = game_session_fixture()
+
+      {:ok, participant, token} =
+        Games.join_game_session(nil, session.join_code, %{"nickname" => "Ana"})
+
+      %{session: session, participant: participant, token: token}
+    end
+
+    test "encontra a sala da credencial", %{session: session, token: token} do
+      assert {:ok, found} = Games.get_session_by_participant_token(token)
+      assert found.id == session.id
+      assert found.join_code == session.join_code
+    end
+
+    test "continua encontrando a sala depois que ela é cancelada", context do
+      %{session: session, token: token} = context
+      _cancelled = close_session(session, :cancelled)
+
+      assert {:ok, %GameSession{status: :cancelled}} =
+               Games.get_session_by_participant_token(token)
+    end
+
+    test "distingue a sala expirada da cancelada", %{session: session, token: token} do
+      {:ok, _session} = Games.expire_game_session(session)
+
+      assert {:ok, %GameSession{status: :expired}} = Games.get_session_by_participant_token(token)
+    end
+
+    test "encontra a sala de quem saiu, porque a vaga continua reservada", context do
+      %{session: session, participant: participant, token: token} = context
+      {:ok, _participant} = Games.leave_game_session(participant)
+
+      assert {:ok, found} = Games.get_session_by_participant_token(token)
+      assert found.id == session.id
+    end
+
+    test "credencial desconhecida, ausente ou malformada não encontra nada" do
+      assert Games.get_session_by_participant_token(nil) == {:error, :not_found}
+      assert Games.get_session_by_participant_token("") == {:error, :not_found}
+      assert Games.get_session_by_participant_token("nao-e-base64!") == {:error, :not_found}
+
+      {unknown, _hash} = ParticipantToken.build()
+      assert Games.get_session_by_participant_token(unknown) == {:error, :not_found}
+    end
+  end
+
   describe "suggested_nickname/1" do
     test "devolve nil para visitante" do
       assert Games.suggested_nickname(nil) == nil

@@ -382,6 +382,39 @@ defmodule LiveQuiz.Games do
   def get_participant_of_session(_token, _code), do: {:error, :not_found}
 
   @doc """
+  Fetches the room a credential belongs to, **live or already over**.
+
+  `get_participant_by_token/1` stops answering once a room ends, which is the
+  right answer for anything that acts on a participation but the wrong one for
+  the lobby of the participant: someone coming back to the address of a room
+  that was cancelled has to read *why* it is over, and "cancelada" and
+  "encerrada por ausência" are not the same news.
+
+  It is a read of the room only. Reviving the participation is
+  `rejoin_game_session/2`, and it refuses an ended room on purpose — this
+  function is what turns that refusal into a sentence.
+  """
+  @spec get_session_by_participant_token(term()) ::
+          {:ok, GameSession.t()} | {:error, :not_found}
+  def get_session_by_participant_token(token) do
+    case ParticipantToken.hash(token) do
+      {:ok, hash} ->
+        Participant
+        |> join(:inner, [p], s in assoc(p, :game_session))
+        |> where([p, _s], p.access_token_hash == ^hash)
+        |> select([_p, s], s)
+        |> Repo.one()
+        |> case do
+          nil -> {:error, :not_found}
+          %GameSession{} = session -> {:ok, session}
+        end
+
+      :error ->
+        {:error, :not_found}
+    end
+  end
+
+  @doc """
   Leaves a room on purpose, which is not the same as dropping off it.
 
   The participation disappears from the lobby list and the person is free to
