@@ -258,6 +258,79 @@ defmodule LiveQuiz.GamesTest do
     end
   end
 
+  describe "get_hosted_session_by_code!/2" do
+    test "devolve a sala aguardando participantes do host do escopo" do
+      scope = user_scope_fixture()
+      session = game_session_fixture(%{host: scope.user, status: :waiting})
+
+      assert Games.get_hosted_session_by_code!(scope, session.join_code).id == session.id
+    end
+
+    test "devolve a sala em andamento do host do escopo" do
+      scope = user_scope_fixture()
+      session = game_session_fixture(%{host: scope.user, status: :in_progress})
+
+      assert Games.get_hosted_session_by_code!(scope, session.join_code).id == session.id
+    end
+
+    test "continua devolvendo a sala depois de cancelada" do
+      scope = user_scope_fixture()
+      session = game_session_fixture(%{host: scope.user, status: :cancelled})
+
+      assert Games.get_hosted_session_by_code!(scope, session.join_code).id == session.id
+    end
+
+    test "continua devolvendo a sala depois de expirada" do
+      scope = user_scope_fixture()
+      session = game_session_fixture(%{host: scope.user, status: :expired})
+
+      assert Games.get_hosted_session_by_code!(scope, session.join_code).id == session.id
+    end
+
+    test "normaliza espaços e minúsculas" do
+      scope = user_scope_fixture()
+      session = game_session_fixture(%{host: scope.user, status: :waiting})
+
+      typed = " #{String.downcase(session.join_code)} "
+
+      assert Games.get_hosted_session_by_code!(scope, typed).id == session.id
+    end
+
+    test "devolve a mais recente quando o código foi reaproveitado" do
+      scope = user_scope_fixture()
+      code = unique_join_code()
+
+      old_session =
+        game_session_fixture(%{host: scope.user, status: :cancelled, join_code: code})
+
+      current = game_session_fixture(%{host: scope.user, status: :waiting, join_code: code})
+
+      assert current.id != old_session.id
+      assert Games.get_hosted_session_by_code!(scope, code).id == current.id
+    end
+
+    test "levanta NoResultsError para a sala de outra pessoa" do
+      session = game_session_fixture(%{status: :waiting})
+      other_scope = user_scope_fixture()
+
+      assert_raise Ecto.NoResultsError, fn ->
+        Games.get_hosted_session_by_code!(other_scope, session.join_code)
+      end
+    end
+
+    test "levanta NoResultsError para um código inexistente" do
+      assert_raise Ecto.NoResultsError, fn ->
+        Games.get_hosted_session_by_code!(user_scope_fixture(), "K7P4Q2")
+      end
+    end
+
+    test "levanta NoResultsError para um código fora do alfabeto" do
+      assert_raise Ecto.NoResultsError, fn ->
+        Games.get_hosted_session_by_code!(user_scope_fixture(), "nada")
+      end
+    end
+  end
+
   describe "get_game_session!/2" do
     test "devolve a sala do host do escopo" do
       scope = user_scope_fixture()

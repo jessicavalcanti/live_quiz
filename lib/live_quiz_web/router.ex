@@ -91,10 +91,12 @@ defmodule LiveQuizWeb.Router do
       live "/quizzes/:id/edit", QuizLive.Editor, :edit
       live "/quizzes/:id/questions/new", QuizLive.Editor, :new_question
       live "/quizzes/:id/questions/:question_id/edit", QuizLive.Editor, :edit_question
+      live "/game-sessions/:code/host", GameSessionLive.Host, :show
       live "/users/settings", UserLive.Settings, :edit
       live "/users/settings/confirm-email/:token", UserLive.Settings, :confirm_email
     end
 
+    post "/game-sessions", GameSessionController, :create
     post "/users/update-password", UserSessionController, :update_password
   end
 

@@ -189,6 +189,33 @@ defmodule LiveQuiz.Games do
 
   def get_game_session_by_code(_code), do: {:error, :not_found}
 
+  @doc """
+  Fetches a room of the scope user by its code, live **or already over**.
+
+  The lobby of the host is addressed by code rather than by id (F2-08), and it
+  has to keep answering after the room ends: a host who comes back to the
+  address has to read that the room was cancelled or that it expired, instead
+  of a 404 that says nothing. Because a code is only unique among live rooms,
+  the same host may hold several closed rooms with it — the most recent one is
+  the one the address means.
+
+  The owner filter is in the query, so a room somebody else hosts is
+  indistinguishable from a room that never existed: both raise
+  `Ecto.NoResultsError`, which the callers turn into a 404. A value that is not
+  shaped like a code finds nothing and ends the same way.
+  """
+  @spec get_hosted_session_by_code!(Scope.t(), String.t()) :: GameSession.t()
+  def get_hosted_session_by_code!(%Scope{} = scope, code) when is_binary(code) do
+    normalized = JoinCode.normalize(code)
+
+    scope
+    |> hosted_sessions()
+    |> where([s], s.join_code == ^normalized)
+    |> order_by([s], desc: s.inserted_at, desc: s.id)
+    |> limit(1)
+    |> Repo.one!()
+  end
+
   @doc "Returns the live room hosted by the scope user, if there is one."
   @spec get_active_session_for_host(Scope.t()) :: GameSession.t() | nil
   def get_active_session_for_host(%Scope{} = scope) do

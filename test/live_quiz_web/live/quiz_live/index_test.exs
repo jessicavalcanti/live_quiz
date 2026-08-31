@@ -8,6 +8,7 @@ defmodule LiveQuizWeb.QuizLive.IndexTest do
   import Phoenix.LiveViewTest
 
   alias LiveQuiz.Accounts.Scope
+  alias LiveQuiz.Games
   alias LiveQuiz.Quizzes
 
   describe "route protection" do
@@ -588,5 +589,132 @@ defmodule LiveQuizWeb.QuizLive.IndexTest do
 
   defp rows(html) do
     html |> String.split("<tr") |> length() |> Kernel.-(1)
+  end
+
+  describe "sala ativa do host" do
+    setup :register_and_log_in_user
+
+    test "avisa e liga para a sala aberta", %{conn: conn, user: user} do
+      session = game_session_fixture(%{host: user, status: :waiting})
+
+      {:ok, lv, html} = live(conn, ~p"/quizzes")
+
+      assert html =~ session.join_code
+      assert has_element?(lv, "#active-session-notice")
+
+      assert has_element?(
+               lv,
+               ~s{#active-session-notice a[href="/game-sessions/#{session.join_code}/host"]}
+             )
+    end
+
+    test "não avisa nada a quem não tem sala aberta", %{conn: conn, user: user} do
+      game_session_fixture(%{host: user, status: :cancelled})
+
+      {:ok, lv, _html} = live(conn, ~p"/quizzes")
+
+      refute has_element?(lv, "#active-session-notice")
+    end
+  end
+
+  describe "iniciar partida a partir da lista" do
+    setup :register_and_log_in_user
+
+    setup %{user: user} do
+      %{scope: Scope.for_user(user)}
+    end
+
+    test "o botão de um quiz pronto envia para a criação da sala", %{
+      conn: conn,
+      scope: scope
+    } do
+      quiz = quiz_fixture(scope, %{title: "Geografia"})
+      question_fixture(scope, quiz)
+
+      {:ok, lv, _html} = live(conn, ~p"/quizzes")
+
+      assert has_element?(lv, ~s{#start-game-#{quiz.id}[action="/game-sessions"]})
+      refute has_element?(lv, "#start-game-button-#{quiz.id}[disabled]")
+      refute has_element?(lv, "#quiz-hint-#{quiz.id}")
+    end
+
+    test "um quiz sem perguntas fica desabilitado, com o motivo ao lado", %{
+      conn: conn,
+      scope: scope
+    } do
+      quiz = quiz_fixture(scope, %{title: "Geografia"})
+
+      {:ok, lv, _html} = live(conn, ~p"/quizzes")
+
+      assert has_element?(lv, "#start-game-button-#{quiz.id}[disabled]")
+      assert has_element?(lv, ~s{#start-game-button-#{quiz.id}[aria-disabled="true"]})
+
+      assert has_element?(
+               lv,
+               ~s{#start-game-button-#{quiz.id}[aria-describedby="quiz-hint-#{quiz.id}"]}
+             )
+
+      assert lv |> element("#quiz-hint-#{quiz.id}") |> render() =~
+               "Adicione ao menos uma pergunta"
+    end
+  end
+
+  describe "quiz com sala ativa na lista" do
+    setup :register_and_log_in_user
+
+    setup %{user: user} do
+      scope = Scope.for_user(user)
+      quiz = quiz_fixture(scope, %{title: "Geografia"})
+      question_fixture(scope, quiz)
+
+      %{
+        scope: scope,
+        quiz: quiz,
+        session: game_session_fixture(%{host: user, quiz: quiz, status: :waiting})
+      }
+    end
+
+    test "desabilita iniciar, editar e excluir, com a explicação", %{
+      conn: conn,
+      quiz: quiz
+    } do
+      {:ok, lv, _html} = live(conn, ~p"/quizzes")
+
+      assert has_element?(lv, "#start-game-button-#{quiz.id}[disabled]")
+      assert has_element?(lv, "#edit-quiz-#{quiz.id}[disabled]")
+      assert has_element?(lv, "#delete-quiz-#{quiz.id}[disabled]")
+      refute has_element?(lv, ~s{#quiz-#{quiz.id} a[href="/quizzes/#{quiz.id}/edit"]})
+
+      assert lv |> element("#quiz-hint-#{quiz.id}") |> render() =~
+               "Este quiz possui uma sala ativa"
+    end
+
+    test "os botões desabilitados apontam para a explicação", %{conn: conn, quiz: quiz} do
+      {:ok, lv, _html} = live(conn, ~p"/quizzes")
+
+      for id <- ["edit-quiz-#{quiz.id}", "delete-quiz-#{quiz.id}"] do
+        assert has_element?(lv, ~s{##{id}[aria-disabled="true"]})
+        assert has_element?(lv, ~s{##{id}[aria-describedby="quiz-hint-#{quiz.id}"]})
+      end
+    end
+
+    test "as ações voltam depois que a sala é cancelada", %{
+      conn: conn,
+      scope: scope,
+      quiz: quiz,
+      session: session
+    } do
+      {:ok, lv, _html} = live(conn, ~p"/quizzes")
+
+      assert has_element?(lv, "#delete-quiz-#{quiz.id}[disabled]")
+
+      {:ok, _cancelled} = Games.cancel_game_session(scope, session)
+      render_patch(lv, ~p"/quizzes")
+
+      refute has_element?(lv, "#delete-quiz-#{quiz.id}[disabled]")
+      refute has_element?(lv, "#start-game-button-#{quiz.id}[disabled]")
+      refute has_element?(lv, "#quiz-hint-#{quiz.id}")
+      assert has_element?(lv, ~s{#quiz-#{quiz.id} a[href="/quizzes/#{quiz.id}/edit"]})
+    end
   end
 end

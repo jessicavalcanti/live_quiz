@@ -9,6 +9,7 @@ defmodule LiveQuizWeb.QuizLive.Index do
   """
   use LiveQuizWeb, :live_view
 
+  alias LiveQuiz.Games
   alias LiveQuiz.Quizzes
   alias LiveQuiz.Quizzes.Quiz
   alias LiveQuizWeb.Formatters
@@ -30,11 +31,13 @@ defmodule LiveQuizWeb.QuizLive.Index do
   def handle_params(params, _uri, socket) do
     search = params |> Map.get("search", "") |> to_string()
 
-    page = list_quizzes(socket.assigns.current_scope, search, Map.get(params, "page"))
+    scope = socket.assigns.current_scope
+    page = list_quizzes(scope, search, Map.get(params, "page"))
 
     {:noreply,
      socket
      |> assign(page: page, search: search)
+     |> assign(:active_session, Games.get_active_session_for_host(scope))
      |> apply_action(socket.assigns.live_action)}
   end
 
@@ -156,6 +159,25 @@ defmodule LiveQuizWeb.QuizLive.Index do
         </:actions>
       </.header>
 
+      <div
+        :if={@active_session}
+        id="active-session-notice"
+        role="status"
+        class="mt-6 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-info bg-info/10 p-4"
+      >
+        <p>
+          Você tem uma sala aberta para <strong>{@active_session.quiz_title}</strong>
+          com o código <strong class="font-mono">{@active_session.join_code}</strong>.
+        </p>
+
+        <.link
+          navigate={~p"/game-sessions/#{@active_session.join_code}/host"}
+          class="btn btn-primary btn-sm"
+        >
+          Voltar para a sala
+        </.link>
+      </div>
+
       <form id="quiz-search" phx-change="search" phx-submit="search" role="search" class="mt-6">
         <label for="quiz-search-input" class="sr-only">Buscar por título</label>
 
@@ -243,18 +265,69 @@ defmodule LiveQuizWeb.QuizLive.Index do
                 <span class={["badge", status_class(quiz)]}>{status(quiz)}</span>
               </td>
               <td class="w-0">
-                <div class="flex gap-2">
-                  <.link navigate={~p"/quizzes/#{quiz}/edit"} class="btn btn-ghost btn-sm">
-                    Editar
-                  </.link>
+                <div class="flex flex-col items-end gap-1">
+                  <div class="flex items-center gap-2">
+                    <.form
+                      for={%{}}
+                      action={~p"/game-sessions"}
+                      method="post"
+                      id={"start-game-#{quiz.id}"}
+                      class="contents"
+                    >
+                      <input type="hidden" name="quiz_id" value={quiz.id} />
 
-                  <button
-                    type="button"
-                    phx-click={JS.push_focus() |> JS.push("delete_quiz", value: %{id: quiz.id})}
-                    class="btn btn-ghost btn-sm text-error"
+                      <button
+                        type="submit"
+                        id={"start-game-button-#{quiz.id}"}
+                        disabled={not startable?(quiz)}
+                        aria-disabled={to_string(not startable?(quiz))}
+                        aria-describedby={hint_target(quiz)}
+                        class={["btn btn-primary btn-sm", not startable?(quiz) && "btn-disabled"]}
+                      >
+                        Iniciar partida
+                      </button>
+                    </.form>
+
+                    <.link
+                      :if={not quiz.locked?}
+                      navigate={~p"/quizzes/#{quiz}/edit"}
+                      class="btn btn-ghost btn-sm"
+                    >
+                      Editar
+                    </.link>
+
+                    <button
+                      :if={quiz.locked?}
+                      type="button"
+                      id={"edit-quiz-#{quiz.id}"}
+                      disabled
+                      aria-disabled="true"
+                      aria-describedby={hint_target(quiz)}
+                      class="btn btn-ghost btn-sm btn-disabled"
+                    >
+                      Editar
+                    </button>
+
+                    <button
+                      type="button"
+                      id={"delete-quiz-#{quiz.id}"}
+                      disabled={quiz.locked?}
+                      aria-disabled={to_string(quiz.locked?)}
+                      aria-describedby={hint_target(quiz)}
+                      phx-click={JS.push_focus() |> JS.push("delete_quiz", value: %{id: quiz.id})}
+                      class={["btn btn-ghost btn-sm text-error", quiz.locked? && "btn-disabled"]}
+                    >
+                      Excluir
+                    </button>
+                  </div>
+
+                  <p
+                    :if={hint(quiz)}
+                    id={"quiz-hint-#{quiz.id}"}
+                    class="text-xs whitespace-normal text-warning"
                   >
-                    Excluir
-                  </button>
+                    {hint(quiz)}
+                  </p>
                 </div>
               </td>
             </tr>
@@ -364,6 +437,21 @@ defmodule LiveQuizWeb.QuizLive.Index do
     """
   end
 
+  # Opening a room takes a quiz with at least one question and no room already
+  # running on it. Both refusals are written next to the button instead of being
+  # discovered on the click.
+  defp startable?(quiz), do: Quizzes.playable?(quiz) and not quiz.locked?
+
+  defp hint(%{locked?: true}), do: locked_hint()
+
+  defp hint(quiz) do
+    unless Quizzes.playable?(quiz) do
+      "Adicione ao menos uma pergunta para iniciar uma partida"
+    end
+  end
+
+  defp hint_target(quiz), do: if(hint(quiz), do: "quiz-hint-#{quiz.id}")
+
   defp deletion_impact(%{questions_count: 0}), do: "Esta ação não pode ser desfeita."
 
   defp deletion_impact(%{questions_count: 1}),
@@ -373,6 +461,8 @@ defmodule LiveQuizWeb.QuizLive.Index do
     do: "Esta ação também removerá #{count} perguntas e não pode ser desfeita."
 
   defp locked_message, do: "Este quiz possui uma sala ativa e não pode ser alterado"
+
+  defp locked_hint, do: "Este quiz possui uma sala ativa"
 
   defp query(search, page) do
     search = String.trim(to_string(search))
