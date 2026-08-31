@@ -27,6 +27,21 @@ defmodule LiveQuiz.Games do
   Whoever joins gets a `LiveQuiz.Games.ParticipantToken`, returned in clear only
   by `join_game_session/4` and stored only as a digest.
 
+  A room ends in one of three ways, and all of them are ordinary state
+  transitions rather than deletions: the host starts it and phase 3 will carry
+  it to `finished`, the host cancels it, or it expires because the host stayed
+  away. `cancelled` and `expired` are kept apart so the lobby can say which one
+  happened. Every transition is a single `UPDATE` guarded by the status it is
+  allowed to come from, checked by the number of rows it touched — never a read
+  followed by a write — so a host cancelling at the very second the deadline
+  runs out ends with one winner and one status. Closing is terminal: there is no
+  reopening, and playing again means a new room with a new code.
+
+  The expiration deadline is persisted in `expires_at` (AD-23) instead of living
+  in a timer, so it survives a restart without being forgotten or renewed.
+  `LiveQuiz.Games` only supplies the transitions; noticing that the host dropped
+  and running the sweep are F2-06's job.
+
   Leaving a room, coming back to it and handing its access over are three
   different things, and only the first takes the participation off the lobby
   list: `leave_game_session/1` frees the person for another room while the seat
@@ -68,6 +83,10 @@ defmodule LiveQuiz.Games do
   @seats_lock_class 2
 
   @max_participants 25
+  # How long a room outlives the host being away, in seconds. It is a domain
+  # constant rather than a configuration knob: the lobby countdown, the
+  # persisted `expires_at` and the sweeper of F2-06 all have to agree on it.
+  @host_absence_timeout 300
   # `known_tokens` comes from the client, so the list is bounded before it turns
   # into a query and malformed values are dropped without an error.
   @max_known_tokens 20
@@ -334,16 +353,12 @@ defmodule LiveQuiz.Games do
   """
   @spec claim_host_connection(Scope.t(), GameSession.t()) ::
           {:ok, GameSession.t(), Ecto.UUID.t()} | {:error, :unauthorized}
-  def claim_host_connection(%Scope{} = scope, %GameSession{id: id}) do
-    scope
-    |> hosted_sessions()
-    |> where([s], s.id == ^id)
-    |> Repo.one()
-    |> case do
-      nil ->
-        {:error, :unauthorized}
+  def claim_host_connection(%Scope{} = scope, %GameSession{} = session) do
+    case fetch_hosted_session(scope, session) do
+      {:error, :unauthorized} = error ->
+        error
 
-      %GameSession{} = session ->
+      {:ok, session} ->
         connection_id = Ecto.UUID.generate()
 
         session =
@@ -354,6 +369,162 @@ defmodule LiveQuiz.Games do
         {:ok, session, connection_id}
     end
   end
+
+  @doc """
+  Puts the room live, which is the only way out of the lobby.
+
+  Only the host may start it, only from `waiting`, and only with at least one
+  participant **connected** — `connected_count` is informed by whoever watches
+  the presence of the room, so the rule stays in the context while the counting
+  stays out of it (AD-23). Somebody merely signed up, disconnected or gone does
+  not count.
+
+  The transition is one guarded `UPDATE`, so two connections starting the same
+  room at the same instant produce a single `started_at` and the loser is told
+  `:invalid_transition`. From here on new sign-ups are refused, while whoever
+  was already in may still come back.
+  """
+  @spec start_game_session(Scope.t(), GameSession.t(), non_neg_integer()) ::
+          {:ok, GameSession.t()}
+          | {:error, :unauthorized}
+          | {:error, :invalid_transition}
+          | {:error, :no_connected_participants}
+  def start_game_session(%Scope{} = scope, %GameSession{} = session, connected_count)
+      when is_integer(connected_count) and connected_count >= 0 do
+    with {:ok, session} <- fetch_hosted_session(scope, session),
+         :ok <- ensure_startable(session, connected_count) do
+      go_live(session)
+    end
+  end
+
+  @doc """
+  Ends the room by the host's own decision, in the lobby or after it started.
+
+  The room becomes `cancelled` — told apart from `expired` so the people in it
+  can be given the real reason — everybody is released and the host is free to
+  open another one, with a new code. A room that is already over answers
+  `:invalid_transition`: there is no reopening.
+  """
+  @spec cancel_game_session(Scope.t(), GameSession.t()) ::
+          {:ok, GameSession.t()} | {:error, :unauthorized} | {:error, :invalid_transition}
+  def cancel_game_session(%Scope{} = scope, %GameSession{} = session) do
+    case fetch_hosted_session(scope, session) do
+      {:ok, session} -> close_session(session, :cancelled)
+      {:error, :unauthorized} = error -> error
+    end
+  end
+
+  @doc """
+  Ends the room because the host stayed away past the deadline.
+
+  It takes no scope on purpose: this is the system acting, not a person, and
+  the sweeper that calls it arrives in F2-06. Like cancelling, it only applies
+  to a live room — a room already over answers `:invalid_transition`, which is
+  what makes a host cancelling at the very second the deadline runs out a
+  harmless race instead of a double close.
+  """
+  @spec expire_game_session(GameSession.t()) ::
+          {:ok, GameSession.t()} | {:error, :invalid_transition}
+  def expire_game_session(%GameSession{} = session), do: close_session(session, :expired)
+
+  @doc """
+  Records that the host lost the room and starts the countdown to expiration.
+
+  Losing the connection does not end the room: `host_disconnected_at` and
+  `expires_at = at + #{@host_absence_timeout}s` are written and the room stays
+  exactly as it was. The deadline lives in the database rather than in a timer
+  (AD-23), so restarting the application neither forgets it nor grants five
+  fresh minutes.
+
+  Idempotent: reporting the drop again while a deadline is already running does
+  not push it forward. A room that is already over is left untouched.
+  """
+  @spec mark_host_disconnected(GameSession.t(), DateTime.t()) :: {:ok, GameSession.t()}
+  def mark_host_disconnected(session, at \\ DateTime.utc_now())
+
+  def mark_host_disconnected(%GameSession{id: id} = session, %DateTime{} = at) do
+    at = DateTime.truncate(at, :second)
+    expires_at = DateTime.add(at, @host_absence_timeout, :second)
+
+    query =
+      from s in GameSession,
+        where: s.id == ^id,
+        where: is_nil(s.host_disconnected_at),
+        where: s.status in ^GameSession.active_statuses(),
+        select: s
+
+    case Repo.update_all(query,
+           set: [host_disconnected_at: at, expires_at: expires_at, updated_at: at]
+         ) do
+      {1, [updated]} -> {:ok, updated}
+      {0, _unchanged} -> {:ok, reload_session(session)}
+    end
+  end
+
+  @doc """
+  Records the host coming back and drops the pending deadline.
+
+  Both columns are cleared, so a later absence is worth **five full minutes**
+  again instead of what was left of the previous one. That is the literal
+  reading of "continuous absence" and a product decision, not an oversight.
+  """
+  @spec mark_host_connected(GameSession.t()) :: {:ok, GameSession.t()}
+  def mark_host_connected(%GameSession{id: id} = session) do
+    query =
+      from s in GameSession,
+        where: s.id == ^id,
+        where: not is_nil(s.host_disconnected_at) or not is_nil(s.expires_at),
+        select: s
+
+    case Repo.update_all(query,
+           set: [host_disconnected_at: nil, expires_at: nil, updated_at: now()]
+         ) do
+      {1, [updated]} -> {:ok, updated}
+      {0, _unchanged} -> {:ok, reload_session(session)}
+    end
+  end
+
+  @doc """
+  Live rooms whose host absence deadline has already run out.
+
+  This is what the sweeper of F2-06 reads. Only `waiting` and `in_progress`
+  rooms come back, so a room that is over is never closed twice, and rooms with
+  the host present have no deadline to compare in the first place. The instant
+  is truncated to the second the column is stored in, so a deadline is never
+  missed by microseconds; a deadline that ran out while the application was
+  down is picked up by the first sweep after it returns, with no extra time.
+  """
+  @spec list_expired_sessions(DateTime.t()) :: [GameSession.t()]
+  def list_expired_sessions(now \\ DateTime.utc_now()) do
+    threshold = DateTime.truncate(now, :second)
+
+    GameSession
+    |> where([s], not is_nil(s.expires_at) and s.expires_at <= ^threshold)
+    |> live()
+    |> order_by([s], asc: s.expires_at, asc: s.id)
+    |> Repo.all()
+  end
+
+  @doc """
+  How many seconds are left before the room expires, for the countdown the
+  lobby shows.
+
+  Answers `nil` when no deadline is running — the host is present — and `0`
+  once the deadline is past, so the caller never has to reason about negative
+  time.
+  """
+  @spec seconds_until_expiration(GameSession.t(), DateTime.t()) :: non_neg_integer() | nil
+  def seconds_until_expiration(session, now \\ DateTime.utc_now())
+
+  def seconds_until_expiration(%GameSession{expires_at: nil}, %DateTime{}), do: nil
+
+  def seconds_until_expiration(%GameSession{expires_at: expires_at}, %DateTime{} = now) do
+    max(DateTime.diff(expires_at, now, :second), 0)
+  end
+
+  @doc "How long a room survives the host being away, in seconds."
+  @spec host_absence_timeout() :: pos_integer()
+  def host_absence_timeout, do: @host_absence_timeout
 
   @doc """
   Tells whether the `connection_id` presented is still the live access of the
@@ -715,6 +886,79 @@ defmodule LiveQuiz.Games do
     Participant
     |> where([p], p.user_id == ^user_id and is_nil(p.released_at) and p.id != ^id)
     |> Repo.exists?()
+  end
+
+  # Every room decision by a host reads the room back through the scope, so
+  # somebody who does not host it is refused instead of acting on it, and a
+  # stale struct cannot smuggle a transition past the check either.
+  defp fetch_hosted_session(%Scope{} = scope, %GameSession{id: id}) do
+    scope
+    |> hosted_sessions()
+    |> where([s], s.id == ^id)
+    |> Repo.one()
+    |> case do
+      nil -> {:error, :unauthorized}
+      %GameSession{} = session -> {:ok, session}
+    end
+  end
+
+  defp ensure_startable(%GameSession{status: :waiting}, connected_count) do
+    if connected_count > 0, do: :ok, else: {:error, :no_connected_participants}
+  end
+
+  defp ensure_startable(%GameSession{}, _connected_count), do: {:error, :invalid_transition}
+
+  # The status in the `WHERE` is the actual guard, not the check above it: the
+  # room only goes live if the database still sees it waiting, so a second
+  # caller updates no row and is told the transition is invalid.
+  defp go_live(%GameSession{id: id}) do
+    at = now()
+
+    query = from s in GameSession, where: s.id == ^id and s.status == :waiting, select: s
+
+    case Repo.update_all(query, set: [status: :in_progress, started_at: at, updated_at: at]) do
+      {1, [session]} -> {:ok, session}
+      {0, _unchanged} -> {:error, :invalid_transition}
+    end
+  end
+
+  # Closing is terminal and guarded the same way, which is what makes the host
+  # cancelling at the very second the deadline runs out end with exactly one
+  # winner and a single status. Releasing everybody rides in the same
+  # transaction, so a closed room never leaves people tied to it.
+  defp close_session(%GameSession{id: id}, status) do
+    at = now()
+
+    query =
+      from s in GameSession,
+        where: s.id == ^id and s.status in ^GameSession.active_statuses(),
+        select: s
+
+    Repo.transaction(fn ->
+      case Repo.update_all(query,
+             set: [status: status, finished_at: at, expires_at: nil, updated_at: at]
+           ) do
+        {1, [session]} ->
+          release_participants(id, at)
+          session
+
+        {0, _unchanged} ->
+          Repo.rollback(:invalid_transition)
+      end
+    end)
+  end
+
+  # One statement for the whole room. Only `released_at` is stamped: whoever was
+  # there stays recorded as present at the end, which is what phase 4 reads back
+  # as history, and clearing the one-room-per-account index violates nothing.
+  defp release_participants(session_id, at) do
+    Participant
+    |> where([p], p.game_session_id == ^session_id and is_nil(p.released_at))
+    |> Repo.update_all(set: [released_at: at, updated_at: at])
+  end
+
+  defp reload_session(%GameSession{id: id} = session) do
+    Repo.get(GameSession, id) || session
   end
 
   defp same_connection?(current, presented) do

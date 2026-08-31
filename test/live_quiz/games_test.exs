@@ -1458,6 +1458,416 @@ defmodule LiveQuiz.GamesTest do
     end
   end
 
+  describe "start_game_session/3" do
+    setup :hosted_waiting_session
+
+    test "inicia a sala com um participante conectado", %{scope: scope, session: session} do
+      participant_fixture(session)
+
+      assert {:ok, started} = Games.start_game_session(scope, session, 1)
+
+      assert started.status == :in_progress
+      assert started.started_at
+
+      assert Repo.get!(GameSession, session.id).status == :in_progress
+    end
+
+    test "inicia a sala com a lotação inteira conectada", %{scope: scope, session: session} do
+      fill_session(session, Games.max_participants())
+
+      assert {:ok, started} = Games.start_game_session(scope, session, Games.max_participants())
+
+      assert started.status == :in_progress
+    end
+
+    test "recusa iniciar sem ninguém conectado", %{scope: scope, session: session} do
+      assert {:error, :no_connected_participants} = Games.start_game_session(scope, session, 0)
+
+      current = Repo.get!(GameSession, session.id)
+      assert current.status == :waiting
+      assert is_nil(current.started_at)
+    end
+
+    test "recusa iniciar com todos os inscritos desconectados", %{
+      scope: scope,
+      session: session
+    } do
+      fill_session(session, 3)
+
+      assert {:error, :no_connected_participants} = Games.start_game_session(scope, session, 0)
+      assert Repo.get!(GameSession, session.id).status == :waiting
+    end
+
+    test "recusa iniciar quando o único inscrito saiu", %{scope: scope, session: session} do
+      {participant, _token} = join!(nil, session, "Ana")
+      assert {:ok, _left} = Games.leave_game_session(participant)
+
+      assert {:error, :no_connected_participants} = Games.start_game_session(scope, session, 0)
+      assert Repo.get!(GameSession, session.id).status == :waiting
+    end
+
+    test "recusa que um participante inicie a sala", %{session: session} do
+      participant_scope = user_scope_fixture()
+      participant_fixture(session, %{user: participant_scope.user})
+
+      assert {:error, :unauthorized} = Games.start_game_session(participant_scope, session, 1)
+      assert Repo.get!(GameSession, session.id).status == :waiting
+    end
+
+    test "recusa que um terceiro autenticado inicie a sala", %{session: session} do
+      assert {:error, :unauthorized} = Games.start_game_session(user_scope_fixture(), session, 1)
+      assert Repo.get!(GameSession, session.id).status == :waiting
+    end
+
+    test "recusa iniciar uma sala já iniciada", %{scope: scope, session: session} do
+      started = start_session(session)
+
+      assert {:error, :invalid_transition} = Games.start_game_session(scope, started, 1)
+      assert Repo.get!(GameSession, session.id).started_at == started.started_at
+    end
+
+    test "recusa reabrir uma sala cancelada", %{scope: scope, session: session} do
+      cancelled = close_session(session, :cancelled)
+
+      assert {:error, :invalid_transition} = Games.start_game_session(scope, cancelled, 1)
+      assert Repo.get!(GameSession, session.id).status == :cancelled
+    end
+
+    test "recusa reabrir uma sala expirada", %{scope: scope, session: session} do
+      expired = close_session(session, :expired)
+
+      assert {:error, :invalid_transition} = Games.start_game_session(scope, expired, 1)
+      assert Repo.get!(GameSession, session.id).status == :expired
+    end
+
+    test "bloqueia novas inscrições depois do início", %{scope: scope, session: session} do
+      participant_fixture(session)
+
+      assert {:ok, started} = Games.start_game_session(scope, session, 1)
+
+      assert {:error, :session_not_joinable} =
+               Games.join_game_session(nil, started.join_code, %{"nickname" => "Bia"})
+    end
+
+    test "quem já estava inscrito ainda volta depois do início", %{
+      scope: scope,
+      session: session
+    } do
+      {participant, token} = join!(nil, session, "Ana")
+
+      assert {:ok, _started} = Games.start_game_session(scope, session, 1)
+
+      assert {:ok, back} = Games.rejoin_game_session(token)
+      assert back.id == participant.id
+    end
+  end
+
+  describe "cancel_game_session/2" do
+    setup :hosted_waiting_session
+
+    test "cancela a sala no lobby", %{scope: scope, session: session} do
+      assert {:ok, cancelled} = Games.cancel_game_session(scope, session)
+
+      assert cancelled.status == :cancelled
+      assert cancelled.finished_at
+      assert Repo.get!(GameSession, session.id).status == :cancelled
+    end
+
+    test "cancela a sala depois do início, preservando o começo", %{
+      scope: scope,
+      session: session
+    } do
+      started = start_session(session)
+
+      assert {:ok, cancelled} = Games.cancel_game_session(scope, started)
+
+      assert cancelled.status == :cancelled
+      assert cancelled.started_at == started.started_at
+      assert cancelled.finished_at
+    end
+
+    test "libera as participações presas sem marcar saída", %{scope: scope, session: session} do
+      present = participant_fixture(session)
+      gone = participant_fixture(session, %{left_at: minutes_ago(1), released_at: minutes_ago(1)})
+
+      assert {:ok, _cancelled} = Games.cancel_game_session(scope, session)
+
+      present = Repo.get!(Participant, present.id)
+      assert present.released_at
+      assert is_nil(present.left_at)
+
+      released_gone = Repo.get!(Participant, gone.id)
+      assert released_gone.released_at == gone.released_at
+      assert released_gone.left_at == gone.left_at
+    end
+
+    test "libera os participantes para entrar em outra sala", %{scope: scope, session: session} do
+      participant_scope = user_scope_fixture()
+      participant_fixture(session, %{user: participant_scope.user})
+
+      assert {:ok, _cancelled} = Games.cancel_game_session(scope, session)
+      refute Games.engaged_in_session?(participant_scope)
+
+      other = game_session_fixture(%{status: :waiting})
+
+      assert {:ok, _participant, _token} =
+               Games.join_game_session(participant_scope, other.join_code, %{"nickname" => "Ana"})
+    end
+
+    test "libera o host para abrir outra sala, com outro código", %{
+      scope: scope,
+      session: session,
+      quiz: quiz
+    } do
+      assert {:ok, _cancelled} = Games.cancel_game_session(scope, session)
+
+      assert {:ok, reopened} = Games.create_game_session(scope, quiz.id)
+      assert reopened.id != session.id
+      assert reopened.join_code != session.join_code
+    end
+
+    test "recusa que um participante cancele", %{session: session} do
+      participant_scope = user_scope_fixture()
+      participant_fixture(session, %{user: participant_scope.user})
+
+      assert {:error, :unauthorized} = Games.cancel_game_session(participant_scope, session)
+      assert Repo.get!(GameSession, session.id).status == :waiting
+    end
+
+    test "recusa que um terceiro autenticado cancele", %{session: session} do
+      assert {:error, :unauthorized} = Games.cancel_game_session(user_scope_fixture(), session)
+      assert Repo.get!(GameSession, session.id).status == :waiting
+    end
+
+    test "recusa cancelar uma sala já encerrada", %{scope: scope, session: session} do
+      cancelled = close_session(session, :cancelled)
+
+      assert {:error, :invalid_transition} = Games.cancel_game_session(scope, cancelled)
+    end
+  end
+
+  describe "expire_game_session/1" do
+    setup :hosted_waiting_session
+
+    test "expira uma sala em espera", %{session: session} do
+      assert {:ok, expired} = Games.expire_game_session(session)
+
+      assert expired.status == :expired
+      assert expired.finished_at
+      assert is_nil(expired.expires_at)
+    end
+
+    test "expira uma sala em andamento", %{session: session} do
+      started = start_session(session)
+
+      assert {:ok, expired} = Games.expire_game_session(started)
+
+      assert expired.status == :expired
+      assert expired.started_at == started.started_at
+    end
+
+    test "libera as participações ao expirar", %{session: session} do
+      participant = participant_fixture(session)
+
+      assert {:ok, _expired} = Games.expire_game_session(session)
+
+      participant = Repo.get!(Participant, participant.id)
+      assert participant.released_at
+      assert is_nil(participant.left_at)
+    end
+
+    test "libera o host ao expirar", %{scope: scope, session: session, quiz: quiz} do
+      assert {:ok, _expired} = Games.expire_game_session(session)
+
+      assert {:ok, _reopened} = Games.create_game_session(scope, quiz.id)
+    end
+
+    test "recusa expirar uma sala já encerrada", %{session: session} do
+      cancelled = close_session(session, :cancelled)
+
+      assert {:error, :invalid_transition} = Games.expire_game_session(cancelled)
+      assert Repo.get!(GameSession, session.id).status == :cancelled
+    end
+  end
+
+  describe "ausência do host" do
+    setup :hosted_waiting_session
+
+    test "a queda preserva a sala e agenda o prazo", %{session: session} do
+      at = now()
+
+      assert {:ok, away} = Games.mark_host_disconnected(session, at)
+
+      assert away.status == :waiting
+      assert away.host_disconnected_at == at
+      assert away.expires_at == DateTime.add(at, Games.host_absence_timeout(), :second)
+      assert Games.host_absence_timeout() == 300
+    end
+
+    test "o prazo vale igualmente para a sala em andamento", %{session: session} do
+      at = now()
+      started = start_session(session)
+
+      assert {:ok, away} = Games.mark_host_disconnected(started, at)
+
+      assert away.status == :in_progress
+      assert away.expires_at == DateTime.add(at, Games.host_absence_timeout(), :second)
+    end
+
+    test "uma nova queda não estende o prazo em curso", %{session: session} do
+      assert {:ok, away} = Games.mark_host_disconnected(session, minutes_ago(3))
+
+      assert {:ok, again} = Games.mark_host_disconnected(session, now())
+
+      assert again.host_disconnected_at == away.host_disconnected_at
+      assert again.expires_at == away.expires_at
+    end
+
+    test "o retorno do host limpa a queda e o prazo", %{session: session} do
+      assert {:ok, away} = Games.mark_host_disconnected(session, minutes_ago(2))
+
+      assert {:ok, back} = Games.mark_host_connected(away)
+
+      assert is_nil(back.host_disconnected_at)
+      assert is_nil(back.expires_at)
+      assert Games.seconds_until_expiration(back, now()) == nil
+    end
+
+    test "uma ausência depois do retorno vale cinco minutos cheios", %{session: session} do
+      assert {:ok, away} = Games.mark_host_disconnected(session, minutes_ago(4))
+      assert {:ok, back} = Games.mark_host_connected(away)
+
+      at = now()
+      assert {:ok, away_again} = Games.mark_host_disconnected(back, at)
+
+      assert away_again.expires_at == DateTime.add(at, Games.host_absence_timeout(), :second)
+      assert Games.seconds_until_expiration(away_again, at) == Games.host_absence_timeout()
+    end
+
+    test "o retorno de um host que nunca caiu não altera a sala", %{session: session} do
+      assert {:ok, unchanged} = Games.mark_host_connected(session)
+
+      assert is_nil(unchanged.host_disconnected_at)
+      assert unchanged.updated_at == session.updated_at
+    end
+
+    test "uma sala encerrada não ganha prazo de expiração", %{session: session} do
+      cancelled = close_session(session, :cancelled)
+
+      assert {:ok, unchanged} = Games.mark_host_disconnected(cancelled, now())
+
+      assert unchanged.status == :cancelled
+      assert is_nil(unchanged.host_disconnected_at)
+      assert is_nil(unchanged.expires_at)
+    end
+  end
+
+  describe "seconds_until_expiration/2" do
+    test "conta o que falta para o prazo vencer" do
+      at = now()
+      away = expiring_session(:waiting, at)
+
+      assert Games.seconds_until_expiration(away, DateTime.add(at, 60, :second)) ==
+               Games.host_absence_timeout() - 60
+    end
+
+    test "devolve nil quando não há prazo em curso" do
+      assert Games.seconds_until_expiration(game_session_fixture(), now()) == nil
+    end
+
+    test "devolve zero para um prazo já vencido" do
+      away = expiring_session(:waiting, minutes_ago(30))
+
+      assert Games.seconds_until_expiration(away, now()) == 0
+    end
+  end
+
+  describe "list_expired_sessions/1" do
+    test "devolve apenas as salas ativas com prazo vencido" do
+      overdue_waiting = expiring_session(:waiting, minutes_ago(6))
+      overdue_running = expiring_session(:in_progress, minutes_ago(6))
+      _still_in_time = expiring_session(:waiting, now())
+      _no_deadline = game_session_fixture(%{status: :waiting})
+
+      ids = Enum.map(Games.list_expired_sessions(now()), & &1.id)
+
+      assert Enum.sort(ids) == Enum.sort([overdue_waiting.id, overdue_running.id])
+    end
+
+    test "ignora as salas já encerradas, mesmo com prazo vencido" do
+      cancelled = closed_session_with_deadline(:cancelled, minutes_ago(10))
+      expired = closed_session_with_deadline(:expired, minutes_ago(10))
+
+      assert Games.list_expired_sessions(now()) == []
+      assert Repo.get!(GameSession, cancelled.id).status == :cancelled
+      assert Repo.get!(GameSession, expired.id).status == :expired
+    end
+
+    test "expira, na primeira varredura, o prazo vencido enquanto a aplicação esteve fora" do
+      away = expiring_session(:waiting, minutes_ago(35))
+      participant = participant_fixture(away)
+
+      assert [found] = Games.list_expired_sessions(now())
+      assert found.id == away.id
+      assert found.expires_at == away.expires_at
+
+      assert {:ok, expired} = Games.expire_game_session(found)
+      assert expired.status == :expired
+
+      assert Games.list_expired_sessions(now()) == []
+      assert Repo.get!(Participant, participant.id).released_at
+    end
+  end
+
+  describe "encerramento e início sob concorrência" do
+    setup :hosted_waiting_session
+
+    test "host e varredura encerrando juntos produzem um único encerramento", %{
+      scope: scope,
+      session: session
+    } do
+      assert {:ok, away} = Games.mark_host_disconnected(session, minutes_ago(6))
+      participant_fixture(away)
+
+      results =
+        in_parallel([:cancel, :expire], fn
+          :cancel -> Games.cancel_game_session(scope, away)
+          :expire -> Games.expire_game_session(away)
+        end)
+
+      assert Enum.count(results, &match?({:ok, %GameSession{}}, &1)) == 1
+      assert Enum.count(results, &(&1 == {:error, :invalid_transition})) == 1
+
+      current = Repo.get!(GameSession, session.id)
+      assert current.status in [:cancelled, :expired]
+      assert current.finished_at
+      assert is_nil(current.expires_at)
+    end
+
+    test "duas chamadas de início produzem um único started_at", %{
+      scope: scope,
+      session: session
+    } do
+      participant_fixture(session)
+
+      results =
+        in_parallel([1, 2], fn _attempt -> Games.start_game_session(scope, session, 1) end)
+
+      started =
+        Enum.filter(results, fn
+          {:ok, %GameSession{}} -> true
+          _refused -> false
+        end)
+
+      assert [{:ok, %GameSession{} = single}] = started
+      assert Enum.count(results, &(&1 == {:error, :invalid_transition})) == 1
+
+      current = Repo.get!(GameSession, session.id)
+      assert current.status == :in_progress
+      assert current.started_at == single.started_at
+    end
+  end
+
   defp join!(scope, session, nickname) do
     assert {:ok, participant, token} =
              Games.join_game_session(scope, session.join_code, %{"nickname" => nickname})
@@ -1479,6 +1889,34 @@ defmodule LiveQuiz.GamesTest do
 
   defp active_participations_of(scope) do
     from p in Participant, where: p.user_id == ^scope.user.id, where: is_nil(p.released_at)
+  end
+
+  defp hosted_waiting_session(_context) do
+    scope = user_scope_fixture()
+    quiz = playable_quiz(scope)
+
+    %{
+      scope: scope,
+      quiz: quiz,
+      session: game_session_fixture(%{host: scope.user, quiz: quiz, status: :waiting})
+    }
+  end
+
+  defp expiring_session(status, at) do
+    session = game_session_fixture(%{status: status})
+
+    assert {:ok, away} = Games.mark_host_disconnected(session, at)
+
+    away
+  end
+
+  # Closing a room drops its deadline, so a closed room carrying an overdue one
+  # has to be forged — it is exactly what the sweep must refuse to pick up.
+  defp closed_session_with_deadline(status, at) do
+    %{status: status}
+    |> game_session_fixture()
+    |> GameSession.host_presence_changeset(%{host_disconnected_at: at, expires_at: at})
+    |> Repo.update!()
   end
 
   defp waiting_session(_context) do
