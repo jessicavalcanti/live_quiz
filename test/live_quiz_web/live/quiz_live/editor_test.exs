@@ -7,6 +7,7 @@ defmodule LiveQuizWeb.QuizLive.EditorTest do
   import Phoenix.LiveViewTest
 
   alias LiveQuiz.Accounts.Scope
+  alias LiveQuiz.Games
   alias LiveQuiz.Quizzes
 
   setup :register_and_log_in_user
@@ -743,8 +744,89 @@ defmodule LiveQuizWeb.QuizLive.EditorTest do
     end
   end
 
-  # A sinalização visual do bloqueio é da F2-08; o que se garante aqui é que a
-  # tela recusa a escrita com um recado, em vez de estourar no match do
+  describe "sinalização de quiz com sala ativa" do
+    setup %{scope: scope, quiz: quiz} do
+      %{question: question_fixture(scope, quiz, %{text: "Pergunta A"})}
+    end
+
+    test "avisa e desabilita todas as ações de alteração", %{
+      conn: conn,
+      quiz: quiz,
+      question: question
+    } do
+      game_session_fixture(%{quiz: quiz, status: :waiting})
+
+      {:ok, lv, _html} = live(conn, ~p"/quizzes/#{quiz}/edit")
+
+      assert has_element?(lv, "#quiz-locked-notice")
+      assert lv |> element("#quiz-locked-notice") |> render() =~ "Este quiz possui uma sala ativa"
+
+      assert has_element?(lv, "#save-quiz-button[disabled]")
+      assert has_element?(lv, "#add-question-button[disabled]")
+      assert has_element?(lv, "#edit-question-#{question.id}[disabled]")
+      assert has_element?(lv, "#delete-question-#{question.id}[disabled]")
+      assert has_element?(lv, "#move-question-up-#{question.id}[disabled]")
+      assert has_element?(lv, "#move-question-down-#{question.id}[disabled]")
+
+      refute has_element?(
+               lv,
+               ~s{a[href="/quizzes/#{quiz.id}/questions/#{question.id}/edit"]}
+             )
+    end
+
+    test "os botões desabilitados apontam para a explicação", %{
+      conn: conn,
+      quiz: quiz,
+      question: question
+    } do
+      game_session_fixture(%{quiz: quiz, status: :in_progress})
+
+      {:ok, lv, _html} = live(conn, ~p"/quizzes/#{quiz}/edit")
+
+      for id <- [
+            "save-quiz-button",
+            "add-question-button",
+            "edit-question-#{question.id}",
+            "delete-question-#{question.id}"
+          ] do
+        assert has_element?(lv, ~s{##{id}[aria-disabled="true"]})
+        assert has_element?(lv, ~s{##{id}[aria-describedby="quiz-locked-notice"]})
+      end
+    end
+
+    test "sem sala ativa nada fica bloqueado", %{conn: conn, quiz: quiz, question: question} do
+      {:ok, lv, _html} = live(conn, ~p"/quizzes/#{quiz}/edit")
+
+      refute has_element?(lv, "#quiz-locked-notice")
+      refute has_element?(lv, "#save-quiz-button[disabled]")
+      refute has_element?(lv, "#add-question-button[disabled]")
+      refute has_element?(lv, "#delete-question-#{question.id}[disabled]")
+      refute has_element?(lv, "#edit-question-#{question.id}")
+    end
+
+    test "o bloqueio some depois que a sala é cancelada", %{
+      conn: conn,
+      scope: scope,
+      quiz: quiz,
+      question: question
+    } do
+      session = game_session_fixture(%{host: scope.user, quiz: quiz, status: :waiting})
+
+      {:ok, locked, _html} = live(conn, ~p"/quizzes/#{quiz}/edit")
+      assert has_element?(locked, "#quiz-locked-notice")
+
+      {:ok, _cancelled} = Games.cancel_game_session(scope, session)
+
+      {:ok, released, _html} = live(conn, ~p"/quizzes/#{quiz}/edit")
+
+      refute has_element?(released, "#quiz-locked-notice")
+      refute has_element?(released, "#delete-question-#{question.id}[disabled]")
+      refute has_element?(released, "#save-quiz-button[disabled]")
+    end
+  end
+
+  # A sinalização visual do bloqueio está no bloco acima; o que se garante aqui
+  # é que a tela recusa a escrita com um recado, em vez de estourar no match do
   # contexto. A sala é aberta depois do mount justamente para exercitar esse
   # caminho: os botões ainda estão na tela quando a regra passa a valer.
   describe "quiz com sala ativa" do

@@ -212,6 +212,15 @@ defmodule LiveQuizWeb.QuizLive.Editor do
         <:subtitle>Ajuste o título e a descrição do seu quiz.</:subtitle>
       </.header>
 
+      <p
+        :if={@quiz.locked?}
+        id="quiz-locked-notice"
+        role="status"
+        class="mt-6 rounded-lg border border-warning bg-warning/10 p-4 text-warning-content"
+      >
+        {locked_hint()}. As alterações ficam bloqueadas até a sala ser encerrada.
+      </p>
+
       <.focus_on_error target={@invalid_field} token={@attempt} />
 
       <.form
@@ -236,7 +245,16 @@ defmodule LiveQuizWeb.QuizLive.Editor do
         </p>
 
         <div class="mt-4">
-          <.button variant="primary" phx-disable-with="Salvando...">Salvar</.button>
+          <.button
+            id="save-quiz-button"
+            variant="primary"
+            phx-disable-with="Salvando..."
+            disabled={@quiz.locked?}
+            aria-disabled={to_string(@quiz.locked?)}
+            aria-describedby={locked_target(@quiz)}
+          >
+            Salvar
+          </.button>
         </div>
       </.form>
 
@@ -249,7 +267,7 @@ defmodule LiveQuizWeb.QuizLive.Editor do
 
           <div class="flex flex-col items-start gap-1 sm:items-end">
             <.button
-              :if={not limit_reached?(@quiz)}
+              :if={not blocked?(@quiz)}
               id="add-question-button"
               variant="primary"
               patch={~p"/quizzes/#{@quiz}/questions/new"}
@@ -259,10 +277,12 @@ defmodule LiveQuizWeb.QuizLive.Editor do
             </.button>
 
             <button
-              :if={limit_reached?(@quiz)}
+              :if={blocked?(@quiz)}
               id="add-question-button"
               type="button"
               disabled
+              aria-disabled="true"
+              aria-describedby={blocked_target(@quiz)}
               class="btn btn-primary btn-disabled"
             >
               Adicionar pergunta
@@ -279,6 +299,7 @@ defmodule LiveQuizWeb.QuizLive.Editor do
 
           <div class="mt-4">
             <.button
+              :if={not @quiz.locked?}
               id="first-question-button"
               variant="primary"
               patch={~p"/quizzes/#{@quiz}/questions/new"}
@@ -310,7 +331,8 @@ defmodule LiveQuizWeb.QuizLive.Editor do
               <button
                 type="button"
                 id={"move-question-up-#{question.id}"}
-                disabled={question.position == 1}
+                disabled={question.position == 1 or @quiz.locked?}
+                aria-describedby={locked_target(@quiz)}
                 phx-click="move_question_up"
                 phx-value-id={question.id}
                 phx-disable-with="…"
@@ -323,7 +345,8 @@ defmodule LiveQuizWeb.QuizLive.Editor do
               <button
                 type="button"
                 id={"move-question-down-#{question.id}"}
-                disabled={question.position == last_position(@quiz)}
+                disabled={question.position == last_position(@quiz) or @quiz.locked?}
+                aria-describedby={locked_target(@quiz)}
                 phx-click="move_question_down"
                 phx-value-id={question.id}
                 phx-disable-with="…"
@@ -334,6 +357,7 @@ defmodule LiveQuizWeb.QuizLive.Editor do
               </button>
 
               <.link
+                :if={not @quiz.locked?}
                 patch={~p"/quizzes/#{@quiz}/questions/#{question}/edit"}
                 phx-click={JS.push_focus()}
                 class="btn btn-ghost btn-sm"
@@ -342,10 +366,25 @@ defmodule LiveQuizWeb.QuizLive.Editor do
               </.link>
 
               <button
+                :if={@quiz.locked?}
+                type="button"
+                id={"edit-question-#{question.id}"}
+                disabled
+                aria-disabled="true"
+                aria-describedby={locked_target(@quiz)}
+                class="btn btn-ghost btn-sm btn-disabled"
+              >
+                Editar
+              </button>
+
+              <button
                 type="button"
                 id={"delete-question-#{question.id}"}
+                disabled={@quiz.locked?}
+                aria-disabled={to_string(@quiz.locked?)}
+                aria-describedby={locked_target(@quiz)}
                 phx-click={JS.push_focus() |> JS.push("delete_question", value: %{id: question.id})}
-                class="btn btn-ghost btn-sm text-error"
+                class={["btn btn-ghost btn-sm text-error", @quiz.locked? && "btn-disabled"]}
               >
                 Excluir
               </button>
@@ -419,9 +458,21 @@ defmodule LiveQuizWeb.QuizLive.Editor do
   defp limit_reached?(%{questions: questions}) when is_list(questions),
     do: length(questions) >= Quizzes.max_questions()
 
+  # Two different reasons keep the "add question" affordance shut, and each one
+  # points the screen reader at the sentence that explains it.
+  defp blocked?(quiz), do: limit_reached?(quiz) or quiz.locked?
+
+  defp blocked_target(quiz) do
+    if limit_reached?(quiz), do: "question-limit-hint", else: locked_target(quiz)
+  end
+
+  defp locked_target(quiz), do: if(quiz.locked?, do: "quiz-locked-notice")
+
   defp limit_message, do: "Este quiz já atingiu o limite de #{Quizzes.max_questions()} perguntas"
 
   defp locked_message, do: "Este quiz possui uma sala ativa e não pode ser alterado"
+
+  defp locked_hint, do: "Este quiz possui uma sala ativa"
 
   defp limit_hint, do: "Limite de #{Quizzes.max_questions()} perguntas atingido"
 
