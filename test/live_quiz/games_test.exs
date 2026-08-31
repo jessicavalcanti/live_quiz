@@ -939,6 +939,51 @@ defmodule LiveQuiz.GamesTest do
     end
   end
 
+  describe "get_participation_by_token/1" do
+    setup :waiting_session
+
+    test "encontra a participação a partir do token em claro", %{session: session} do
+      assert {:ok, participant, token} =
+               Games.join_game_session(nil, session.join_code, %{"nickname" => "Ana"})
+
+      assert {:ok, found} = Games.get_participation_by_token(token)
+      assert found.id == participant.id
+    end
+
+    test "continua encontrando a participação de uma sala encerrada", %{session: session} do
+      assert {:ok, participant, token} =
+               Games.join_game_session(nil, session.join_code, %{"nickname" => "Ana"})
+
+      session |> GameSession.status_changeset(:cancelled) |> Repo.update!()
+
+      assert {:ok, found} = Games.get_participation_by_token(token)
+      assert found.id == participant.id
+      assert Games.get_participant_by_token(token) == {:error, :not_found}
+    end
+
+    test "continua encontrando a participação de quem saiu", %{session: session} do
+      assert {:ok, participant, token} =
+               Games.join_game_session(nil, session.join_code, %{"nickname" => "Ana"})
+
+      {:ok, _participant} = Games.leave_game_session(participant)
+
+      assert {:ok, found} = Games.get_participation_by_token(token)
+      assert found.id == participant.id
+    end
+
+    test "devolve not_found para um token inexistente" do
+      {token, _hash} = ParticipantToken.build()
+
+      assert Games.get_participation_by_token(token) == {:error, :not_found}
+    end
+
+    test "devolve not_found para um token malformado" do
+      assert Games.get_participation_by_token("não é token") == {:error, :not_found}
+      assert Games.get_participation_by_token(nil) == {:error, :not_found}
+      assert Games.get_participation_by_token("") == {:error, :not_found}
+    end
+  end
+
   describe "list_participants/2" do
     setup :waiting_session
 

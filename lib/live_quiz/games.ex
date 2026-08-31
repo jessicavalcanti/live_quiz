@@ -354,6 +354,27 @@ defmodule LiveQuiz.Games do
   end
 
   @doc """
+  Fetches a participation from the clear token, **live room or already over**.
+
+  `get_participant_by_token/1` stops answering the moment a room ends, which is
+  the right answer for anything that acts on a live participation and the wrong
+  one for the door of the API: a credential whose room was cancelled is not an
+  unknown credential, and refusing it there would flatten into a single `401`
+  the very difference `rejoin_game_session/2` exists to report as "esta sala foi
+  encerrada".
+
+  Same guarantees as its live counterpart. The value comes from outside, so an
+  unreadable or unknown token is `{:error, :not_found}` and never an exception.
+  """
+  @spec get_participation_by_token(term()) :: {:ok, Participant.t()} | {:error, :not_found}
+  def get_participation_by_token(token) do
+    case ParticipantToken.hash(token) do
+      {:ok, hash} -> fetch_participant(hash)
+      :error -> {:error, :not_found}
+    end
+  end
+
+  @doc """
   Fetches the participation a credential still holds **in the lobby of one room**.
 
   The join screen asks this before offering the form: someone who is already in
@@ -1087,6 +1108,16 @@ defmodule LiveQuiz.Games do
     Participant
     |> where([p], p.access_token_hash in ^hashes and is_nil(p.released_at))
     |> Repo.all()
+  end
+
+  defp fetch_participant(hash) do
+    Participant
+    |> where([p], p.access_token_hash == ^hash)
+    |> Repo.one()
+    |> case do
+      nil -> {:error, :not_found}
+      %Participant{} = participant -> {:ok, participant}
+    end
   end
 
   defp fetch_live_participant(hash) do
