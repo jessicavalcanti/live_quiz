@@ -50,6 +50,13 @@ defmodule LiveQuiz.Games do
   `claim_host_connection/2` for the host — only moves the live access from one
   connection to another, always with an `UPDATE` and never with an `INSERT`.
 
+  Everything a room does is announced on `topic/1` after the transaction that
+  did it has committed (AD-31): a subscriber woken by `{:participant_joined, p}`
+  that reads the database has to find the participation there. Events are
+  tuples carrying structs, so a subscriber pattern matches them and the
+  compiler has something to complain about when one of them changes. Nothing
+  outside this module publishes them.
+
   ## Test seam
 
   `:join_code_generator` in the `:live_quiz` application environment replaces
@@ -68,6 +75,7 @@ defmodule LiveQuiz.Games do
   alias LiveQuiz.Games.JoinCode
   alias LiveQuiz.Games.Participant
   alias LiveQuiz.Games.ParticipantToken
+  alias LiveQuiz.Games.Presence
   alias LiveQuiz.Quizzes
   alias LiveQuiz.Quizzes.Quiz
   alias LiveQuiz.Repo
@@ -81,6 +89,8 @@ defmodule LiveQuiz.Games do
   # `count(*) < 25` a decision instead of a guess, and it never blocks a join
   # into a different room.
   @seats_lock_class 2
+
+  @topic_prefix "game_session:"
 
   @max_participants 25
   # How long a room outlives the host being away, in seconds. It is a domain
@@ -231,8 +241,12 @@ defmodule LiveQuiz.Games do
       end
     end)
     |> case do
-      {:ok, {participant, token}} -> {:ok, participant, token}
-      {:error, reason} -> {:error, reason}
+      {:ok, {participant, token}} ->
+        broadcast(participant.game_session_id, {:participant_joined, participant})
+        {:ok, participant, token}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -276,7 +290,11 @@ defmodule LiveQuiz.Games do
 
       # Stamping `released_at` only takes the row out of the one-room-per-account
       # index, so there is no constraint left for this update to violate.
-      {:ok, Repo.update!(changeset)}
+      participant = Repo.update!(changeset)
+
+      broadcast(participant.game_session_id, {:participant_left, participant})
+
+      {:ok, participant}
     else
       {:ok, participant}
     end
@@ -316,6 +334,14 @@ defmodule LiveQuiz.Games do
         {:error, reason} -> Repo.rollback(reason)
       end
     end)
+    |> case do
+      {:ok, participant} ->
+        broadcast(participant.game_session_id, {:participant_rejoined, participant})
+        {:ok, participant}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
   end
 
   @doc """
@@ -336,6 +362,8 @@ defmodule LiveQuiz.Games do
       participant
       |> Participant.connection_changeset(%{connection_id: connection_id})
       |> Repo.update!()
+
+    broadcast(participant.game_session_id, {:access_transferred, participant.id, connection_id})
 
     {:ok, participant, connection_id}
   end
@@ -366,6 +394,8 @@ defmodule LiveQuiz.Games do
           |> GameSession.host_presence_changeset(%{host_connection_id: connection_id})
           |> Repo.update!()
 
+        broadcast(session.id, {:host_access_transferred, connection_id})
+
         {:ok, session, connection_id}
     end
   end
@@ -392,8 +422,10 @@ defmodule LiveQuiz.Games do
   def start_game_session(%Scope{} = scope, %GameSession{} = session, connected_count)
       when is_integer(connected_count) and connected_count >= 0 do
     with {:ok, session} <- fetch_hosted_session(scope, session),
-         :ok <- ensure_startable(session, connected_count) do
-      go_live(session)
+         :ok <- ensure_startable(session, connected_count),
+         {:ok, session} <- go_live(session) do
+      broadcast(session.id, {:game_started, session})
+      {:ok, session}
     end
   end
 
@@ -409,7 +441,7 @@ defmodule LiveQuiz.Games do
           {:ok, GameSession.t()} | {:error, :unauthorized} | {:error, :invalid_transition}
   def cancel_game_session(%Scope{} = scope, %GameSession{} = session) do
     case fetch_hosted_session(scope, session) do
-      {:ok, session} -> close_session(session, :cancelled)
+      {:ok, session} -> close_and_announce(session, :cancelled, :game_cancelled)
       {:error, :unauthorized} = error -> error
     end
   end
@@ -425,7 +457,9 @@ defmodule LiveQuiz.Games do
   """
   @spec expire_game_session(GameSession.t()) ::
           {:ok, GameSession.t()} | {:error, :invalid_transition}
-  def expire_game_session(%GameSession{} = session), do: close_session(session, :expired)
+  def expire_game_session(%GameSession{} = session) do
+    close_and_announce(session, :expired, :game_expired)
+  end
 
   @doc """
   Records that the host lost the room and starts the countdown to expiration.
@@ -601,6 +635,111 @@ defmodule LiveQuiz.Games do
   @doc "How many participations a room accepts. There is no waiting list."
   @spec max_participants() :: pos_integer()
   def max_participants, do: @max_participants
+
+  @doc "The PubSub topic every event of a room is published on."
+  @spec topic(integer()) :: String.t()
+  def topic(session_id), do: "#{@topic_prefix}#{session_id}"
+
+  @doc """
+  Reads the room back out of a topic built by `topic/1`.
+
+  Answers `:error` for anything else, so a presence diff on a topic this
+  context did not build is ignored instead of crashing the tracker.
+  """
+  @spec session_id_from_topic(String.t()) :: {:ok, integer()} | :error
+  def session_id_from_topic(@topic_prefix <> id) do
+    case Integer.parse(id) do
+      {id, ""} -> {:ok, id}
+      _not_an_id -> :error
+    end
+  end
+
+  def session_id_from_topic(_topic), do: :error
+
+  @doc """
+  Subscribes the calling process to the events of a room.
+
+  A LiveView calls it in the connected mount and nowhere else: subscribing in
+  the disconnected mount would leave the static render holding a subscription
+  no process is going to consume.
+  """
+  @spec subscribe(integer()) :: :ok | {:error, term()}
+  def subscribe(session_id), do: Phoenix.PubSub.subscribe(LiveQuiz.PubSub, topic(session_id))
+
+  @doc """
+  The lobby list of `list_participants/2` with the virtual field `connected`
+  filled in from the presence.
+
+  Same authorization: only the host or someone taking part in the room may read
+  it. Being disconnected keeps the person on the list — the seat is still
+  theirs (AD-27) — while leaving takes them off it, connected or not.
+  """
+  @spec list_participants_with_presence(GameSession.t(), Scope.t() | Participant.t() | nil) ::
+          {:ok, [Participant.t()]} | {:error, :unauthorized}
+  def list_participants_with_presence(%GameSession{} = session, viewer) do
+    with {:ok, participants} <- list_participants(session, viewer) do
+      connected = Presence.connected_participant_ids(session.id)
+
+      {:ok, Enum.map(participants, &%{&1 | connected: MapSet.member?(connected, &1.id)})}
+    end
+  end
+
+  @doc """
+  Records that the host has been away long enough to start the countdown, and
+  announces it.
+
+  Called by `LiveQuiz.Games.HostMonitor` once the grace period is over, never
+  by a LiveView. A room that is already counting down, or already closed, is
+  left exactly as it is and nothing is announced — which is what makes the
+  monitor free to ask again.
+  """
+  @spec record_host_absence(integer(), DateTime.t()) :: {:ok, GameSession.t()} | :ignored
+  def record_host_absence(session_id, at \\ DateTime.utc_now()) do
+    with %GameSession{host_disconnected_at: nil} = session <- fetch_live_session(session_id),
+         {:ok, %GameSession{expires_at: expires_at} = session} when not is_nil(expires_at) <-
+           mark_host_disconnected(session, at) do
+      broadcast(session_id, {:host_disconnected, expires_at})
+      {:ok, session}
+    else
+      _already_counting_or_closed -> :ignored
+    end
+  end
+
+  @doc """
+  Records the host coming back, drops the pending deadline and announces it.
+
+  Announces only when there was a deadline to drop, so the host merely opening
+  the lobby says nothing to anybody. A deadline written before a restart is
+  dropped here too: the monitor has no memory of it, the database does.
+  """
+  @spec record_host_return(integer()) :: {:ok, GameSession.t()} | :ignored
+  def record_host_return(session_id) do
+    case fetch_live_session(session_id) do
+      %GameSession{host_disconnected_at: nil, expires_at: nil} ->
+        :ignored
+
+      %GameSession{} = session ->
+        {:ok, session} = mark_host_connected(session)
+        broadcast(session_id, {:host_connected, nil})
+        {:ok, session}
+
+      nil ->
+        :ignored
+    end
+  end
+
+  # The single place an event leaves this module, always after the transaction
+  # that produced it (AD-31).
+  defp broadcast(session_id, event) do
+    Phoenix.PubSub.broadcast(LiveQuiz.PubSub, topic(session_id), event)
+  end
+
+  defp fetch_live_session(session_id) do
+    GameSession
+    |> where([s], s.id == ^session_id)
+    |> live()
+    |> Repo.one()
+  end
 
   defp ensure_playable(%Quiz{} = quiz) do
     if Quizzes.playable?(quiz), do: :ok, else: {:error, :quiz_not_playable}
@@ -919,6 +1058,20 @@ defmodule LiveQuiz.Games do
     case Repo.update_all(query, set: [status: :in_progress, started_at: at, updated_at: at]) do
       {1, [session]} -> {:ok, session}
       {0, _unchanged} -> {:error, :invalid_transition}
+    end
+  end
+
+  # Both ways of closing a room share the transition and differ only in the
+  # event they announce, which is what tells a lobby whether to say "cancelled"
+  # or "expired". The broadcast is outside the transaction on purpose (AD-31).
+  defp close_and_announce(%GameSession{} = session, status, event) do
+    case close_session(session, status) do
+      {:ok, session} ->
+        broadcast(session.id, {event, session})
+        {:ok, session}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 

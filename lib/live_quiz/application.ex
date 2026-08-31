@@ -12,8 +12,13 @@ defmodule LiveQuiz.Application do
       LiveQuiz.Repo,
       {DNSCluster, query: Application.get_env(:live_quiz, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: LiveQuiz.PubSub},
-      # Start a worker by calling: LiveQuiz.Worker.start_link(arg)
-      # {LiveQuiz.Worker, arg},
+      # Who is connected to a room, the grace period of an absent host and the
+      # sweep that closes the rooms whose deadline ran out. All three come
+      # after the PubSub they use and before the endpoint, so a browser never
+      # reaches a room whose presence is not up yet.
+      LiveQuiz.Games.Presence,
+      LiveQuiz.Games.HostMonitor,
+      LiveQuiz.Games.ExpirationSweeper,
       # Start to serve requests, typically the last entry
       LiveQuizWeb.Endpoint
     ]

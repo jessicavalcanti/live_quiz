@@ -28,6 +28,15 @@ config :live_quiz, LiveQuizWeb.Endpoint,
 config :live_quiz, LiveQuiz.Accounts.Guardian,
   secret_key: "1fTLJh9jj4MBtLmE5jCO5ujxW7NT8DYsoplU0tivequcjlouqSKDMhmgE3Luw609"
 
+# O sweeper de expiracao nao roda sozinho na suite: os testes chamam
+# `ExpirationSweeper.sweep_now/0` quando querem uma varredura.
+config :live_quiz, LiveQuiz.Games.ExpirationSweeper, enabled: false
+
+# A carencia do monitor da aplicacao fica longa de proposito: quem testa
+# temporizacao sobe um monitor proprio, com janela curta, e nenhuma espera
+# solta sobra de um teste para o outro.
+config :live_quiz, LiveQuiz.Games.HostMonitor, grace_period: 60_000
+
 # In test we don't send emails
 config :live_quiz, LiveQuiz.Mailer, adapter: Swoosh.Adapters.Test
 

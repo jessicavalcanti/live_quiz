@@ -1875,6 +1875,327 @@ defmodule LiveQuiz.GamesTest do
     {participant, token}
   end
 
+  describe "topic/1, session_id_from_topic/1 e subscribe/1" do
+    setup :waiting_session
+
+    test "o tópico é o da sala", %{session: session} do
+      assert Games.topic(session.id) == "game_session:#{session.id}"
+    end
+
+    test "o tópico volta a ser o id da sala", %{session: session} do
+      assert Games.session_id_from_topic(Games.topic(session.id)) == {:ok, session.id}
+    end
+
+    test "um tópico que não é de sala é recusado" do
+      assert Games.session_id_from_topic("game_session:abc") == :error
+      assert Games.session_id_from_topic("game_session:1x") == :error
+      assert Games.session_id_from_topic("outra_coisa:1") == :error
+      assert Games.session_id_from_topic("") == :error
+    end
+
+    test "o inscrito recebe os eventos da sala", %{session: session} do
+      assert :ok = Games.subscribe(session.id)
+
+      assert {:ok, participant, _token} =
+               Games.join_game_session(nil, session.join_code, %{"nickname" => "Ana"})
+
+      assert_receive {:participant_joined, %Participant{id: id}}
+      assert id == participant.id
+    end
+
+    test "quem não se inscreveu não recebe nada", %{session: session} do
+      other_session = game_session_fixture(%{status: :waiting})
+      assert :ok = Games.subscribe(other_session.id)
+
+      assert {:ok, _participant, _token} =
+               Games.join_game_session(nil, session.join_code, %{"nickname" => "Ana"})
+
+      refute_receive {:participant_joined, _participant}, 50
+    end
+  end
+
+  describe "eventos de entrada, saída e retorno" do
+    setup :waiting_session
+
+    test "a entrada é publicada depois do commit", %{session: session} do
+      :ok = Games.subscribe(session.id)
+
+      assert {:ok, participant, _token} =
+               Games.join_game_session(nil, session.join_code, %{"nickname" => "Ana"})
+
+      assert_receive {:participant_joined, %Participant{} = announced}
+      assert announced.id == participant.id
+      assert announced.nickname == "Ana"
+
+      # O evento só vale se quem for ao banco por causa dele encontrar a linha.
+      assert Repo.get(Participant, announced.id)
+    end
+
+    test "a entrada recusada não publica nada", %{session: session} do
+      :ok = Games.subscribe(session.id)
+
+      assert {:error, :session_not_found} =
+               Games.join_game_session(nil, "ZZZZZZ", %{"nickname" => "Ana"})
+
+      assert {:error, %Ecto.Changeset{}} =
+               Games.join_game_session(nil, session.join_code, %{"nickname" => "A"})
+
+      refute_receive {:participant_joined, _participant}, 50
+    end
+
+    test "o apelido tomado não publica nada", %{session: session} do
+      participant_fixture(session, %{nickname: "Ana"})
+      :ok = Games.subscribe(session.id)
+
+      assert {:error, :nickname_taken} =
+               Games.join_game_session(nil, session.join_code, %{"nickname" => "ana"})
+
+      refute_receive {:participant_joined, _participant}, 50
+    end
+
+    test "a saída é publicada", %{session: session} do
+      participant = participant_fixture(session)
+      :ok = Games.subscribe(session.id)
+
+      assert {:ok, left} = Games.leave_game_session(participant)
+
+      assert_receive {:participant_left, %Participant{id: id}}
+      assert id == left.id
+    end
+
+    test "sair de novo não publica outra vez", %{session: session} do
+      participant = participant_fixture(session, %{left_at: now(), released_at: now()})
+      :ok = Games.subscribe(session.id)
+
+      assert {:ok, _unchanged} = Games.leave_game_session(participant)
+
+      refute_receive {:participant_left, _participant}, 50
+    end
+
+    test "o retorno é publicado", %{session: session} do
+      assert {:ok, participant, token} =
+               Games.join_game_session(nil, session.join_code, %{"nickname" => "Ana"})
+
+      assert {:ok, _left} = Games.leave_game_session(participant)
+      :ok = Games.subscribe(session.id)
+
+      assert {:ok, back} = Games.rejoin_game_session(token)
+
+      assert_receive {:participant_rejoined, %Participant{id: id}}
+      assert id == back.id
+      assert is_nil(Repo.get(Participant, id).left_at)
+    end
+
+    test "o retorno recusado não publica nada", %{session: session} do
+      :ok = Games.subscribe(session.id)
+
+      assert {:error, :not_found} = Games.rejoin_game_session("credencial inventada")
+
+      refute_receive {:participant_rejoined, _participant}, 50
+    end
+
+    test "a transferência de acesso é publicada", %{session: session} do
+      participant = participant_fixture(session)
+      :ok = Games.subscribe(session.id)
+
+      assert {:ok, _participant, connection_id} =
+               Games.claim_participant_connection(participant)
+
+      assert_receive {:access_transferred, participant_id, ^connection_id}
+      assert participant_id == participant.id
+    end
+
+    test "a transferência do host é publicada", %{session: session, host: host} do
+      scope = user_scope_fixture(host)
+      :ok = Games.subscribe(session.id)
+
+      assert {:ok, _session, connection_id} = Games.claim_host_connection(scope, session)
+
+      assert_receive {:host_access_transferred, ^connection_id}
+    end
+
+    test "a transferência recusada a um não-host não publica nada", %{session: session} do
+      :ok = Games.subscribe(session.id)
+
+      assert {:error, :unauthorized} =
+               Games.claim_host_connection(user_scope_fixture(), session)
+
+      refute_receive {:host_access_transferred, _connection_id}, 50
+    end
+  end
+
+  describe "eventos de ciclo de vida" do
+    setup :hosted_waiting_session
+
+    test "o início é publicado", %{scope: scope, session: session} do
+      :ok = Games.subscribe(session.id)
+
+      assert {:ok, started} = Games.start_game_session(scope, session, 1)
+
+      assert_receive {:game_started, %GameSession{id: id, status: :in_progress}}
+      assert id == started.id
+    end
+
+    test "o início recusado não publica nada", %{scope: scope, session: session} do
+      :ok = Games.subscribe(session.id)
+
+      assert {:error, :no_connected_participants} =
+               Games.start_game_session(scope, session, 0)
+
+      assert {:error, :unauthorized} =
+               Games.start_game_session(user_scope_fixture(), session, 1)
+
+      refute_receive {:game_started, _session}, 50
+    end
+
+    test "o cancelamento é publicado", %{scope: scope, session: session} do
+      :ok = Games.subscribe(session.id)
+
+      assert {:ok, cancelled} = Games.cancel_game_session(scope, session)
+
+      assert_receive {:game_cancelled, %GameSession{id: id, status: :cancelled}}
+      assert id == cancelled.id
+    end
+
+    test "o cancelamento por quem não hospeda não publica nada", %{session: session} do
+      :ok = Games.subscribe(session.id)
+
+      assert {:error, :unauthorized} =
+               Games.cancel_game_session(user_scope_fixture(), session)
+
+      refute_receive {:game_cancelled, _session}, 50
+    end
+
+    test "a expiração é publicada", %{session: session} do
+      :ok = Games.subscribe(session.id)
+
+      assert {:ok, expired} = Games.expire_game_session(session)
+
+      assert_receive {:game_expired, %GameSession{id: id, status: :expired}}
+      assert id == expired.id
+    end
+
+    test "expirar uma sala já encerrada não publica nada", %{scope: scope, session: session} do
+      assert {:ok, cancelled} = Games.cancel_game_session(scope, session)
+      :ok = Games.subscribe(session.id)
+
+      assert {:error, :invalid_transition} = Games.expire_game_session(cancelled)
+
+      refute_receive {:game_expired, _session}, 50
+    end
+  end
+
+  describe "record_host_absence/2" do
+    setup :hosted_waiting_session
+
+    test "marca o prazo e publica", %{session: session} do
+      :ok = Games.subscribe(session.id)
+      at = now()
+
+      assert {:ok, away} = Games.record_host_absence(session.id, at)
+
+      assert away.expires_at == DateTime.add(at, Games.host_absence_timeout(), :second)
+      assert_receive {:host_disconnected, expires_at}
+      assert expires_at == away.expires_at
+    end
+
+    test "a segunda vez é ignorada e não publica", %{session: session} do
+      assert {:ok, _away} = Games.record_host_absence(session.id, minutes_ago(1))
+      :ok = Games.subscribe(session.id)
+
+      assert Games.record_host_absence(session.id) == :ignored
+
+      refute_receive {:host_disconnected, _expires_at}, 50
+    end
+
+    test "a sala encerrada é ignorada", %{scope: scope, session: session} do
+      assert {:ok, _cancelled} = Games.cancel_game_session(scope, session)
+      :ok = Games.subscribe(session.id)
+
+      assert Games.record_host_absence(session.id) == :ignored
+
+      refute_receive {:host_disconnected, _expires_at}, 50
+      assert is_nil(Repo.get!(GameSession, session.id).expires_at)
+    end
+
+    test "uma sala que não existe é ignorada" do
+      assert Games.record_host_absence(0) == :ignored
+    end
+  end
+
+  describe "record_host_return/1" do
+    setup :hosted_waiting_session
+
+    test "limpa o prazo e publica", %{session: session} do
+      assert {:ok, _away} = Games.record_host_absence(session.id, minutes_ago(1))
+      :ok = Games.subscribe(session.id)
+
+      assert {:ok, back} = Games.record_host_return(session.id)
+
+      assert is_nil(back.expires_at)
+      assert is_nil(back.host_disconnected_at)
+      assert_receive {:host_connected, nil}
+    end
+
+    test "o host que nunca caiu não publica nada", %{session: session} do
+      :ok = Games.subscribe(session.id)
+
+      assert Games.record_host_return(session.id) == :ignored
+
+      refute_receive {:host_connected, _expires_at}, 50
+    end
+
+    test "a sala encerrada é ignorada", %{scope: scope, session: session} do
+      assert {:ok, _cancelled} = Games.cancel_game_session(scope, session)
+      :ok = Games.subscribe(session.id)
+
+      assert Games.record_host_return(session.id) == :ignored
+
+      refute_receive {:host_connected, _expires_at}, 50
+    end
+
+    test "uma sala que não existe é ignorada" do
+      assert Games.record_host_return(0) == :ignored
+    end
+  end
+
+  describe "list_participants_with_presence/2" do
+    setup :waiting_session
+
+    test "traz todo mundo desconectado quando ninguém está no tópico", %{
+      session: session,
+      host: host
+    } do
+      first = participant_fixture(session, %{joined_at: minutes_ago(2)})
+      second = participant_fixture(session, %{joined_at: minutes_ago(1)})
+
+      assert {:ok, participants} =
+               Games.list_participants_with_presence(session, user_scope_fixture(host))
+
+      assert Enum.map(participants, & &1.id) == [first.id, second.id]
+      refute Enum.any?(participants, & &1.connected)
+    end
+
+    test "omite quem saiu", %{session: session, host: host} do
+      stayed = participant_fixture(session)
+      participant_fixture(session, %{left_at: now(), released_at: now()})
+
+      assert {:ok, [listed]} =
+               Games.list_participants_with_presence(session, user_scope_fixture(host))
+
+      assert listed.id == stayed.id
+    end
+
+    test "recusa quem não é da sala", %{session: session} do
+      participant_fixture(session)
+
+      assert Games.list_participants_with_presence(session, user_scope_fixture()) ==
+               {:error, :unauthorized}
+
+      assert Games.list_participants_with_presence(session, nil) == {:error, :unauthorized}
+    end
+  end
+
   defp start_session(session) do
     session |> GameSession.status_changeset(:in_progress) |> Repo.update!()
   end
