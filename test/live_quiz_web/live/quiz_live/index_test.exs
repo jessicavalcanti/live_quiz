@@ -3,6 +3,7 @@ defmodule LiveQuizWeb.QuizLive.IndexTest do
 
   import Ecto.Query
   import LiveQuiz.AccountsFixtures
+  import LiveQuiz.GamesFixtures
   import LiveQuiz.QuizzesFixtures
   import Phoenix.LiveViewTest
 
@@ -552,6 +553,23 @@ defmodule LiveQuizWeb.QuizLive.IndexTest do
     end
 
     @tag :capture_log
+    # A sala é aberta depois do mount, então o botão ainda está na tela quando a
+    # regra da F2-07 passa a valer — é esse caminho que não pode estourar.
+    test "recusa excluir um quiz com sala ativa e avisa", %{conn: conn, scope: scope} do
+      quiz = quiz_fixture(scope, %{title: "Geografia"})
+
+      {:ok, lv, _html} = live(conn, ~p"/quizzes")
+
+      game_session_fixture(%{quiz: quiz, status: :waiting})
+
+      lv |> element("#quiz-#{quiz.id} button", "Excluir") |> render_click()
+      html = lv |> element("button", "Excluir quiz") |> render_click()
+
+      assert html =~ "Este quiz possui uma sala ativa e não pode ser alterado"
+      assert html =~ "Geografia"
+      assert Quizzes.get_quiz!(scope, quiz.id)
+    end
+
     test "refuses a forged delete of a quiz of another user", %{conn: conn} do
       foreign = quiz_fixture(user_scope_fixture(), %{title: "Quiz do Bruno"})
 

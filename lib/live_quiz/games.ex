@@ -76,6 +76,7 @@ defmodule LiveQuiz.Games do
   alias LiveQuiz.Games.Participant
   alias LiveQuiz.Games.ParticipantToken
   alias LiveQuiz.Games.Presence
+  alias LiveQuiz.Games.QuizLock
   alias LiveQuiz.Quizzes
   alias LiveQuiz.Quizzes.Quiz
   alias LiveQuiz.Repo
@@ -129,6 +130,11 @@ defmodule LiveQuiz.Games do
     Repo.transaction(fn ->
       lock_identity(scope.user.id)
       quiz = Quizzes.get_quiz!(scope, quiz_id)
+      # The same row lock `LiveQuiz.Quizzes` takes before every write (F2-07).
+      # Taking it here is what turns the block into a real guarantee: an edit
+      # already under way finishes before the room exists, and one that starts
+      # afterwards finds the room and is refused.
+      QuizLock.lock_quiz!(quiz.id)
 
       with :ok <- ensure_playable(quiz),
            :ok <- ensure_not_hosting(scope),

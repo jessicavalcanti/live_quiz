@@ -53,6 +53,7 @@ defmodule LiveQuizWeb.Api.V1.QuestionController do
   @not_found_response {"Quiz ou pergunta inexistente, ou de outro dono", "application/json",
                        ErrorResponse}
   @unauthorized_response {"Não autenticado", "application/json", ErrorResponse}
+  @locked_response {"Quiz com sala ativa", "application/json", ErrorResponse}
 
   @doc """
   Lists every question of the quiz, ordered by position, with its answer
@@ -115,6 +116,7 @@ defmodule LiveQuizWeb.Api.V1.QuestionController do
       created: {"Pergunta criada, com o header Location", "application/json", QuestionResponse},
       unauthorized: @unauthorized_response,
       not_found: @not_found_response,
+      conflict: @locked_response,
       unprocessable_entity:
         {"Pergunta inválida ou limite de perguntas atingido", "application/json",
          ValidationErrorResponse}
@@ -152,6 +154,7 @@ defmodule LiveQuizWeb.Api.V1.QuestionController do
       ok: {"Pergunta atualizada", "application/json", QuestionResponse},
       unauthorized: @unauthorized_response,
       not_found: @not_found_response,
+      conflict: @locked_response,
       unprocessable_entity: {"Pergunta inválida", "application/json", ValidationErrorResponse}
     ]
 
@@ -178,7 +181,8 @@ defmodule LiveQuizWeb.Api.V1.QuestionController do
     responses: [
       no_content: "Pergunta excluída",
       unauthorized: @unauthorized_response,
-      not_found: @not_found_response
+      not_found: @not_found_response,
+      conflict: @locked_response
     ]
 
   def delete(conn, %{"quiz_id" => quiz_id, "id" => id}) do
@@ -209,6 +213,7 @@ defmodule LiveQuizWeb.Api.V1.QuestionController do
       ok: {"Perguntas do quiz, já reordenadas", "application/json", QuestionListResponse},
       unauthorized: @unauthorized_response,
       not_found: @not_found_response,
+      conflict: @locked_response,
       unprocessable_entity: {"Direção inválida", "application/json", ErrorResponse}
     ]
 

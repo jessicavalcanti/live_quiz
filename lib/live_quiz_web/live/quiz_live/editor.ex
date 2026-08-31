@@ -94,6 +94,9 @@ defmodule LiveQuizWeb.QuizLive.Editor do
          |> assign(:invalid_field, nil)
          |> assign_form(Quizzes.change_quiz(quiz))}
 
+      {:error, :quiz_locked} ->
+        {:noreply, refuse_locked(socket)}
+
       {:error, changeset} ->
         {:noreply,
          socket
@@ -127,24 +130,35 @@ defmodule LiveQuizWeb.QuizLive.Editor do
   def handle_event("confirm_delete_question", _params, socket) do
     %{current_scope: scope, question_to_delete: question} = socket.assigns
 
-    {:ok, _deleted} = Quizzes.delete_question(scope, question)
+    socket =
+      case Quizzes.delete_question(scope, question) do
+        {:ok, _deleted} -> put_flash(socket, :info, "Pergunta excluída")
+        {:error, :quiz_locked} -> put_flash(socket, :error, locked_message())
+      end
 
-    {:noreply,
-     socket
-     |> assign(:question_to_delete, nil)
-     |> put_flash(:info, "Pergunta excluída")
-     |> reload_quiz()}
+    {:noreply, socket |> assign(:question_to_delete, nil) |> reload_quiz()}
   end
 
   # `move_question/3` answers `{:ok, :unchanged}` at the edges: a movement that
   # had nowhere to go is a successful no-op, so both shapes end the same way.
+  # A quiz with a live room refuses the move altogether (F2-07).
   defp move(socket, id, direction) do
     %{current_scope: scope, quiz: quiz} = socket.assigns
 
     question = Quizzes.get_question!(scope, quiz, id)
-    {:ok, _moved} = Quizzes.move_question(scope, question, direction)
 
-    reload_quiz(socket)
+    case Quizzes.move_question(scope, question, direction) do
+      {:ok, _moved} -> reload_quiz(socket)
+      {:error, :quiz_locked} -> refuse_locked(socket)
+    end
+  end
+
+  # The quiz is reloaded along with the message so the screen already carries
+  # the room that caused the refusal, instead of the state it had before it.
+  defp refuse_locked(socket) do
+    socket
+    |> put_flash(:error, locked_message())
+    |> reload_quiz()
   end
 
   # The list is the context's answer, never a local edit of what was on screen.
@@ -162,6 +176,12 @@ defmodule LiveQuizWeb.QuizLive.Editor do
      socket
      |> put_flash(:info, message)
      |> push_patch(to: ~p"/quizzes/#{socket.assigns.quiz}/edit")}
+  end
+
+  def handle_info({QuestionFormComponent, :quiz_locked}, socket) do
+    socket = refuse_locked(socket)
+
+    {:noreply, push_patch(socket, to: ~p"/quizzes/#{socket.assigns.quiz}/edit")}
   end
 
   def handle_info({QuestionFormComponent, :question_limit_reached}, socket) do
@@ -400,6 +420,8 @@ defmodule LiveQuizWeb.QuizLive.Editor do
     do: length(questions) >= Quizzes.max_questions()
 
   defp limit_message, do: "Este quiz já atingiu o limite de #{Quizzes.max_questions()} perguntas"
+
+  defp locked_message, do: "Este quiz possui uma sala ativa e não pode ser alterado"
 
   defp limit_hint, do: "Limite de #{Quizzes.max_questions()} perguntas atingido"
 

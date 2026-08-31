@@ -111,8 +111,12 @@ defmodule LiveQuiz.GamesTest do
       assert {:ok, _session} = Games.create_game_session(scope, quiz.id)
     end
 
+    # Renomear com a sala aberta é recusado desde a F2-07, então o cenário só
+    # existe depois que a sala é encerrada — o título copiado continua sendo o
+    # da época da partida, que é o que a coluna existe para guardar.
     test "preserva o título mesmo depois de renomear o quiz", %{scope: scope, quiz: quiz} do
       assert {:ok, session} = Games.create_game_session(scope, quiz.id)
+      assert {:ok, _cancelled} = Games.cancel_game_session(scope, session)
       assert {:ok, _quiz} = Quizzes.update_quiz(scope, quiz, %{title: "Geografia do Brasil"})
 
       assert Repo.get!(GameSession, session.id).quiz_title == quiz.title
