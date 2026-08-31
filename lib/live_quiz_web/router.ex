@@ -119,6 +119,14 @@ defmodule LiveQuizWeb.Router do
       live "/users/reset-password/:token", UserLive.ResetPassword, :edit
     end
 
+    live_session :participant,
+      on_mount: [
+        {LiveQuizWeb.UserAuth, :mount_current_scope},
+        {LiveQuizWeb.ParticipantAuth, :mount_participant_tokens}
+      ] do
+      live "/game-sessions/:code", GameSessionLive.Player, :show
+    end
+
     post "/game-sessions/join", GameSessionController, :join
     delete "/game-sessions/:code/leave", GameSessionController, :leave
     post "/users/log-in", UserSessionController, :create

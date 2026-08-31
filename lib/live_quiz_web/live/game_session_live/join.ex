@@ -185,10 +185,7 @@ defmodule LiveQuizWeb.GameSessionLive.Join do
     Games.suggested_nickname(socket.assigns[:current_scope]) || ""
   end
 
-  # F2-10 opens the lobby of the participant on this address. Until it exists,
-  # the path is written by hand rather than verified: pointing `~p` at a route
-  # that is not in the router yet would not compile.
-  defp lobby_path(code), do: "/game-sessions/#{code}"
+  defp lobby_path(code), do: ~p"/game-sessions/#{code}"
 
   @impl true
   def render(assigns) do

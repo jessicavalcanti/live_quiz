@@ -68,16 +68,19 @@ defmodule LiveQuizWeb.GameSessionController do
   (F2-10), which is what frees the person to enter somewhere else. Dropping the
   credential here is what stops the join screen from taking them back into the
   room they just walked out of.
+
+  Leaving is not an ending, so the join screen is where it lands, with the
+  reason said out loud: whoever clicked "Sair da sala" has to read that it
+  worked instead of guessing it from a form that came back empty.
   """
   def leave(conn, %{"code" => code}) do
     conn
     |> ParticipantAuth.drop_token(code)
+    |> put_flash(:info, "Você saiu da sala. Entre em outra quando quiser.")
     |> redirect(to: ~p"/join")
   end
 
-  # F2-10 opens the lobby of the participant on this address. Until it is in the
-  # router, `~p` cannot verify it and the path is written by hand.
-  defp lobby_path(code), do: "/game-sessions/#{code}"
+  defp lobby_path(code), do: ~p"/game-sessions/#{code}"
 
   # The room may have been closed between the refusal and this read, in which
   # case there is nowhere to send the host: the dashboard, with the reason, is
