@@ -16,6 +16,17 @@ defmodule LiveQuiz.Games do
   is deliberately unscoped — the code is the credential — and only ever answers
   with live rooms.
 
+  Entering a room is where several people decide the same things at the same
+  instant, so nothing here is settled optimistically: the nickname is arbitrated
+  by a unique index, the 25 seats are counted under an advisory lock on the room
+  and "one room per person" is serialized by an advisory lock on the account.
+  Locks are always taken in the same order — identity first, room second — which
+  is what keeps `join_game_session/4` from deadlocking against the operations
+  that F2-04 and F2-05 add on the same rows.
+
+  Whoever joins gets a `LiveQuiz.Games.ParticipantToken`, returned in clear only
+  by `join_game_session/4` and stored only as a digest.
+
   ## Test seam
 
   `:join_code_generator` in the `:live_quiz` application environment replaces
@@ -29,9 +40,11 @@ defmodule LiveQuiz.Games do
 
   alias Ecto.Changeset
   alias LiveQuiz.Accounts.Scope
+  alias LiveQuiz.Accounts.User
   alias LiveQuiz.Games.GameSession
   alias LiveQuiz.Games.JoinCode
   alias LiveQuiz.Games.Participant
+  alias LiveQuiz.Games.ParticipantToken
   alias LiveQuiz.Quizzes
   alias LiveQuiz.Quizzes.Quiz
   alias LiveQuiz.Repo
@@ -41,6 +54,23 @@ defmodule LiveQuiz.Games do
   # that also serialize per account (F2-03, F2-05) must reuse it, and anything
   # locking on a different subject must pick another class.
   @identity_lock_class 1
+  # Class `2` means "the seats of one room". Counting under it is what makes
+  # `count(*) < 25` a decision instead of a guess, and it never blocks a join
+  # into a different room.
+  @seats_lock_class 2
+
+  @max_participants 25
+  # `known_tokens` comes from the client, so the list is bounded before it turns
+  # into a query and malformed values are dropped without an error.
+  @max_known_tokens 20
+
+  @type join_error ::
+          :session_not_found
+          | :session_not_joinable
+          | :session_full
+          | :nickname_taken
+          | :already_in_another_session
+          | Changeset.t()
 
   @doc """
   Opens a room for the given quiz, hosted by the scope user.
@@ -136,6 +166,123 @@ defmodule LiveQuiz.Games do
     hosting?(scope) or participating?(scope)
   end
 
+  @doc """
+  Puts someone into a room identified by its code.
+
+  `scope` is an authenticated scope or `nil` for a guest. `opts` accepts
+  `:known_tokens`, the credentials the client already holds — the only way to
+  recognize a guest who is already in another room (AD-28), since a guest who
+  drops their credentials is a new person as far as the server can tell.
+
+  Answers with the participation and the clear access token, which is shown
+  here and nowhere else. Joining the same room again is not a new sign-up: the
+  existing participation comes back, taking no extra seat, with the credential
+  that was presented or with a freshly issued one when none was.
+
+  Every refusal is a distinct atom — `:session_not_found`,
+  `:session_not_joinable`, `:session_full`, `:nickname_taken`,
+  `:already_in_another_session` — because the web and the API word each of them
+  differently. A malformed nickname comes back as a changeset instead.
+  """
+  @spec join_game_session(Scope.t() | nil, term(), map(), keyword()) ::
+          {:ok, Participant.t(), String.t()} | {:error, join_error()}
+  def join_game_session(scope, code, attrs, opts \\ [])
+
+  def join_game_session(scope, code, attrs, opts)
+      when (is_nil(scope) or is_struct(scope, Scope)) and is_map(attrs) and is_list(opts) do
+    known = known_credentials(opts)
+
+    Repo.transaction(fn ->
+      with {:ok, session} <- fetch_joinable_session(code),
+           {:ok, :new} <- resolve_identity(scope, session, known),
+           :ok <- ensure_seat_available(session),
+           {:ok, participant, token} <- insert_participant(session, scope, attrs) do
+        {participant, token}
+      else
+        {:ok, :existing, participant, token} -> {participant, token}
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+    |> case do
+      {:ok, {participant, token}} -> {:ok, participant, token}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc """
+  Fetches a participation from the clear token the client presents.
+
+  Only participations of live rooms are returned: closing a room makes every
+  credential of it useless, which is why the token needs no expiration of its
+  own. An unreadable or unknown token is `{:error, :not_found}`, never an
+  exception — the value comes from outside.
+  """
+  @spec get_participant_by_token(term()) :: {:ok, Participant.t()} | {:error, :not_found}
+  def get_participant_by_token(token) do
+    case ParticipantToken.hash(token) do
+      {:ok, hash} -> fetch_live_participant(hash)
+      :error -> {:error, :not_found}
+    end
+  end
+
+  @doc """
+  Lists the participations visible in the lobby, oldest first.
+
+  Only the host of the room or someone taking part in it may read the list
+  (AD-35); anybody else gets `{:error, :unauthorized}` rather than an empty
+  list, so the API can answer 403 instead of pretending the room is empty.
+  `viewer` is a scope, a participation, or `nil` for a guest with no credential.
+
+  Whoever left is left out; whoever is merely disconnected stays, because the
+  seat is still theirs (AD-27).
+  """
+  @spec list_participants(GameSession.t(), Scope.t() | Participant.t() | nil) ::
+          {:ok, [Participant.t()]} | {:error, :unauthorized}
+  def list_participants(%GameSession{} = session, viewer) do
+    if allowed_to_list?(session, viewer) do
+      {:ok, session |> lobby_participants() |> Repo.all()}
+    else
+      {:error, :unauthorized}
+    end
+  end
+
+  @doc """
+  How many seats the room has taken: every participation ever registered in it.
+
+  Leaving does not give the seat back and being disconnected does not either
+  (AD-27), so this counts rows, not people currently present. The host does not
+  take a seat — they are not a participant.
+  """
+  @spec reserved_slots(GameSession.t()) :: non_neg_integer()
+  def reserved_slots(%GameSession{id: id}) do
+    Participant
+    |> where([p], p.game_session_id == ^id)
+    |> Repo.aggregate(:count)
+  end
+
+  @doc "How many seats are still free, from #{@max_participants} down to 0."
+  @spec available_slots(GameSession.t()) :: non_neg_integer()
+  def available_slots(%GameSession{} = session) do
+    max(@max_participants - reserved_slots(session), 0)
+  end
+
+  @doc """
+  The nickname to offer an authenticated person in the join form.
+
+  It is the account name, stripped of anything the nickname format refuses and
+  cut to #{Participant.nickname_max_length()} characters. Picking another one
+  does not rename the account. Returns `nil` for a guest, and also when nothing
+  usable survives the cleanup — a suggestion that would be refused is worse
+  than none.
+  """
+  @spec suggested_nickname(Scope.t() | nil) :: String.t() | nil
+  def suggested_nickname(nil), do: nil
+  def suggested_nickname(%Scope{user: %User{name: name}}), do: sanitize_nickname(name)
+
+  @doc "How many participations a room accepts. There is no waiting list."
+  @spec max_participants() :: pos_integer()
+  def max_participants, do: @max_participants
+
   defp ensure_playable(%Quiz{} = quiz) do
     if Quizzes.playable?(quiz), do: :ok, else: {:error, :quiz_not_playable}
   end
@@ -212,11 +359,187 @@ defmodule LiveQuiz.Games do
     end
   end
 
+  defp fetch_joinable_session(code) do
+    case get_game_session_by_code(code) do
+      {:ok, %GameSession{status: :waiting} = session} -> {:ok, session}
+      {:ok, %GameSession{}} -> {:error, :session_not_joinable}
+      {:error, :not_found} -> {:error, :session_not_found}
+    end
+  end
+
+  # Answers `{:ok, :new}` when the person is free to sign up, or hands back the
+  # participation they already hold in this very room. The identity lock is
+  # taken before any read, so two tabs of the same account cannot both conclude
+  # they are free.
+  defp resolve_identity(%Scope{} = scope, %GameSession{id: session_id}, known) do
+    lock_identity(scope.user.id)
+
+    if hosting?(scope) do
+      {:error, :already_in_another_session}
+    else
+      case active_participation_for_user(scope) do
+        nil -> {:ok, :new}
+        %Participant{game_session_id: ^session_id} = participant -> rejoin(participant, known)
+        %Participant{} -> {:error, :already_in_another_session}
+      end
+    end
+  end
+
+  defp resolve_identity(nil, %GameSession{id: session_id}, known) do
+    participations = known |> Enum.map(&elem(&1, 0)) |> active_participations_for_hashes()
+
+    case Enum.find(participations, &(&1.game_session_id == session_id)) do
+      %Participant{} = participant -> rejoin(participant, known)
+      nil when participations == [] -> {:ok, :new}
+      nil -> {:error, :already_in_another_session}
+    end
+  end
+
+  # Coming back to the same room reuses the credential that was presented. When
+  # none was — an authenticated person on a new device — a fresh token is issued
+  # and the previous one stops working, which is the single-holder rule of AD-30.
+  defp rejoin(%Participant{} = participant, known) do
+    case Enum.find(known, fn {hash, _token} -> hash == participant.access_token_hash end) do
+      {_hash, token} ->
+        {:ok, :existing, participant, token}
+
+      nil ->
+        {token, hash} = ParticipantToken.build()
+
+        case participant |> Participant.credential_changeset(hash) |> Repo.update() do
+          {:ok, participant} -> {:ok, :existing, participant, token}
+          {:error, %Changeset{} = changeset} -> {:error, changeset}
+        end
+    end
+  end
+
+  defp ensure_seat_available(%GameSession{} = session) do
+    lock_seats(session.id)
+
+    if reserved_slots(session) < @max_participants do
+      :ok
+    else
+      {:error, :session_full}
+    end
+  end
+
+  defp insert_participant(%GameSession{} = session, scope, attrs) do
+    {token, hash} = ParticipantToken.build()
+
+    %Participant{
+      game_session_id: session.id,
+      user_id: scope && scope.user.id,
+      access_token_hash: hash,
+      joined_at: DateTime.truncate(DateTime.utc_now(), :second)
+    }
+    |> Participant.join_changeset(attrs)
+    # A refused insert would poison the surrounding transaction before the
+    # constraint could be read back as an atom, so it gets its own savepoint.
+    |> Repo.insert(mode: :savepoint)
+    |> case do
+      {:ok, %Participant{} = participant} -> {:ok, participant, token}
+      {:error, %Changeset{} = changeset} -> {:error, join_error(changeset)}
+    end
+  end
+
+  defp join_error(%Changeset{} = changeset) do
+    cond do
+      taken?(changeset, :nickname) -> :nickname_taken
+      taken?(changeset, :user_id) -> :already_in_another_session
+      true -> changeset
+    end
+  end
+
+  defp known_credentials(opts) do
+    opts
+    |> Keyword.get(:known_tokens, [])
+    |> List.wrap()
+    |> Enum.take(@max_known_tokens)
+    |> Enum.flat_map(fn token ->
+      case ParticipantToken.hash(token) do
+        {:ok, hash} -> [{hash, token}]
+        :error -> []
+      end
+    end)
+    |> Enum.uniq_by(&elem(&1, 0))
+  end
+
+  defp active_participation_for_user(%Scope{} = scope) do
+    Participant
+    |> where([p], p.user_id == ^scope.user.id and is_nil(p.released_at))
+    |> Repo.one()
+  end
+
+  defp active_participations_for_hashes([]), do: []
+
+  defp active_participations_for_hashes(hashes) do
+    Participant
+    |> where([p], p.access_token_hash in ^hashes and is_nil(p.released_at))
+    |> Repo.all()
+  end
+
+  defp fetch_live_participant(hash) do
+    Participant
+    |> join(:inner, [p], s in assoc(p, :game_session))
+    |> where([p, s], p.access_token_hash == ^hash)
+    |> where([_p, s], s.status in ^GameSession.active_statuses())
+    |> Repo.one()
+    |> case do
+      nil -> {:error, :not_found}
+      %Participant{} = participant -> {:ok, participant}
+    end
+  end
+
+  defp allowed_to_list?(%GameSession{} = session, %Scope{} = scope) do
+    session.host_id == scope.user.id or taking_part?(session, scope)
+  end
+
+  defp allowed_to_list?(%GameSession{id: session_id}, %Participant{
+         game_session_id: session_id,
+         released_at: nil
+       }),
+       do: true
+
+  defp allowed_to_list?(_session, _viewer), do: false
+
+  defp taking_part?(%GameSession{id: session_id}, %Scope{} = scope) do
+    Participant
+    |> where([p], p.game_session_id == ^session_id and p.user_id == ^scope.user.id)
+    |> where([p], is_nil(p.released_at))
+    |> Repo.exists?()
+  end
+
+  defp lobby_participants(%GameSession{id: session_id}) do
+    from p in Participant,
+      where: p.game_session_id == ^session_id,
+      where: is_nil(p.left_at) and is_nil(p.released_at),
+      order_by: [asc: p.joined_at, asc: p.id]
+  end
+
+  defp sanitize_nickname(name) when is_binary(name) do
+    suggestion =
+      name
+      |> String.replace(~r/[^\p{L}\p{N} _-]/u, "")
+      |> String.trim()
+      |> String.slice(0, Participant.nickname_max_length())
+      |> String.trim()
+
+    if String.length(suggestion) >= Participant.nickname_min_length(), do: suggestion
+  end
+
+  defp sanitize_nickname(_name), do: nil
+
   # Serializes every room decision taken on behalf of one account. The lock is
   # released when the transaction ends, and it is taken before any read so the
   # checks below cannot race against a concurrent insert.
   defp lock_identity(user_id) do
     Repo.query!("SELECT pg_advisory_xact_lock($1, $2)", [@identity_lock_class, user_id])
+  end
+
+  # Serializes the seat count of one room. Taken only after the identity lock,
+  # so every story that touches both keeps the same order and cannot deadlock.
+  defp lock_seats(session_id) do
+    Repo.query!("SELECT pg_advisory_xact_lock($1, $2)", [@seats_lock_class, session_id])
   end
 
   defp hosted_sessions(%Scope{} = scope) do

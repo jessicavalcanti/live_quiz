@@ -7,9 +7,12 @@ defmodule LiveQuiz.GamesTest do
   import LiveQuiz.QuizzesFixtures
 
   alias Ecto.Adapters.SQL.Sandbox
+  alias LiveQuiz.Accounts.User
   alias LiveQuiz.Games
   alias LiveQuiz.Games.GameSession
   alias LiveQuiz.Games.JoinCode
+  alias LiveQuiz.Games.Participant
+  alias LiveQuiz.Games.ParticipantToken
   alias LiveQuiz.Quizzes
 
   describe "create_game_session/2" do
@@ -327,6 +330,710 @@ defmodule LiveQuiz.GamesTest do
       refute Games.engaged_in_session?(user_scope_fixture())
     end
   end
+
+  describe "join_game_session/4 para visitante" do
+    setup :waiting_session
+
+    test "cria a participação sem conta e devolve a credencial", %{session: session} do
+      assert {:ok, participant, token} =
+               Games.join_game_session(nil, session.join_code, %{"nickname" => "Ana"})
+
+      assert participant.game_session_id == session.id
+      assert is_nil(participant.user_id)
+      assert participant.nickname == "Ana"
+      assert participant.nickname_normalized == "ana"
+      assert participant.joined_at
+      assert is_nil(participant.left_at)
+      assert is_nil(participant.released_at)
+      assert {:ok, hash} = ParticipantToken.hash(token)
+      assert participant.access_token_hash == hash
+    end
+
+    test "aceita o código digitado em minúsculas e com espaços", %{session: session} do
+      typed = " #{String.downcase(session.join_code)} "
+
+      assert {:ok, participant, _token} =
+               Games.join_game_session(nil, typed, %{"nickname" => "Ana"})
+
+      assert participant.game_session_id == session.id
+    end
+
+    test "guarda apenas o resumo do token, nunca o token em claro", %{session: session} do
+      assert {:ok, participant, token} =
+               Games.join_game_session(nil, session.join_code, %{"nickname" => "Ana"})
+
+      %{rows: [row]} =
+        Repo.query!("SELECT * FROM participants WHERE id = $1", [participant.id])
+
+      refute Enum.any?(row, &contains?(&1, token))
+    end
+
+    test "preserva a grafia do apelido e apara as pontas", %{session: session} do
+      assert {:ok, participant, _token} =
+               Games.join_game_session(nil, session.join_code, %{"nickname" => "  AnA  "})
+
+      assert participant.nickname == "AnA"
+      assert participant.nickname_normalized == "ana"
+    end
+
+    test "devolve session_not_found para um código inexistente" do
+      assert Games.join_game_session(nil, "K7P4Q2", %{"nickname" => "Ana"}) ==
+               {:error, :session_not_found}
+    end
+
+    test "devolve session_not_found para um código fora do alfabeto" do
+      assert Games.join_game_session(nil, "K7P4Q0", %{"nickname" => "Ana"}) ==
+               {:error, :session_not_found}
+    end
+
+    test "devolve session_not_joinable para uma sala em andamento" do
+      session = game_session_fixture(%{status: :in_progress})
+
+      assert Games.join_game_session(nil, session.join_code, %{"nickname" => "Ana"}) ==
+               {:error, :session_not_joinable}
+    end
+
+    test "não encontra sala cancelada nem expirada" do
+      cancelled = game_session_fixture(%{status: :cancelled})
+      expired = game_session_fixture(%{status: :expired})
+
+      assert Games.join_game_session(nil, cancelled.join_code, %{"nickname" => "Ana"}) ==
+               {:error, :session_not_found}
+
+      assert Games.join_game_session(nil, expired.join_code, %{"nickname" => "Ana"}) ==
+               {:error, :session_not_found}
+    end
+  end
+
+  describe "join_game_session/4 para usuário autenticado" do
+    setup :waiting_session
+
+    test "vincula a participação à conta", %{session: session} do
+      scope = user_scope_fixture()
+
+      assert {:ok, participant, _token} =
+               Games.join_game_session(scope, session.join_code, %{"nickname" => "Ana"})
+
+      assert participant.user_id == scope.user.id
+    end
+
+    test "o apelido escolhido não altera o nome da conta", %{session: session} do
+      scope = user_scope_fixture()
+
+      assert {:ok, participant, _token} =
+               Games.join_game_session(scope, session.join_code, %{"nickname" => "Aninha"})
+
+      assert participant.nickname == "Aninha"
+      assert Repo.get!(User, scope.user.id).name == "Ana Souza"
+    end
+
+    test "recusa quem já participa de outra sala", %{session: session} do
+      scope = user_scope_fixture()
+      participant_fixture(game_session_fixture(), %{user: scope.user})
+
+      assert Games.join_game_session(scope, session.join_code, %{"nickname" => "Ana"}) ==
+               {:error, :already_in_another_session}
+
+      assert Games.reserved_slots(session) == 0
+    end
+
+    test "aceita quem já foi dispensado da sala anterior", %{session: session} do
+      scope = user_scope_fixture()
+      participant_fixture(game_session_fixture(), %{user: scope.user, released_at: now()})
+
+      assert {:ok, _participant, _token} =
+               Games.join_game_session(scope, session.join_code, %{"nickname" => "Ana"})
+    end
+
+    test "recusa o host de uma sala ativa", %{session: session} do
+      scope = user_scope_fixture()
+      game_session_fixture(%{host: scope.user, status: :waiting})
+
+      assert Games.join_game_session(scope, session.join_code, %{"nickname" => "Ana"}) ==
+               {:error, :already_in_another_session}
+    end
+
+    test "recusa o host da própria sala", %{session: session, host: host} do
+      assert Games.join_game_session(user_scope_fixture(host), session.join_code, %{
+               "nickname" => "Ana"
+             }) == {:error, :already_in_another_session}
+    end
+
+    test "aceita quem só apresentou salas encerradas", %{session: session} do
+      scope = user_scope_fixture()
+      game_session_fixture(%{host: scope.user, status: :cancelled})
+
+      assert {:ok, _participant, _token} =
+               Games.join_game_session(scope, session.join_code, %{"nickname" => "Ana"})
+    end
+
+    test "quem participa não consegue abrir sala depois", %{session: session} do
+      scope = user_scope_fixture()
+      quiz = playable_quiz(scope)
+
+      assert {:ok, _participant, _token} =
+               Games.join_game_session(scope, session.join_code, %{"nickname" => "Ana"})
+
+      assert Games.create_game_session(scope, quiz.id) == {:error, :already_participating}
+    end
+  end
+
+  describe "join_game_session/4 e o apelido" do
+    setup :waiting_session
+
+    test "recusa um apelido com um caractere", %{session: session} do
+      assert {:error, %Ecto.Changeset{} = changeset} =
+               Games.join_game_session(nil, session.join_code, %{"nickname" => "A"})
+
+      assert %{nickname: [_message | _]} = errors_on(changeset)
+      assert Games.reserved_slots(session) == 0
+    end
+
+    test "aceita um apelido de dois caracteres", %{session: session} do
+      assert {:ok, participant, _token} =
+               Games.join_game_session(nil, session.join_code, %{"nickname" => "Jô"})
+
+      assert participant.nickname == "Jô"
+    end
+
+    test "aceita um apelido de vinte caracteres", %{session: session} do
+      nickname = String.duplicate("a", 20)
+
+      assert {:ok, participant, _token} =
+               Games.join_game_session(nil, session.join_code, %{"nickname" => nickname})
+
+      assert participant.nickname == nickname
+    end
+
+    test "recusa um apelido de vinte e um caracteres", %{session: session} do
+      assert {:error, %Ecto.Changeset{} = changeset} =
+               Games.join_game_session(nil, session.join_code, %{
+                 "nickname" => String.duplicate("a", 21)
+               })
+
+      assert %{nickname: [_message | _]} = errors_on(changeset)
+    end
+
+    test "recusa um apelido com emoji", %{session: session} do
+      assert {:error, %Ecto.Changeset{} = changeset} =
+               Games.join_game_session(nil, session.join_code, %{"nickname" => "Ana 🎉"})
+
+      assert %{nickname: [_message | _]} = errors_on(changeset)
+    end
+
+    test "aceita hífen, sublinhado, números e acentos", %{session: session} do
+      assert {:ok, participant, _token} =
+               Games.join_game_session(nil, session.join_code, %{"nickname" => "Ana-Paula_1"})
+
+      assert participant.nickname == "Ana-Paula_1"
+    end
+
+    test "recusa um apelido só de espaços", %{session: session} do
+      assert {:error, %Ecto.Changeset{} = changeset} =
+               Games.join_game_session(nil, session.join_code, %{"nickname" => "   "})
+
+      assert %{nickname: [_message | _]} = errors_on(changeset)
+    end
+
+    test "recusa um apelido nulo e a ausência do campo", %{session: session} do
+      assert {:error, %Ecto.Changeset{}} =
+               Games.join_game_session(nil, session.join_code, %{"nickname" => nil})
+
+      assert {:error, %Ecto.Changeset{}} = Games.join_game_session(nil, session.join_code, %{})
+    end
+
+    test "recusa um apelido repetido ignorando caixa e espaços", %{session: session} do
+      participant_fixture(session, %{nickname: "Ana"})
+
+      assert Games.join_game_session(nil, session.join_code, %{"nickname" => " ANA "}) ==
+               {:error, :nickname_taken}
+    end
+
+    test "distingue acentos e espaços internos", %{session: session} do
+      participant_fixture(session, %{nickname: "Ana"})
+
+      assert {:ok, _participant, _token} =
+               Games.join_game_session(nil, session.join_code, %{"nickname" => "Aná"})
+    end
+
+    test "mantém o apelido reservado depois da saída voluntária", %{session: session} do
+      participant_fixture(session, %{nickname: "Ana", left_at: now(), released_at: now()})
+
+      assert Games.join_game_session(nil, session.join_code, %{"nickname" => "Ana"}) ==
+               {:error, :nickname_taken}
+    end
+
+    test "mantém o apelido reservado de quem está desconectado", %{session: session} do
+      participant_fixture(session, %{nickname: "Ana", connection_id: nil})
+
+      assert Games.join_game_session(nil, session.join_code, %{"nickname" => "Ana"}) ==
+               {:error, :nickname_taken}
+    end
+
+    test "o mesmo apelido vale em salas diferentes", %{session: session} do
+      other_session = game_session_fixture(%{status: :waiting})
+      participant_fixture(other_session, %{nickname: "Ana"})
+
+      assert {:ok, _participant, _token} =
+               Games.join_game_session(nil, session.join_code, %{"nickname" => "Ana"})
+    end
+  end
+
+  describe "join_game_session/4 e a capacidade" do
+    setup :waiting_session
+
+    test "aceita vinte e cinco participações e recusa a vigésima sexta", %{session: session} do
+      results =
+        Enum.map(1..25, fn index ->
+          Games.join_game_session(nil, session.join_code, %{"nickname" => "Pessoa #{index}"})
+        end)
+
+      assert Enum.all?(results, &match?({:ok, %Participant{}, _token}, &1))
+      assert Games.reserved_slots(session) == 25
+      assert Games.available_slots(session) == 0
+
+      assert Games.join_game_session(nil, session.join_code, %{"nickname" => "Tarde demais"}) ==
+               {:error, :session_full}
+    end
+
+    test "não cria fila de espera quando a sala lota", %{session: session} do
+      fill_session(session, 25)
+
+      assert Games.join_game_session(nil, session.join_code, %{"nickname" => "Tarde demais"}) ==
+               {:error, :session_full}
+
+      assert Games.reserved_slots(session) == 25
+    end
+
+    test "quem saiu continua ocupando a vaga", %{session: session} do
+      fill_session(session, 22)
+      for _index <- 1..3, do: participant_fixture(session, %{left_at: now(), released_at: now()})
+
+      assert Games.reserved_slots(session) == 25
+
+      assert Games.join_game_session(nil, session.join_code, %{"nickname" => "Tarde demais"}) ==
+               {:error, :session_full}
+    end
+
+    test "quem foi dispensado continua ocupando a vaga", %{session: session} do
+      fill_session(session, 24)
+      participant_fixture(session, %{released_at: now()})
+
+      assert Games.join_game_session(nil, session.join_code, %{"nickname" => "Tarde demais"}) ==
+               {:error, :session_full}
+    end
+
+    test "o host não ocupa vaga", %{session: session, host: host} do
+      fill_session(session, 25)
+
+      assert Games.reserved_slots(session) == 25
+      assert {:ok, participants} = Games.list_participants(session, user_scope_fixture(host))
+      refute Enum.any?(participants, &(&1.user_id == host.id))
+    end
+
+    test "a lotação de uma sala não afeta a outra", %{session: session} do
+      other_session = game_session_fixture(%{status: :waiting})
+      fill_session(session, 25)
+
+      assert {:ok, _participant, _token} =
+               Games.join_game_session(nil, other_session.join_code, %{"nickname" => "Ana"})
+    end
+  end
+
+  describe "join_game_session/4 e a volta para a mesma sala" do
+    setup :waiting_session
+
+    test "o visitante que apresenta a credencial recebe a mesma participação", %{
+      session: session
+    } do
+      assert {:ok, participant, token} =
+               Games.join_game_session(nil, session.join_code, %{"nickname" => "Ana"})
+
+      assert {:ok, same, same_token} =
+               Games.join_game_session(nil, session.join_code, %{"nickname" => "Outra"},
+                 known_tokens: [token]
+               )
+
+      assert same.id == participant.id
+      assert same.nickname == "Ana"
+      assert same_token == token
+      assert Games.reserved_slots(session) == 1
+    end
+
+    test "o visitante sem credencial vira uma nova participação", %{session: session} do
+      assert {:ok, first, _token} =
+               Games.join_game_session(nil, session.join_code, %{"nickname" => "Ana"})
+
+      assert {:ok, second, _token} =
+               Games.join_game_session(nil, session.join_code, %{"nickname" => "Bia"})
+
+      assert first.id != second.id
+      assert Games.reserved_slots(session) == 2
+    end
+
+    test "o visitante com credencial de outra sala é recusado", %{session: session} do
+      other_session = game_session_fixture(%{status: :waiting})
+
+      assert {:ok, _participant, token} =
+               Games.join_game_session(nil, other_session.join_code, %{"nickname" => "Ana"})
+
+      assert Games.join_game_session(nil, session.join_code, %{"nickname" => "Ana"},
+               known_tokens: [token]
+             ) == {:error, :already_in_another_session}
+    end
+
+    test "a credencial já dispensada não prende o visitante", %{session: session} do
+      other_session = game_session_fixture(%{status: :waiting})
+
+      assert {:ok, participant, token} =
+               Games.join_game_session(nil, other_session.join_code, %{"nickname" => "Ana"})
+
+      participant |> Participant.connection_changeset(%{released_at: now()}) |> Repo.update!()
+
+      assert {:ok, _participant, _token} =
+               Games.join_game_session(nil, session.join_code, %{"nickname" => "Ana"},
+                 known_tokens: [token]
+               )
+    end
+
+    test "tokens malformados são ignorados sem erro", %{session: session} do
+      assert {:ok, _participant, _token} =
+               Games.join_game_session(nil, session.join_code, %{"nickname" => "Ana"},
+                 known_tokens: ["não é token", nil, 42, ""]
+               )
+    end
+
+    test "só as vinte primeiras credenciais apresentadas são consideradas", %{session: session} do
+      other_session = game_session_fixture(%{status: :waiting})
+
+      assert {:ok, _participant, token} =
+               Games.join_game_session(nil, other_session.join_code, %{"nickname" => "Ana"})
+
+      padding = for _index <- 1..20, do: elem(ParticipantToken.build(), 0)
+
+      assert {:ok, _participant, _token} =
+               Games.join_game_session(nil, session.join_code, %{"nickname" => "Ana"},
+                 known_tokens: padding ++ [token]
+               )
+    end
+
+    test "o autenticado recebe a mesma participação e uma credencial nova", %{session: session} do
+      scope = user_scope_fixture()
+
+      assert {:ok, participant, first_token} =
+               Games.join_game_session(scope, session.join_code, %{"nickname" => "Ana"})
+
+      assert {:ok, same, second_token} =
+               Games.join_game_session(scope, session.join_code, %{"nickname" => "Outra"})
+
+      assert same.id == participant.id
+      assert same.nickname == "Ana"
+      assert second_token != first_token
+      assert Games.reserved_slots(session) == 1
+      assert Games.get_participant_by_token(first_token) == {:error, :not_found}
+      assert {:ok, found} = Games.get_participant_by_token(second_token)
+      assert found.id == participant.id
+    end
+
+    test "o autenticado que apresenta a credencial mantém a mesma", %{session: session} do
+      scope = user_scope_fixture()
+
+      assert {:ok, _participant, token} =
+               Games.join_game_session(scope, session.join_code, %{"nickname" => "Ana"})
+
+      assert {:ok, _same, ^token} =
+               Games.join_game_session(scope, session.join_code, %{"nickname" => "Ana"},
+                 known_tokens: [token]
+               )
+    end
+
+    test "voltar não passa pela contagem de vagas", %{session: session} do
+      scope = user_scope_fixture()
+
+      assert {:ok, participant, _token} =
+               Games.join_game_session(scope, session.join_code, %{"nickname" => "Ana"})
+
+      fill_session(session, 24)
+      assert Games.reserved_slots(session) == 25
+
+      assert {:ok, same, _token} =
+               Games.join_game_session(scope, session.join_code, %{"nickname" => "Ana"})
+
+      assert same.id == participant.id
+      assert Games.reserved_slots(session) == 25
+    end
+  end
+
+  describe "join_game_session/4 sob concorrência" do
+    test "trinta pessoas disputando vinte e cinco vagas produzem cinco recusas" do
+      session = game_session_fixture(%{status: :waiting})
+
+      results =
+        in_parallel(1..30, fn index ->
+          Games.join_game_session(nil, session.join_code, %{"nickname" => "Pessoa #{index}"})
+        end)
+
+      assert Enum.count(results, &match?({:ok, %Participant{}, _token}, &1)) == 25
+      assert Enum.count(results, &(&1 == {:error, :session_full})) == 5
+      assert Games.reserved_slots(session) == 25
+    end
+
+    test "dez pessoas com o mesmo apelido produzem uma única participação" do
+      session = game_session_fixture(%{status: :waiting})
+
+      results =
+        in_parallel(1..10, fn _index ->
+          Games.join_game_session(nil, session.join_code, %{"nickname" => "Ana"})
+        end)
+
+      assert Enum.count(results, &match?({:ok, %Participant{}, _token}, &1)) == 1
+      assert Enum.count(results, &(&1 == {:error, :nickname_taken})) == 9
+      assert Games.reserved_slots(session) == 1
+    end
+
+    test "cinco tentativas do mesmo autenticado em salas diferentes entram em uma só" do
+      scope = user_scope_fixture()
+      sessions = for _index <- 1..5, do: game_session_fixture(%{status: :waiting})
+
+      results =
+        in_parallel(sessions, fn session ->
+          Games.join_game_session(scope, session.join_code, %{"nickname" => "Ana"})
+        end)
+
+      assert Enum.count(results, &match?({:ok, %Participant{}, _token}, &1)) == 1
+      assert Enum.count(results, &(&1 == {:error, :already_in_another_session})) == 4
+
+      assert Repo.aggregate(participations_of(scope), :count) == 1
+    end
+
+    test "salas diferentes não disputam a mesma contagem de vagas" do
+      sessions = for _index <- 1..5, do: game_session_fixture(%{status: :waiting})
+
+      results =
+        in_parallel(sessions, fn session ->
+          Games.join_game_session(nil, session.join_code, %{"nickname" => "Ana"})
+        end)
+
+      assert Enum.all?(results, &match?({:ok, %Participant{}, _token}, &1))
+      assert Enum.all?(sessions, &(Games.reserved_slots(&1) == 1))
+    end
+  end
+
+  describe "get_participant_by_token/1" do
+    setup :waiting_session
+
+    test "encontra a participação a partir do token em claro", %{session: session} do
+      assert {:ok, participant, token} =
+               Games.join_game_session(nil, session.join_code, %{"nickname" => "Ana"})
+
+      assert {:ok, found} = Games.get_participant_by_token(token)
+      assert found.id == participant.id
+    end
+
+    test "encontra a participação de uma sala em andamento", %{session: session} do
+      assert {:ok, participant, token} =
+               Games.join_game_session(nil, session.join_code, %{"nickname" => "Ana"})
+
+      session |> GameSession.status_changeset(:in_progress) |> Repo.update!()
+
+      assert {:ok, found} = Games.get_participant_by_token(token)
+      assert found.id == participant.id
+    end
+
+    test "não encontra a participação de uma sala encerrada", %{session: session} do
+      assert {:ok, _participant, token} =
+               Games.join_game_session(nil, session.join_code, %{"nickname" => "Ana"})
+
+      session |> GameSession.status_changeset(:cancelled) |> Repo.update!()
+
+      assert Games.get_participant_by_token(token) == {:error, :not_found}
+    end
+
+    test "devolve not_found para um token inexistente" do
+      {token, _hash} = ParticipantToken.build()
+
+      assert Games.get_participant_by_token(token) == {:error, :not_found}
+    end
+
+    test "devolve not_found para um token malformado" do
+      assert Games.get_participant_by_token("não é token") == {:error, :not_found}
+      assert Games.get_participant_by_token(nil) == {:error, :not_found}
+    end
+  end
+
+  describe "list_participants/2" do
+    setup :waiting_session
+
+    test "o host vê a lista em ordem de entrada", %{session: session, host: host} do
+      first = participant_fixture(session, %{joined_at: minutes_ago(3)})
+      second = participant_fixture(session, %{joined_at: minutes_ago(2)})
+      third = participant_fixture(session, %{joined_at: minutes_ago(1)})
+
+      assert {:ok, participants} = Games.list_participants(session, user_scope_fixture(host))
+      assert Enum.map(participants, & &1.id) == [first.id, second.id, third.id]
+    end
+
+    test "o participante autenticado vê a lista", %{session: session} do
+      scope = user_scope_fixture()
+
+      assert {:ok, _participant, _token} =
+               Games.join_game_session(scope, session.join_code, %{"nickname" => "Ana"})
+
+      assert {:ok, [_only]} = Games.list_participants(session, scope)
+    end
+
+    test "o visitante com credencial vê a lista", %{session: session} do
+      assert {:ok, participant, _token} =
+               Games.join_game_session(nil, session.join_code, %{"nickname" => "Ana"})
+
+      assert {:ok, [listed]} = Games.list_participants(session, participant)
+      assert listed.id == participant.id
+    end
+
+    test "um terceiro autenticado é recusado", %{session: session} do
+      participant_fixture(session)
+
+      assert Games.list_participants(session, user_scope_fixture()) == {:error, :unauthorized}
+    end
+
+    test "um visitante sem credencial é recusado", %{session: session} do
+      participant_fixture(session)
+
+      assert Games.list_participants(session, nil) == {:error, :unauthorized}
+    end
+
+    test "a credencial de outra sala é recusada", %{session: session} do
+      other_session = game_session_fixture(%{status: :waiting})
+
+      assert {:ok, participant, _token} =
+               Games.join_game_session(nil, other_session.join_code, %{"nickname" => "Ana"})
+
+      assert Games.list_participants(session, participant) == {:error, :unauthorized}
+    end
+
+    test "quem já foi dispensado perde o acesso à lista", %{session: session} do
+      participant = participant_fixture(session, %{released_at: now()})
+
+      assert Games.list_participants(session, participant) == {:error, :unauthorized}
+    end
+
+    test "omite quem saiu e mantém quem está desconectado", %{session: session, host: host} do
+      connected = participant_fixture(session, %{connection_id: Ecto.UUID.generate()})
+      disconnected = participant_fixture(session, %{connection_id: nil})
+      participant_fixture(session, %{left_at: now(), released_at: now()})
+
+      assert {:ok, participants} = Games.list_participants(session, user_scope_fixture(host))
+
+      assert Enum.sort(Enum.map(participants, & &1.id)) ==
+               Enum.sort([connected.id, disconnected.id])
+    end
+
+    test "devolve lista vazia para uma sala sem participantes", %{session: session, host: host} do
+      assert Games.list_participants(session, user_scope_fixture(host)) == {:ok, []}
+    end
+  end
+
+  describe "reserved_slots/1 e available_slots/1" do
+    setup :waiting_session
+
+    test "uma sala vazia tem todas as vagas livres", %{session: session} do
+      assert Games.reserved_slots(session) == 0
+      assert Games.available_slots(session) == Games.max_participants()
+    end
+
+    test "uma sala parcialmente ocupada desconta as participações", %{session: session} do
+      fill_session(session, 3)
+
+      assert Games.reserved_slots(session) == 3
+      assert Games.available_slots(session) == 22
+    end
+
+    test "uma sala cheia não tem vagas", %{session: session} do
+      fill_session(session, 25)
+
+      assert Games.reserved_slots(session) == 25
+      assert Games.available_slots(session) == 0
+    end
+
+    test "quem saiu e quem foi dispensado continuam contando", %{session: session} do
+      participant_fixture(session, %{left_at: now(), released_at: now()})
+      participant_fixture(session, %{released_at: now()})
+
+      assert Games.reserved_slots(session) == 2
+      assert Games.available_slots(session) == 23
+    end
+
+    test "a sala aceita no máximo vinte e cinco participações" do
+      assert Games.max_participants() == 25
+    end
+  end
+
+  describe "suggested_nickname/1" do
+    test "devolve nil para visitante" do
+      assert Games.suggested_nickname(nil) == nil
+    end
+
+    test "devolve o nome da conta" do
+      assert Games.suggested_nickname(user_scope_fixture()) == "Ana Souza"
+    end
+
+    test "aceita um nome curto" do
+      scope = user_scope_fixture(user_fixture(%{name: "Jô"}))
+
+      assert Games.suggested_nickname(scope) == "Jô"
+    end
+
+    test "trunca um nome acima de vinte caracteres" do
+      scope = user_scope_fixture(user_fixture(%{name: "Maria Fernanda Albuquerque"}))
+      suggestion = Games.suggested_nickname(scope)
+
+      assert suggestion == "Maria Fernanda Albuq"
+      assert String.length(suggestion) == 20
+    end
+
+    test "remove os caracteres que o apelido não aceita" do
+      scope = user_scope_fixture(user_fixture(%{name: "Ana 🎉 Souza!"}))
+
+      assert Games.suggested_nickname(scope) == "Ana  Souza"
+    end
+
+    test "devolve nil quando nada de aproveitável sobra" do
+      scope = user_scope_fixture(user_fixture(%{name: "@@@"}))
+
+      assert Games.suggested_nickname(scope) == nil
+    end
+
+    test "a sugestão é sempre aceita como apelido" do
+      scope = user_scope_fixture(user_fixture(%{name: "Maria Fernanda Albuquerque"}))
+      session = game_session_fixture(%{status: :waiting})
+
+      assert {:ok, participant, _token} =
+               Games.join_game_session(scope, session.join_code, %{
+                 "nickname" => Games.suggested_nickname(scope)
+               })
+
+      assert participant.nickname == "Maria Fernanda Albuq"
+    end
+  end
+
+  defp waiting_session(_context) do
+    host = user_fixture()
+
+    %{host: host, session: game_session_fixture(%{host: host, status: :waiting})}
+  end
+
+  defp fill_session(session, count) do
+    for _index <- 1..count, do: participant_fixture(session)
+  end
+
+  defp participations_of(scope) do
+    from p in Participant, where: p.user_id == ^scope.user.id
+  end
+
+  defp minutes_ago(minutes), do: DateTime.add(now(), -minutes * 60, :second)
+
+  defp contains?(value, token) when is_binary(value), do: String.contains?(value, token)
+  defp contains?(_value, _token), do: false
 
   defp host_with_playable_quiz(_context) do
     scope = user_scope_fixture()
