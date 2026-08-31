@@ -21,11 +21,19 @@ defmodule LiveQuiz.Games do
   by a unique index, the 25 seats are counted under an advisory lock on the room
   and "one room per person" is serialized by an advisory lock on the account.
   Locks are always taken in the same order — identity first, room second — which
-  is what keeps `join_game_session/4` from deadlocking against the operations
-  that F2-04 and F2-05 add on the same rows.
+  is what keeps `join_game_session/4` from deadlocking against
+  `rejoin_game_session/2` and the operations F2-05 adds on the same rows.
 
   Whoever joins gets a `LiveQuiz.Games.ParticipantToken`, returned in clear only
   by `join_game_session/4` and stored only as a digest.
+
+  Leaving a room, coming back to it and handing its access over are three
+  different things, and only the first takes the participation off the lobby
+  list: `leave_game_session/1` frees the person for another room while the seat
+  and the nickname stay reserved, `rejoin_game_session/2` gives that very
+  participation back, and `claim_participant_connection/1` — like
+  `claim_host_connection/2` for the host — only moves the live access from one
+  connection to another, always with an `UPDATE` and never with an `INSERT`.
 
   ## Test seam
 
@@ -226,6 +234,146 @@ defmodule LiveQuiz.Games do
   end
 
   @doc """
+  Leaves a room on purpose, which is not the same as dropping off it.
+
+  The participation disappears from the lobby list and the person is free to
+  enter another room, but the row stays: the seat is not handed back (AD-27)
+  and the nickname remains reserved to whoever picked it, so a room can be full
+  with fewer than #{@max_participants} people present. `left_at` and
+  `released_at` are stamped together here; closing a room (F2-05) stamps only
+  the second one, which is what will still tell phase 4 who was present at the
+  end.
+
+  Idempotent, and allowed on a room that is already over: leaving again, or
+  leaving after the room released everybody, answers with the participation
+  untouched.
+  """
+  @spec leave_game_session(Participant.t()) :: {:ok, Participant.t()}
+  def leave_game_session(%Participant{} = participant) do
+    if Participant.in_lobby?(participant) do
+      at = now()
+
+      changeset = Participant.connection_changeset(participant, %{left_at: at, released_at: at})
+
+      # Stamping `released_at` only takes the row out of the one-room-per-account
+      # index, so there is no constraint left for this update to violate.
+      {:ok, Repo.update!(changeset)}
+    else
+      {:ok, participant}
+    end
+  end
+
+  @doc """
+  Comes back to a participation that is still reserved, with or without a
+  voluntary exit before it.
+
+  Allowed while the room is waiting or already running, and refused with
+  `:session_ended` once it is over — a credential dies with its room. Coming
+  back is not a new sign-up: no seat is taken, the capacity is not checked
+  again, and neither the nickname nor `joined_at` changes. A full room still
+  takes its own people back.
+
+  Whoever is tied to another room is refused with `:already_in_another_session`
+  instead of being pulled out of it — abandoning the other room is the person's
+  decision, not the server's. `opts` accepts `:known_tokens`, the credentials
+  the client already holds, which is the only way to notice that a guest is
+  holding a live participation somewhere else (AD-28).
+  """
+  @spec rejoin_game_session(String.t(), keyword()) ::
+          {:ok, Participant.t()}
+          | {:error, :not_found}
+          | {:error, :session_ended}
+          | {:error, :already_in_another_session}
+  def rejoin_game_session(token, opts \\ []) when is_list(opts) do
+    known = known_credentials(opts)
+
+    Repo.transaction(fn ->
+      with {:ok, participant} <- fetch_participant_for_rejoin(token),
+           :ok <- ensure_session_live(participant.game_session),
+           :ok <- ensure_free_to_rejoin(participant, known),
+           {:ok, participant} <- restore_participation(participant) do
+        participant
+      else
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+  end
+
+  @doc """
+  Registers the connection now holding the participation and answers with the
+  id it was given.
+
+  A participation has a single live access (AD-30): the connection that claims
+  it last holds it, and the previous ones find out they lost the room by
+  checking their own id against `connection_current?/2`. This is an `UPDATE`
+  and never an `INSERT`, so the participation, the nickname and the seat are
+  the very same whether the newcomer is another tab or another device.
+  """
+  @spec claim_participant_connection(Participant.t()) :: {:ok, Participant.t(), Ecto.UUID.t()}
+  def claim_participant_connection(%Participant{} = participant) do
+    connection_id = Ecto.UUID.generate()
+
+    participant =
+      participant
+      |> Participant.connection_changeset(%{connection_id: connection_id})
+      |> Repo.update!()
+
+    {:ok, participant, connection_id}
+  end
+
+  @doc """
+  The same access transfer, applied to the host of a room.
+
+  Another tab or another device takes the room over and the connection that
+  held it stops being the host's. Losing the room does **not** end the account
+  session of the previous device: what changes hands is the access to this
+  room, nothing else.
+
+  The room is read back through the scope, so somebody who does not host it
+  gets `:unauthorized` instead of taking it over.
+  """
+  @spec claim_host_connection(Scope.t(), GameSession.t()) ::
+          {:ok, GameSession.t(), Ecto.UUID.t()} | {:error, :unauthorized}
+  def claim_host_connection(%Scope{} = scope, %GameSession{id: id}) do
+    scope
+    |> hosted_sessions()
+    |> where([s], s.id == ^id)
+    |> Repo.one()
+    |> case do
+      nil ->
+        {:error, :unauthorized}
+
+      %GameSession{} = session ->
+        connection_id = Ecto.UUID.generate()
+
+        session =
+          session
+          |> GameSession.host_presence_changeset(%{host_connection_id: connection_id})
+          |> Repo.update!()
+
+        {:ok, session, connection_id}
+    end
+  end
+
+  @doc """
+  Tells whether the `connection_id` presented is still the live access of the
+  participation.
+
+  A participation nobody claimed yet has no live access at all, so every value
+  gets `false`, `nil` included.
+  """
+  @spec connection_current?(Participant.t(), Ecto.UUID.t()) :: boolean()
+  def connection_current?(%Participant{connection_id: current}, connection_id) do
+    same_connection?(current, connection_id)
+  end
+
+  @doc "Tells whether the `connection_id` presented is still the live access of the host."
+  @spec host_connection_current?(GameSession.t(), Ecto.UUID.t()) :: boolean()
+  def host_connection_current?(%GameSession{host_connection_id: current}, connection_id) do
+    same_connection?(current, connection_id)
+  end
+
+  @doc """
   Lists the participations visible in the lobby, oldest first.
 
   Only the host of the room or someone taking part in it may read the list
@@ -295,8 +443,13 @@ defmodule LiveQuiz.Games do
     if participating?(scope), do: {:error, :already_participating}, else: :ok
   end
 
-  defp hosting?(%Scope{} = scope) do
-    scope |> hosted_sessions() |> live() |> Repo.exists?()
+  defp hosting?(%Scope{} = scope), do: hosting_user?(scope.user.id)
+
+  defp hosting_user?(user_id) do
+    GameSession
+    |> where([s], s.host_id == ^user_id)
+    |> live()
+    |> Repo.exists?()
   end
 
   defp participating?(%Scope{} = scope) do
@@ -430,7 +583,7 @@ defmodule LiveQuiz.Games do
       game_session_id: session.id,
       user_id: scope && scope.user.id,
       access_token_hash: hash,
-      joined_at: DateTime.truncate(DateTime.utc_now(), :second)
+      joined_at: now()
     }
     |> Participant.join_changeset(attrs)
     # A refused insert would poison the surrounding transaction before the
@@ -488,6 +641,84 @@ defmodule LiveQuiz.Games do
       nil -> {:error, :not_found}
       %Participant{} = participant -> {:ok, participant}
     end
+  end
+
+  # Unlike `get_participant_by_token/1`, this one looks past the room being over:
+  # the difference between a credential nobody ever issued and one whose room is
+  # closed is exactly what tells `:not_found` from `:session_ended`.
+  defp fetch_participant_for_rejoin(token) do
+    case ParticipantToken.hash(token) do
+      {:ok, hash} ->
+        Participant
+        |> where([p], p.access_token_hash == ^hash)
+        |> preload(:game_session)
+        |> Repo.one()
+        |> case do
+          nil -> {:error, :not_found}
+          %Participant{} = participant -> {:ok, participant}
+        end
+
+      :error ->
+        {:error, :not_found}
+    end
+  end
+
+  defp ensure_session_live(%GameSession{} = session) do
+    if GameSession.active?(session), do: :ok, else: {:error, :session_ended}
+  end
+
+  # Nothing else may be holding the person when they come back. For an account
+  # the database answers it, under the very same identity lock the join takes
+  # and before any other lock, so the two orders match and cannot deadlock. A
+  # guest has no identity to lock on: the only other rooms the server can tie
+  # them to are the ones whose credentials the client hands over (AD-28).
+  defp ensure_free_to_rejoin(%Participant{user_id: nil} = participant, known) do
+    engaged_elsewhere? =
+      known
+      |> Enum.map(&elem(&1, 0))
+      |> Enum.reject(&(&1 == participant.access_token_hash))
+      |> active_participations_for_hashes()
+      |> Enum.any?(&(&1.game_session_id != participant.game_session_id))
+
+    if engaged_elsewhere?, do: {:error, :already_in_another_session}, else: :ok
+  end
+
+  defp ensure_free_to_rejoin(%Participant{user_id: user_id} = participant, _known) do
+    lock_identity(user_id)
+
+    if hosting_user?(user_id) or participating_elsewhere?(participant) do
+      {:error, :already_in_another_session}
+    else
+      :ok
+    end
+  end
+
+  defp restore_participation(%Participant{left_at: nil, released_at: nil} = participant) do
+    {:ok, participant}
+  end
+
+  defp restore_participation(%Participant{} = participant) do
+    participant
+    |> Participant.connection_changeset(%{left_at: nil, released_at: nil})
+    # Clearing `released_at` puts the row back into the one-room-per-account
+    # index, and the check above is only the first line of defence, so the
+    # update takes its own savepoint and the violation is read back as the same
+    # refusal instead of leaking a changeset.
+    |> Repo.update(mode: :savepoint)
+    |> case do
+      {:ok, %Participant{} = participant} -> {:ok, participant}
+      {:error, %Changeset{}} -> {:error, :already_in_another_session}
+    end
+  end
+
+  defp participating_elsewhere?(%Participant{id: id, user_id: user_id}) do
+    Participant
+    |> where([p], p.user_id == ^user_id and is_nil(p.released_at) and p.id != ^id)
+    |> Repo.exists?()
+  end
+
+  defp same_connection?(current, presented) do
+    is_binary(current) and is_binary(presented) and current == presented
   end
 
   defp allowed_to_list?(%GameSession{} = session, %Scope{} = scope) do
@@ -549,4 +780,6 @@ defmodule LiveQuiz.Games do
   defp live(query) do
     where(query, [s], s.status in ^GameSession.active_statuses())
   end
+
+  defp now, do: DateTime.truncate(DateTime.utc_now(), :second)
 end
