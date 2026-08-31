@@ -198,6 +198,28 @@ defmodule LiveQuiz.Games.ParticipantTest do
     end
   end
 
+  describe "credential_changeset/2" do
+    test "replaces the persisted digest", %{session: session} do
+      participant = participant_fixture(session)
+      digest = unique_access_token_hash()
+
+      updated = participant |> Participant.credential_changeset(digest) |> Repo.update!()
+
+      assert updated.access_token_hash == digest
+      assert Repo.get!(Participant, participant.id).access_token_hash == digest
+    end
+
+    test "rejects a digest of the wrong size", %{session: session} do
+      changeset =
+        session
+        |> participant_fixture()
+        |> Participant.credential_changeset(:crypto.strong_rand_bytes(16))
+
+      refute changeset.valid?
+      assert %{access_token_hash: [_message | _]} = errors_on(changeset)
+    end
+  end
+
   describe "in_lobby?/1" do
     test "is true while the participation is open" do
       assert Participant.in_lobby?(%Participant{})
