@@ -5,7 +5,7 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: live_quiz_dev
-    ports: ["${DB_PORT:-5432}:5432"]
+    ports: ["5432:5432"]
     volumes: ["pgdata:/var/lib/postgresql/data"]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
@@ -17,5 +17,38 @@ services:
     image: axllent/mailpit
     ports: ["${SMTP_PORT:-1025}:1025", "${MAILPIT_UI_PORT:-8025}:8025"]
 
+  app:
+    build:
+      context: .
+      target: dev
+    depends_on:
+      db:
+        condition: service_healthy
+      mailpit:
+        condition: service_started
+    environment:
+      DB_HOST: db
+      SMTP_HOST: mailpit
+    # O código vem do host, para o recompilador do Phoenix ver cada edição.
+    # `deps` e `_build` ficam em volumes próprios: os artefatos compilados na
+    # máquina são de outra arquitetura e não podem vazar para dentro da imagem.
+    volumes:
+      - .:/app
+      - deps:/app/deps
+      - build:/app/_build
+    ports: ["127.0.0.1:${APP_PORT:-4000}:4000"]
+    command: >
+      sh -c "mix setup && mix phx.server"
+    healthcheck:
+      # 127.0.0.1 e não localhost: o endpoint de dev escuta em IPv4 e o
+      # `localhost` do container resolve primeiro para ::1.
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:4000/ >/dev/null 2>&1 || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 30s
+
 volumes:
   pgdata:
+  deps:
+  build:
