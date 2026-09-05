@@ -4,9 +4,12 @@ import Config
 config :live_quiz, LiveQuiz.Repo,
   username: "postgres",
   password: "postgres",
-  hostname: "localhost",
-  # Ajuste DB_PORT quando a 5432 já estiver ocupada na sua máquina.
-  port: String.to_integer(System.get_env("DB_PORT", "5432")),
+  # `db` é o nome do serviço do compose, usado pelo container da aplicação.
+  # O padrão `localhost` serve aos comandos `mix` rodados na máquina (testes,
+  # `mix precommit`), que alcançam o mesmo banco pela porta publicada.
+  hostname: System.get_env("DB_HOST", "localhost"),
+  # O banco de desenvolvimento sobe apenas pelo `docker compose up -d`, sempre na 5432.
+  port: 5432,
   database: "live_quiz_dev",
   stacktrace: true,
   show_sensitive_data_on_connection_error: true,
@@ -23,9 +26,10 @@ config :live_quiz, LiveQuiz.Accounts.Guardian,
 # watchers to your application. For example, we can use it
 # to bundle .js and .css sources.
 config :live_quiz, LiveQuizWeb.Endpoint,
-  # Binding to loopback ipv4 address prevents access from other machines.
-  # Change to `ip: {0, 0, 0, 0}` to allow access from other machines.
-  http: [ip: {127, 0, 0, 1}],
+  # A aplicação roda dentro do container, então precisa escutar em todas as
+  # interfaces dele. O compose publica a porta só em 127.0.0.1, de modo que o
+  # servidor continua invisível para o resto da rede.
+  http: [ip: {0, 0, 0, 0}],
   check_origin: false,
   code_reloader: true,
   debug_errors: true,
@@ -83,7 +87,7 @@ config :phoenix_live_view,
 # whose inbox is available at http://localhost:8025.
 config :live_quiz, LiveQuiz.Mailer,
   adapter: Swoosh.Adapters.SMTP,
-  relay: "localhost",
+  relay: System.get_env("SMTP_HOST", "localhost"),
   port: String.to_integer(System.get_env("SMTP_PORT", "1025")),
   auth: :never,
   tls: :never
