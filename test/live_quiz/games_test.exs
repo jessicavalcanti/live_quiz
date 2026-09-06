@@ -7,6 +7,7 @@ defmodule LiveQuiz.GamesTest do
   import LiveQuiz.QuizzesFixtures
 
   alias Ecto.Adapters.SQL.Sandbox
+  alias Ecto.Changeset
   alias LiveQuiz.Accounts
   alias LiveQuiz.Accounts.User
   alias LiveQuiz.Games
@@ -2203,6 +2204,70 @@ defmodule LiveQuiz.GamesTest do
     end
   end
 
+  describe "question_count/1" do
+    test "conta as perguntas do quiz enquanto a sala espera" do
+      %{session: session} = room_with_questions(4)
+
+      assert Games.question_count(session) == 4
+    end
+
+    test "conta as perguntas do snapshot depois que a partida começa" do
+      %{scope: scope, session: session, quiz: quiz} = room_with_questions(2)
+
+      assert {:ok, started} = Games.start_game_session(scope, session, 1)
+
+      question_fixture(scope, quiz_fixture(scope, %{title: "Outro"}))
+      Repo.delete!(quiz)
+
+      assert Games.question_count(started) == 2
+    end
+
+    test "não consulta as tabelas de quizzes depois do início" do
+      %{scope: scope, session: session} = room_with_questions(2)
+
+      assert {:ok, started} = Games.start_game_session(scope, session, 1)
+
+      refute_quiz_tables_queried(fn -> Games.question_count(started) end)
+    end
+
+    test "conta zero para uma sala cujo quiz foi excluído antes de começar" do
+      %{quiz: quiz, session: session} = room_with_questions(3)
+
+      Repo.delete!(quiz)
+
+      assert Games.question_count(Repo.get!(GameSession, session.id)) == 0
+    end
+  end
+
+  describe "change_question_duration/1" do
+    test "começa com o padrão de trinta segundos" do
+      changeset = Games.change_question_duration()
+
+      assert Changeset.get_field(changeset, :question_duration_seconds) == 30
+      assert changeset.valid?
+    end
+
+    test "aceita cada uma das durações disponíveis" do
+      for duration <- GameSession.question_durations() do
+        changeset =
+          Games.change_question_duration(%{"question_duration_seconds" => to_string(duration)})
+
+        assert changeset.valid?
+        assert Changeset.get_field(changeset, :question_duration_seconds) == duration
+      end
+    end
+
+    test "recusa uma duração fora da lista" do
+      changeset = Games.change_question_duration(%{"question_duration_seconds" => "45"})
+
+      refute changeset.valid?
+
+      assert errors_on(changeset).question_duration_seconds == [
+               "escolha uma das durações disponíveis"
+             ]
+    end
+  end
+
   describe "create_game_session/3 e a duração das perguntas" do
     test "usa trinta segundos quando a duração não é informada" do
       scope = user_scope_fixture()
@@ -2259,14 +2324,23 @@ defmodule LiveQuiz.GamesTest do
       end
     end
 
-    test "uma duração em branco cai no padrão" do
-      scope = user_scope_fixture()
-      quiz = playable_quiz(scope)
+    # Não informar a duração e informá-la vazia são coisas diferentes: a
+    # primeira aceita o padrão da coluna, a segunda é um formulário enviado sem
+    # nada marcado (F3-07) e não abre sala nenhuma.
+    test "recusa uma duração em branco e não abre a sala" do
+      for blank <- ["", "   ", nil] do
+        scope = user_scope_fixture()
+        quiz = playable_quiz(scope)
 
-      assert {:ok, session} =
-               Games.create_game_session(scope, quiz.id, %{"question_duration_seconds" => ""})
+        assert {:error, changeset} =
+                 Games.create_game_session(scope, quiz.id, %{
+                   "question_duration_seconds" => blank
+                 })
 
-      assert session.question_duration_seconds == 30
+        assert errors_on(changeset).question_duration_seconds == ["can't be blank"]
+
+        refute hosted_any?(scope)
+      end
     end
 
     test "ignora qualquer outra chave enviada junto" do

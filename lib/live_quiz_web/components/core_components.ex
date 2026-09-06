@@ -140,9 +140,15 @@ defmodule LiveQuizWeb.CoreComponents do
 
     * For live file uploads, see `Phoenix.Component.live_file_input/1`
 
+    * `type="radio-group"` renders one radio per entry of `options` inside a
+      `fieldset`, using `label` as its `legend`. A hidden field of the same name
+      goes in front of them, so a group with nothing chosen still submits the
+      key and the changeset gets to refuse it instead of silently falling back
+      to the default of the column
+
   See https://developer.mozilla.org/en-US/docs/Web/HTML/Element/input
-  for more information. Unsupported types, such as radio, are best
-  written directly in your templates.
+  for more information. Unsupported types are best written directly in your
+  templates.
 
   ## Examples
 
@@ -171,7 +177,7 @@ defmodule LiveQuizWeb.CoreComponents do
   attr :type, :string,
     default: "text",
     values: ~w(checkbox color date datetime-local email file month number password
-               search select tel text textarea time url week hidden)
+               radio-group search select tel text textarea time url week hidden)
 
   attr :field, Phoenix.HTML.FormField,
     doc: "a form field struct retrieved from the form, for example: @form[:email]"
@@ -279,6 +285,34 @@ defmodule LiveQuizWeb.CoreComponents do
     """
   end
 
+  def input(%{type: "radio-group"} = assigns) do
+    ~H"""
+    <fieldset class="fieldset mb-2">
+      <legend :if={@label} class="label mb-1">{@label}</legend>
+      <input type="hidden" name={@name} value="" disabled={@rest[:disabled]} form={@rest[:form]} />
+      <div class="flex flex-wrap gap-4">
+        <label
+          :for={{option_label, option_value} <- @options}
+          for={option_id(@id, option_value)}
+          class="flex cursor-pointer items-center gap-2"
+        >
+          <input
+            type="radio"
+            id={option_id(@id, option_value)}
+            name={@name}
+            value={to_string(option_value)}
+            checked={checked_option?(@value, option_value)}
+            class={@class || "radio radio-sm"}
+            {@rest}
+          />
+          <span>{option_label}</span>
+        </label>
+      </div>
+      <.error :for={msg <- @errors}>{msg}</.error>
+    </fieldset>
+    """
+  end
+
   # All other inputs text, datetime-local, url, password, etc. are handled here...
   def input(assigns) do
     ~H"""
@@ -301,6 +335,15 @@ defmodule LiveQuizWeb.CoreComponents do
     </div>
     """
   end
+
+  # Every radio of the group shares the field name, so the id has to carry the
+  # value as well for the label to point at the right one.
+  defp option_id(id, value), do: "#{id}_#{value}"
+
+  # The value comes back from the changeset as an integer and from the browser
+  # as a string, and either one may be `nil` when nothing was chosen.
+  defp checked_option?(nil, _option_value), do: false
+  defp checked_option?(value, option_value), do: to_string(value) == to_string(option_value)
 
   # Helper used by inputs to generate form errors
   defp error(assigns) do

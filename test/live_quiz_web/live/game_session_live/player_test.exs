@@ -6,6 +6,7 @@ defmodule LiveQuizWeb.GameSessionLive.PlayerTest do
 
   import LiveQuiz.AccountsFixtures
   import LiveQuiz.GamesFixtures
+  import LiveQuiz.QuizzesFixtures
   import Phoenix.LiveViewTest
 
   alias LiveQuiz.Accounts.Scope
@@ -614,6 +615,41 @@ defmodule LiveQuizWeb.GameSessionLive.PlayerTest do
     end
   end
 
+  describe "perguntas e duração no lobby" do
+    test "anuncia quantas perguntas e quanto tempo cada uma dura", %{conn: conn} do
+      session = room_with_questions(10, 20)
+      {:ok, _participant, token} = join(session, "Ana")
+      conn = put_participant_token(conn, session.join_code, token)
+
+      {:ok, lv, _html} = live(conn, ~p"/game-sessions/#{session.join_code}")
+
+      assert lv |> element("#match-setup") |> render() =~
+               "10 perguntas · 20 segundos por pergunta"
+    end
+
+    test "usa o singular quando a sala tem uma pergunta só", %{conn: conn} do
+      session = room_with_questions(1, 10)
+      {:ok, _participant, token} = join(session, "Ana")
+      conn = put_participant_token(conn, session.join_code, token)
+
+      {:ok, lv, _html} = live(conn, ~p"/game-sessions/#{session.join_code}")
+
+      assert lv |> element("#match-setup") |> render() =~
+               "1 pergunta · 10 segundos por pergunta"
+    end
+
+    test "não oferece nenhum controle para mudar a duração", %{conn: conn} do
+      session = room_with_questions(3, 60)
+      {:ok, _participant, token} = join(session, "Ana")
+      conn = put_participant_token(conn, session.join_code, token)
+
+      {:ok, lv, _html} = live(conn, ~p"/game-sessions/#{session.join_code}")
+
+      refute has_element?(lv, ~s{[name*="question_duration_seconds"]})
+      refute has_element?(lv, ~s{[type="radio"]})
+    end
+  end
+
   describe "acessibilidade" do
     setup :room_with_ana
 
@@ -678,6 +714,23 @@ defmodule LiveQuizWeb.GameSessionLive.PlayerTest do
       participant: participant,
       token: token
     }
+  end
+
+  # Uma sala esperando cujo quiz tem um número de perguntas escolhido pelo
+  # teste: o lobby anuncia esse número, e o fixture padrão traz só uma.
+  defp room_with_questions(question_count, duration_seconds) do
+    host = user_fixture()
+    scope = Scope.for_user(host)
+    quiz = quiz_fixture(scope, %{title: "Geografia"})
+
+    for _ <- 1..question_count, do: question_fixture(scope, quiz)
+
+    game_session_fixture(%{
+      host: host,
+      quiz: quiz,
+      status: :waiting,
+      question_duration_seconds: duration_seconds
+    })
   end
 
   defp join(session, nickname, opts \\ []) do

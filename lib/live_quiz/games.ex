@@ -147,6 +147,7 @@ defmodule LiveQuiz.Games do
   alias LiveQuiz.Games.QuestionTimer
   alias LiveQuiz.Games.QuizLock
   alias LiveQuiz.Quizzes
+  alias LiveQuiz.Quizzes.Question
   alias LiveQuiz.Quizzes.Quiz
   alias LiveQuiz.Repo
 
@@ -227,6 +228,21 @@ defmodule LiveQuiz.Games do
         {:error, reason} -> Repo.rollback(reason)
       end
     end)
+  end
+
+  @doc """
+  Builds the changeset the "abrir sala" form is drawn from.
+
+  The duration is the only thing the host chooses when opening a room (AD-38),
+  so the form has a single field, already carrying the default of 30 seconds.
+  The screen never restates which durations are allowed: it asks
+  `LiveQuiz.Games.GameSession.question_durations/0` for the list and hands the
+  submission straight back to `create_game_session/3`, whose changeset is the
+  one that refuses anything else.
+  """
+  @spec change_question_duration(map()) :: Changeset.t()
+  def change_question_duration(attrs \\ %{}) do
+    GameSession.duration_changeset(%GameSession{}, attrs)
   end
 
   @doc """
@@ -739,6 +755,32 @@ defmodule LiveQuiz.Games do
   @spec snapshot_question_count(GameSession.t()) :: non_neg_integer()
   def snapshot_question_count(%GameSession{id: id}) do
     id |> snapshot_questions() |> Repo.aggregate(:count, :id)
+  end
+
+  @doc """
+  How many questions the room announces it is going to play.
+
+  Before the start there is no snapshot yet, so the number can only come from
+  the quiz the room was opened from — which cannot change underneath it, since
+  a live room locks its quiz against edits (AD-32). From the start onwards the
+  snapshot is the only source read, as the match owes nothing to the quiz any
+  more (AD-36). A room whose quiz was deleted before it ever started announces
+  zero, which is the truth: there is nothing left to play.
+  """
+  @spec question_count(GameSession.t()) :: non_neg_integer()
+  def question_count(%GameSession{} = session) do
+    case snapshot_question_count(session) do
+      0 -> quiz_question_count(session)
+      count -> count
+    end
+  end
+
+  defp quiz_question_count(%GameSession{quiz_id: nil}), do: 0
+
+  defp quiz_question_count(%GameSession{quiz_id: quiz_id}) do
+    Question
+    |> where([q], q.quiz_id == ^quiz_id)
+    |> Repo.aggregate(:count, :id)
   end
 
   @doc """
@@ -1539,10 +1581,24 @@ defmodule LiveQuiz.Games do
   # value reaches here either from a form or from a controller.
   defp create_attrs(%Quiz{} = quiz, attrs) do
     attrs
-    |> Map.new(fn {key, value} -> {to_string(key), value} end)
+    |> Map.new(fn {key, value} -> {to_string(key), blank_to_nil(value)} end)
     |> Map.take(["question_duration_seconds"])
     |> Map.merge(%{"quiz_title" => quiz.title, "join_code" => generate_join_code()})
   end
+
+  # A duration that arrives empty is not the same thing as a duration that was
+  # never asked for: a caller that says nothing accepts the default of the
+  # column, while a form submitted with nothing chosen has to be refused. Ecto
+  # would read an empty string back as the column default, so the emptiness is
+  # made explicit here, before the changeset sees it.
+  defp blank_to_nil(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> nil
+      trimmed -> trimmed
+    end
+  end
+
+  defp blank_to_nil(value), do: value
 
   defp handle_insert_error(scope, quiz, attrs, changeset, attempts_left) do
     cond do

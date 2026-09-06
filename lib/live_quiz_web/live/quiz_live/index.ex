@@ -6,10 +6,18 @@ defmodule LiveQuizWeb.QuizLive.Index do
   reads `page` and `search` from it and asks the context for that slice. Typing
   in the search box only pushes a patch, so the address bar always describes the
   current state and the back button works.
+
+  "Iniciar partida" is the one action here that asks something before doing it:
+  since F3-07 the host chooses how long each question lasts, and the choice is
+  made where the room is opened rather than when the match starts (AD-38), with
+  a room full of people waiting. The modal restates none of the rules — the
+  options come from `LiveQuiz.Games.GameSession.question_durations/0` and a
+  refused submission is rendered from the changeset the context hands back.
   """
   use LiveQuizWeb, :live_view
 
   alias LiveQuiz.Games
+  alias LiveQuiz.Games.GameSession
   alias LiveQuiz.Quizzes
   alias LiveQuiz.Quizzes.Quiz
   alias LiveQuizWeb.Formatters
@@ -23,6 +31,8 @@ defmodule LiveQuizWeb.QuizLive.Index do
      socket
      |> assign(:page_title, "Meus quizzes")
      |> assign(:quiz_to_delete, nil)
+     |> assign(:quiz_to_start, nil)
+     |> assign(:session_form, nil)
      |> assign(:invalid_field, nil)
      |> assign(:attempt, 0)}
   end
@@ -81,6 +91,43 @@ defmodule LiveQuizWeb.QuizLive.Index do
     end
   end
 
+  def handle_event("start_game", %{"id" => id}, socket) do
+    quiz = Quizzes.get_quiz!(socket.assigns.current_scope, id)
+
+    {:noreply,
+     socket
+     |> assign(:quiz_to_start, quiz)
+     |> assign_session_form(Games.change_question_duration())}
+  end
+
+  def handle_event("cancel_start", _params, socket) do
+    {:noreply, close_start_modal(socket)}
+  end
+
+  # The screen decides nothing about the duration: it sends what was marked and
+  # renders whatever the context answers. A room that already exists is not a
+  # refusal to read — it is the room the host is looking for.
+  def handle_event("create_session", %{"game_session" => params}, socket) do
+    %{current_scope: scope, quiz_to_start: quiz} = socket.assigns
+
+    case Games.create_game_session(scope, quiz.id, params) do
+      {:ok, session} ->
+        {:noreply, push_navigate(socket, to: ~p"/game-sessions/#{session.join_code}/host")}
+
+      {:error, %Ecto.Changeset{} = changeset} ->
+        {:noreply, assign_session_form(socket, Map.put(changeset, :action, :insert))}
+
+      {:error, :host_already_in_session} ->
+        {:noreply, resume_active_session(socket)}
+
+      {:error, reason} ->
+        {:noreply,
+         socket
+         |> close_start_modal()
+         |> put_flash(:error, session_refusal(reason))}
+    end
+  end
+
   def handle_event("delete_quiz", %{"id" => id}, socket) do
     quiz = Quizzes.get_quiz!(socket.assigns.current_scope, id)
 
@@ -131,6 +178,43 @@ defmodule LiveQuizWeb.QuizLive.Index do
   defp assign_form(socket, changeset) do
     assign(socket, :form, to_form(changeset, as: :quiz))
   end
+
+  defp assign_session_form(socket, changeset) do
+    assign(socket, :session_form, to_form(changeset, as: :game_session))
+  end
+
+  defp close_start_modal(socket) do
+    socket
+    |> assign(:quiz_to_start, nil)
+    |> assign(:session_form, nil)
+  end
+
+  # The room may have been closed between the refusal and this read, in which
+  # case there is nowhere to send the host and the reason has to be read on the
+  # dashboard itself.
+  defp resume_active_session(socket) do
+    socket = close_start_modal(socket)
+
+    case Games.get_active_session_for_host(socket.assigns.current_scope) do
+      nil ->
+        put_flash(socket, :error, session_refusal(:host_already_in_session))
+
+      session ->
+        socket
+        |> put_flash(:info, "Você já tem uma sala aberta. Continue por ela.")
+        |> push_navigate(to: ~p"/game-sessions/#{session.join_code}/host")
+    end
+  end
+
+  defp session_refusal(:quiz_not_playable),
+    do: "Adicione ao menos uma pergunta antes de iniciar uma partida"
+
+  defp session_refusal(:already_participating),
+    do: "Saia da sala em que você está antes de abrir a sua"
+
+  defp session_refusal(:host_already_in_session), do: "Você já tem uma sala aberta"
+
+  defp session_refusal(_reason), do: "Não foi possível abrir a sala. Tente novamente."
 
   defp first_invalid_field(changeset) do
     Enum.find_value([:title, :description], fn field ->
@@ -267,26 +351,17 @@ defmodule LiveQuizWeb.QuizLive.Index do
               <td class="w-0">
                 <div class="flex flex-col items-end gap-1">
                   <div class="flex items-center gap-2">
-                    <.form
-                      for={%{}}
-                      action={~p"/game-sessions"}
-                      method="post"
-                      id={"start-game-#{quiz.id}"}
-                      class="contents"
+                    <button
+                      type="button"
+                      id={"start-game-button-#{quiz.id}"}
+                      disabled={not startable?(quiz)}
+                      aria-disabled={to_string(not startable?(quiz))}
+                      aria-describedby={hint_target(quiz)}
+                      phx-click={JS.push_focus() |> JS.push("start_game", value: %{id: quiz.id})}
+                      class={["btn btn-primary btn-sm", not startable?(quiz) && "btn-disabled"]}
                     >
-                      <input type="hidden" name="quiz_id" value={quiz.id} />
-
-                      <button
-                        type="submit"
-                        id={"start-game-button-#{quiz.id}"}
-                        disabled={not startable?(quiz)}
-                        aria-disabled={to_string(not startable?(quiz))}
-                        aria-describedby={hint_target(quiz)}
-                        class={["btn btn-primary btn-sm", not startable?(quiz) && "btn-disabled"]}
-                      >
-                        Iniciar partida
-                      </button>
-                    </.form>
+                      Iniciar partida
+                    </button>
 
                     <.link
                       :if={not quiz.locked?}
@@ -401,6 +476,41 @@ defmodule LiveQuizWeb.QuizLive.Index do
 
             <.button variant="primary" phx-disable-with="Salvando...">
               Criar quiz
+            </.button>
+          </div>
+        </.form>
+      </.modal>
+
+      <.modal
+        :if={@quiz_to_start}
+        id="start-game"
+        title={~s(Iniciar partida de "#{@quiz_to_start.title}")}
+        on_cancel={JS.push("cancel_start") |> JS.pop_focus()}
+      >
+        <.form for={@session_form} id="start-game-form" phx-submit="create_session">
+          <.input
+            field={@session_form[:question_duration_seconds]}
+            type="radio-group"
+            label="Tempo por pergunta"
+            options={Enum.map(GameSession.question_durations(), &{"#{&1} segundos", &1})}
+          />
+
+          <p class="mt-2 text-sm text-base-content/70">
+            O tempo vale para todas as perguntas e não pode ser alterado depois que a
+            sala é aberta.
+          </p>
+
+          <div class="modal-action">
+            <button
+              type="button"
+              phx-click={JS.push("cancel_start") |> JS.pop_focus()}
+              class="btn btn-ghost"
+            >
+              Cancelar
+            </button>
+
+            <.button variant="primary" phx-disable-with="Abrindo...">
+              Abrir sala
             </.button>
           </div>
         </.form>
