@@ -43,6 +43,7 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
   alias LiveQuizWeb.Formatters
   alias LiveQuizWeb.GameOver
   alias LiveQuizWeb.QuestionResults
+  alias LiveQuizWeb.Ranking
   alias LiveQuizWeb.ShareSession
   alias Phoenix.Socket.Broadcast
 
@@ -65,6 +66,7 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
       # it whole (AD-36), so the number read here survives the start.
       |> assign(:question_count, Games.question_count(session))
       |> assign(:join_url, ShareSession.join_url(session.join_code))
+      |> assign(:ranking, nil)
 
     {:ok, socket |> take_over() |> load_lobby() |> load_match() |> load_summary()}
   end
@@ -123,8 +125,13 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
       |> assign(:game_state, state)
       |> assign(:answers_count, state.answers_count)
       |> load_results(state)
+      |> load_ranking(state)
     else
-      socket |> assign(:game_state, nil) |> assign(:answers_count, 0) |> assign(:results, nil)
+      socket
+      |> assign(:game_state, nil)
+      |> assign(:answers_count, 0)
+      |> assign(:results, nil)
+      |> assign(:ranking, nil)
     end
   end
 
@@ -143,6 +150,26 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
   end
 
   defp load_results(socket, _open_or_pending), do: assign(socket, :results, nil)
+
+  defp load_ranking(socket, %{question_state: :closed}) do
+    %{current_scope: scope, session: session} = socket.assigns
+
+    case Games.current_ranking(session, scope) do
+      {:ok, ranking} -> assign(socket, :ranking, ranking)
+      {:error, :unauthorized} -> assign(socket, :ranking, nil)
+    end
+  end
+
+  defp load_ranking(socket, _state), do: assign(socket, :ranking, nil)
+
+  defp load_final_ranking(socket, %GameSession{status: :finished} = session) do
+    case Games.current_ranking(session, socket.assigns.current_scope) do
+      {:ok, ranking} -> assign(socket, :ranking, ranking)
+      {:error, :unauthorized} -> assign(socket, :ranking, nil)
+    end
+  end
+
+  defp load_final_ranking(socket, _session), do: assign(socket, :ranking, nil)
 
   # What the match added up to, read only when the room is over: asking for it
   # while it is running would cost a query per event for a number no screen of
@@ -320,7 +347,8 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
     {:noreply, socket |> assign(:session, session) |> load_match()}
   end
 
-  def handle_info({:ranking_updated, _ranking}, socket), do: {:noreply, socket}
+  def handle_info({:ranking_updated, ranking}, socket),
+    do: {:noreply, assign(socket, :ranking, ranking)}
 
   def handle_info({:question_scored, _session, _ranking}, socket), do: {:noreply, socket}
 
@@ -358,6 +386,7 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
     |> assign(:show_finish_modal?, false)
     |> load_lobby()
     |> load_match()
+    |> load_final_ranking(session)
     |> load_summary()
   end
 
@@ -492,6 +521,8 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
           </ul>
 
           <QuestionResults.question_results :if={@results} results={@results} viewer={:host} />
+
+          <Ranking.ranking :if={closed?(@game_state) and @ranking} ranking={@ranking} />
 
           <p
             id="answers-count"
@@ -667,6 +698,7 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
         summary={@summary}
         reason={@session.status}
         viewer={:host}
+        ranking={@ranking}
       />
 
       <.modal
