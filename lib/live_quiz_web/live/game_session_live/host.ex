@@ -6,8 +6,9 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
   It is a single address on purpose: the host who reconnects lands where the
   room actually is instead of being redirected at every transition, and the
   lobby of phase 2 gives way to the match the moment `{:game_started, session}`
-  arrives. What the screen shows about the match is `Games.game_state/2` and
-  nothing else — where the match is, what the current question says, when it
+  arrives. What the screen shows about the match is `Games.game_state/2` —
+  plus `question_results/3` at the reveal and `game_summary/2` at the ending —
+  and nothing else — where the match is, what the current question says, when it
   ends, how many people have answered — so the screen never decides whether the
   time is up, whether everybody answered or whether this was the last question.
 
@@ -40,6 +41,8 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
   alias LiveQuiz.Games.GameSession
   alias LiveQuiz.Games.Presence
   alias LiveQuizWeb.Formatters
+  alias LiveQuizWeb.GameOver
+  alias LiveQuizWeb.QuestionResults
   alias LiveQuizWeb.ShareSession
   alias Phoenix.Socket.Broadcast
 
@@ -63,7 +66,7 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
       |> assign(:question_count, Games.question_count(session))
       |> assign(:join_url, ShareSession.join_url(session.join_code))
 
-    {:ok, socket |> take_over() |> load_lobby() |> load_match()}
+    {:ok, socket |> take_over() |> load_lobby() |> load_match() |> load_summary()}
   end
 
   # Subscribing or tracking in the disconnected mount would leave the static
@@ -116,9 +119,43 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
     if started?(session) do
       {:ok, state} = Games.game_state(session, scope)
 
-      socket |> assign(:game_state, state) |> assign(:answers_count, state.answers_count)
+      socket
+      |> assign(:game_state, state)
+      |> assign(:answers_count, state.answers_count)
+      |> load_results(state)
     else
-      socket |> assign(:game_state, nil) |> assign(:answers_count, 0)
+      socket |> assign(:game_state, nil) |> assign(:answers_count, 0) |> assign(:results, nil)
+    end
+  end
+
+  # The tally is only ever asked for once the question is done with: while it is
+  # open the context refuses it (AD-46), and the screen has no answer key to
+  # draw until the reveal. A refusal is read as "nothing to reveal yet" rather
+  # than as an error, because the very question this screen believed was closed
+  # may have been reopened by nobody but a race with the timer.
+  defp load_results(socket, %{question_state: :closed, question_number: position}) do
+    %{current_scope: scope, session: session} = socket.assigns
+
+    case Games.question_results(session, position, scope) do
+      {:ok, results} -> assign(socket, :results, results)
+      {:error, _nothing_to_reveal} -> assign(socket, :results, nil)
+    end
+  end
+
+  defp load_results(socket, _open_or_pending), do: assign(socket, :results, nil)
+
+  # What the match added up to, read only when the room is over: asking for it
+  # while it is running would cost a query per event for a number no screen of
+  # this phase shows before the ending.
+  defp load_summary(socket) do
+    %{current_scope: scope, session: session} = socket.assigns
+
+    if GameSession.active?(session) do
+      assign(socket, :summary, nil)
+    else
+      {:ok, summary} = Games.game_summary(session, scope)
+
+      assign(socket, :summary, summary)
     end
   end
 
@@ -317,6 +354,7 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
     |> assign(:show_finish_modal?, false)
     |> load_lobby()
     |> load_match()
+    |> load_summary()
   end
 
   @impl true
@@ -422,7 +460,7 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
             {@game_state.question_text}
           </p>
 
-          <ul id="question-options" class="mt-6 space-y-3">
+          <ul :if={not closed?(@game_state)} id="question-options" class="mt-6 space-y-3">
             <li
               :for={option <- @game_state.options}
               id={"option-#{option.id}"}
@@ -448,6 +486,8 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
               </span>
             </li>
           </ul>
+
+          <QuestionResults.question_results :if={@results} results={@results} viewer={:host} />
 
           <p
             id="answers-count"
@@ -617,20 +657,13 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
         </div>
       </section>
 
-      <section
+      <GameOver.game_over
         :if={not active?(@session)}
-        id="room-closed"
-        class="mt-10 space-y-4 text-center"
-      >
-        <h2 class="text-3xl font-bold">{closed_title(@session)}</h2>
-        <p class="text-base-content/70">{closed_message(@session)}</p>
-
-        <div>
-          <.button id="back-to-quizzes" variant="primary" navigate={~p"/quizzes"}>
-            Voltar para Meus quizzes
-          </.button>
-        </div>
-      </section>
+        session={@session}
+        summary={@summary}
+        reason={@session.status}
+        viewer={:host}
+      />
 
       <.modal
         :if={@show_cancel_modal?}
@@ -746,21 +779,6 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
 
   defp subtitle(%GameSession{status: :in_progress}), do: "A partida está em andamento."
   defp subtitle(_session), do: "Esta sala foi encerrada."
-
-  defp closed_title(%GameSession{status: :cancelled}), do: "Sala cancelada"
-  defp closed_title(%GameSession{status: :expired}), do: "Sala encerrada por ausência"
-  defp closed_title(_session), do: "Partida encerrada"
-
-  defp closed_message(%GameSession{status: :cancelled}),
-    do: "Você cancelou esta sala e os participantes foram avisados. Abra outra quando quiser."
-
-  defp closed_message(%GameSession{status: :expired}),
-    do:
-      "A sala ficou sem host por mais de #{div(Games.host_absence_timeout(), 60)} minutos e foi " <>
-        "encerrada. Abra outra sala para jogar de novo."
-
-  defp closed_message(_session),
-    do: "Esta partida chegou ao fim. Abra outra sala para jogar de novo."
 
   defp refusal(:no_connected_participants),
     do: "A partida só começa com pelo menos uma pessoa conectada"
