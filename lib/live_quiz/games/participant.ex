@@ -22,6 +22,7 @@ defmodule LiveQuiz.Games.Participant do
   import Ecto.Changeset
 
   alias LiveQuiz.Accounts.User
+  alias LiveQuiz.Games.Answer
   alias LiveQuiz.Games.GameSession
 
   @type t :: %__MODULE__{}
@@ -45,6 +46,7 @@ defmodule LiveQuiz.Games.Participant do
 
     belongs_to :game_session, GameSession
     belongs_to :user, User
+    has_many :answers, Answer
 
     timestamps(type: :utc_datetime)
   end
