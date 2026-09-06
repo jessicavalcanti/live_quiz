@@ -314,6 +314,43 @@ defmodule LiveQuiz.Games do
     |> Repo.one!()
   end
 
+  @doc """
+  Fetches a match by its code, **live or already over**, with no owner filter.
+
+  The reads of phase 2 do not serve the execution. `get_game_session_by_code/1`
+  stops answering the moment a room ends, which would turn a command sent to a
+  cancelled match into "no such room" instead of "this match is over", and
+  `get_hosted_session_by_code!/2` filters by owner, which would answer a stranger
+  with the 404 of AD-10 rather than letting the command refuse them. Executing a
+  match needs neither: the room is found first and **the command that follows is
+  what decides who may run it** (AD-46), so the refusal comes from the context
+  and reads the same on the web and on the API.
+
+  A code is only unique among live rooms, so several rooms that are over may
+  share one; the most recent is the one the address means, exactly as the lobby
+  of the host resolves it. A value that is not shaped like a code finds nothing.
+  """
+  @spec get_match_by_code(String.t()) :: {:ok, GameSession.t()} | {:error, :not_found}
+  def get_match_by_code(code) when is_binary(code) do
+    normalized = JoinCode.normalize(code)
+
+    if JoinCode.valid_format?(normalized) do
+      GameSession
+      |> where([s], s.join_code == ^normalized)
+      |> order_by([s], desc: s.inserted_at, desc: s.id)
+      |> limit(1)
+      |> Repo.one()
+      |> case do
+        nil -> {:error, :not_found}
+        %GameSession{} = session -> {:ok, session}
+      end
+    else
+      {:error, :not_found}
+    end
+  end
+
+  def get_match_by_code(_code), do: {:error, :not_found}
+
   @doc "Returns the live room hosted by the scope user, if there is one."
   @spec get_active_session_for_host(Scope.t()) :: GameSession.t() | nil
   def get_active_session_for_host(%Scope{} = scope) do

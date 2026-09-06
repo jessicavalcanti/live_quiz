@@ -82,6 +82,13 @@ defmodule LiveQuizWeb.Router do
     get "/game-sessions/:code/host", GameSessionController, :host_show
     post "/game-sessions/:code/start", GameSessionController, :start
     post "/game-sessions/:code/cancel", GameSessionController, :cancel
+
+    # Commanding a match is the host's alone, so these sit behind the account
+    # pipeline: a participation credential buys nothing here and stops at 401
+    # before any controller runs.
+    post "/game-sessions/:code/next", GamePlayController, :next
+    post "/game-sessions/:code/close-question", GamePlayController, :close_question
+    post "/game-sessions/:code/finish", GamePlayController, :finish
   end
 
   scope "/api/v1", LiveQuizWeb.Api.V1 do
@@ -91,6 +98,13 @@ defmodule LiveQuizWeb.Router do
     get "/game-sessions/:code/me", ParticipantController, :show
     post "/game-sessions/:code/rejoin", ParticipantController, :rejoin
     delete "/game-sessions/:code/leave", ParticipantController, :leave
+
+    # Playing and watching accept either identity, which is what this pipeline
+    # resolves. Answering is narrowed to a participation inside the controller:
+    # the host is identified here and still may not play.
+    post "/game-sessions/:code/answers", GamePlayController, :answer
+    get "/game-sessions/:code/state", GamePlayController, :state
+    get "/game-sessions/:code/questions/:position/results", GamePlayController, :results
   end
 
   # Enable LiveDashboard and Swoosh mailbox preview in development

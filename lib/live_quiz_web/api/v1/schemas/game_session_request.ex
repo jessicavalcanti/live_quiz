@@ -2,10 +2,16 @@ defmodule LiveQuizWeb.Api.V1.Schemas.GameSessionRequest do
   @moduledoc """
   Documents the body accepted when opening a room.
 
-  Only the quiz is asked for. The host comes from the JWT, and the join code is
-  drawn by the server: a code sent in the body is read by nobody.
+  The quiz is required and the duration of the questions is not. The host comes
+  from the JWT and the join code is drawn by the server: neither is read from
+  the body, whatever it carries.
+
+  The duration is settled here, when the room opens, and not when the match
+  starts (AD-38), so the lobby can already announce the pace to whoever walks
+  in — and so it stops being changeable the moment the match begins.
   """
 
+  alias LiveQuiz.Games.GameSession
   alias OpenApiSpex.Schema
 
   require OpenApiSpex
@@ -20,10 +26,16 @@ defmodule LiveQuizWeb.Api.V1.Schemas.GameSessionRequest do
           type: :integer,
           description: "Identificador do quiz que a sala vai jogar",
           example: 12
+        },
+        question_duration_seconds: %Schema{
+          type: :integer,
+          description: "Tempo de cada pergunta, em segundos. Opcional, 30 por padrão",
+          enum: GameSession.question_durations(),
+          example: 30
         }
       },
       required: [:quiz_id],
-      example: %{"quiz_id" => 12}
+      example: %{"quiz_id" => 12, "question_duration_seconds" => 30}
     },
     struct?: false,
     derive?: false

@@ -34,18 +34,27 @@ defmodule LiveQuizWeb.ApiSpecTest do
     {"/api/v1/game-sessions", "post"},
     {"/api/v1/game-sessions/{code}/host", "get"},
     {"/api/v1/game-sessions/{code}/start", "post"},
-    {"/api/v1/game-sessions/{code}/cancel", "post"}
+    {"/api/v1/game-sessions/{code}/cancel", "post"},
+    {"/api/v1/game-sessions/{code}/next", "post"},
+    {"/api/v1/game-sessions/{code}/close-question", "post"},
+    {"/api/v1/game-sessions/{code}/finish", "post"}
   ]
 
   @participant_operations [
     {"/api/v1/game-sessions/{code}/me", "get"},
     {"/api/v1/game-sessions/{code}/rejoin", "post"},
-    {"/api/v1/game-sessions/{code}/leave", "delete"}
+    {"/api/v1/game-sessions/{code}/leave", "delete"},
+    {"/api/v1/game-sessions/{code}/answers", "post"}
   ]
 
-  # The lobby list is the one operation either identity may open, and entering a
-  # room is the one that takes any of the three — including none at all.
-  @either_operations [{"/api/v1/game-sessions/{code}/participants", "get"}]
+  # The lobby list and the reads of a running match are what either identity may
+  # open, and entering a room is the one that takes any of the three — including
+  # none at all.
+  @either_operations [
+    {"/api/v1/game-sessions/{code}/participants", "get"},
+    {"/api/v1/game-sessions/{code}/state", "get"},
+    {"/api/v1/game-sessions/{code}/questions/{position}/results", "get"}
+  ]
 
   @open_operations [{"/api/v1/game-sessions/{code}/join", "post"}]
 
@@ -60,7 +69,8 @@ defmodule LiveQuizWeb.ApiSpecTest do
     {"/api/v1/game-sessions/{code}", "get"}
   ]
 
-  # The statuses of the error map of F2-11, per operation, on top of the success.
+  # The statuses of the error map of F2-11 and F3-11, per operation, on top of
+  # the success.
   @room_error_statuses %{
     {"/api/v1/game-sessions", "post"} => ["401", "404", "409", "422", "503"],
     {"/api/v1/game-sessions/{code}", "get"} => ["404"],
@@ -71,7 +81,18 @@ defmodule LiveQuizWeb.ApiSpecTest do
     {"/api/v1/game-sessions/{code}/participants", "get"} => ["401", "403", "404"],
     {"/api/v1/game-sessions/{code}/me", "get"} => ["401", "404"],
     {"/api/v1/game-sessions/{code}/rejoin", "post"} => ["401", "404", "409", "410"],
-    {"/api/v1/game-sessions/{code}/leave", "delete"} => ["401", "404"]
+    {"/api/v1/game-sessions/{code}/leave", "delete"} => ["401", "404"],
+    {"/api/v1/game-sessions/{code}/next", "post"} => ["401", "403", "404", "409", "422"],
+    {"/api/v1/game-sessions/{code}/close-question", "post"} => ["401", "403", "404", "409"],
+    {"/api/v1/game-sessions/{code}/finish", "post"} => ["401", "403", "404", "409"],
+    {"/api/v1/game-sessions/{code}/answers", "post"} => ["401", "403", "404", "409", "422"],
+    {"/api/v1/game-sessions/{code}/state", "get"} => ["401", "403", "404"],
+    {"/api/v1/game-sessions/{code}/questions/{position}/results", "get"} => [
+      "401",
+      "403",
+      "404",
+      "409"
+    ]
   }
 
   describe "GET /api/openapi" do
@@ -191,7 +212,7 @@ defmodule LiveQuizWeb.ApiSpecTest do
 
       schemas = spec["components"]["schemas"]
 
-      assert map_size(schemas) == 28
+      assert map_size(schemas) == 34
 
       for {name, schema} <- schemas do
         assert is_binary(schema["description"]), "schema #{name} está sem description"
@@ -218,10 +239,10 @@ defmodule LiveQuizWeb.ApiSpecTest do
       assert Map.keys(decoded.components.securitySchemes) == ["bearerAuth", "participantAuth"]
     end
 
-    test "documents the ten operations of the phase", %{conn: conn} do
+    test "documents the sixteen operations of the rooms", %{conn: conn} do
       spec = conn |> get(~p"/api/openapi") |> json_response(200)
 
-      assert length(@room_operations) == 10
+      assert length(@room_operations) == 16
 
       for {path, verb} <- @room_operations do
         operation = spec["paths"][path][verb]
@@ -247,7 +268,7 @@ defmodule LiveQuizWeb.ApiSpecTest do
       room_ids =
         for {path, verb} <- @room_operations, do: spec["paths"][path][verb]["operationId"]
 
-      assert length(Enum.uniq(room_ids)) == 10
+      assert length(Enum.uniq(room_ids)) == 16
       assert room_ids -- ids == []
     end
 
