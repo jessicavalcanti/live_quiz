@@ -49,6 +49,10 @@ defmodule LiveQuizWeb.Api.FallbackController do
     error(conn, :unprocessable_entity, ~s(A direção deve ser "up" ou "down"))
   end
 
+  def call(conn, {:error, :invalid_filter}) do
+    error(conn, :unprocessable_entity, "Filtros e paginação inválidos", "invalid_filter")
+  end
+
   def call(conn, {:error, :invalid_credentials}) do
     error(conn, :unauthorized, "E-mail ou senha inválidos")
   end
