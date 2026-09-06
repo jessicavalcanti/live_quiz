@@ -20,6 +20,7 @@ defmodule LiveQuizWeb.Api.V1.Schemas.GameSessionResponse do
           "status" => "waiting",
           "quiz_title" => "Geografia",
           "quiz_id" => 12,
+          "question_duration_seconds" => 30,
           "reserved_slots" => 0,
           "max_participants" => 25,
           "connected_count" => 0,

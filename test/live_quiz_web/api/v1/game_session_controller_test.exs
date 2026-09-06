@@ -19,7 +19,7 @@ defmodule LiveQuizWeb.Api.V1.GameSessionControllerTest do
 
   @room_keys ~w(
     code connected_count expires_at finished_at inserted_at max_participants
-    quiz_id quiz_title reserved_slots started_at status
+    question_duration_seconds quiz_id quiz_title reserved_slots started_at status
   )
 
   setup :register_and_log_in_api_user

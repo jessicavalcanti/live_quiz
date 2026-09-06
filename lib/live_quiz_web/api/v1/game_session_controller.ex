@@ -69,6 +69,10 @@ defmodule LiveQuizWeb.Api.V1.GameSessionController do
     O host vem do token. Um quiz de outra pessoa, um `quiz_id` que não é um
     identificador e um corpo sem `quiz_id` respondem igualmente `404`: a API não
     confirma a existência de quiz alheio (AD-10).
+
+    `question_duration_seconds` é opcional e vale para todas as perguntas da
+    partida (AD-38): 10, 20, 30 ou 60, com 30 como padrão. Qualquer outro valor
+    responde `422` com a mensagem do campo.
     """,
     request_body: {"Quiz da sala", "application/json", GameSessionRequest, required: true},
     responses: [
@@ -86,8 +90,9 @@ defmodule LiveQuizWeb.Api.V1.GameSessionController do
          ErrorResponse}
     ]
 
-  def create(conn, %{"quiz_id" => quiz_id}) do
-    with {:ok, %GameSession{} = session} <- open_room(conn.assigns.current_scope, quiz_id) do
+  def create(conn, %{"quiz_id" => quiz_id} = params) do
+    with {:ok, %GameSession{} = session} <-
+           open_room(conn.assigns.current_scope, quiz_id, room_params(params)) do
       conn
       |> put_status(:created)
       |> render(:show, room(session))
@@ -275,8 +280,8 @@ defmodule LiveQuizWeb.Api.V1.GameSessionController do
   # A quiz of somebody else raises inside the transaction; an id that is not one
   # never reaches the database. Both mean the same thing to a client: there is
   # no such quiz.
-  defp open_room(%Scope{} = scope, quiz_id) do
-    Games.create_game_session(scope, quiz_id)
+  defp open_room(%Scope{} = scope, quiz_id, attrs) do
+    Games.create_game_session(scope, quiz_id, attrs)
   rescue
     Ecto.NoResultsError -> {:error, :not_found}
     Ecto.Query.CastError -> {:error, :not_found}
@@ -287,4 +292,11 @@ defmodule LiveQuizWeb.Api.V1.GameSessionController do
   # without it is an empty participation — which the changeset answers with 422
   # instead of a 500.
   defp join_params(params), do: Map.take(params, ["nickname"])
+
+  # The duration is the one thing the host chooses when opening a room (AD-38),
+  # and it is chosen here rather than at the start so the lobby can already
+  # announce the pace. A body that leaves it out gets the default of the
+  # changeset; a duration that is not one of the allowed ones is refused there
+  # too, in pt-BR, and never silently rounded to the nearest legal value.
+  defp room_params(params), do: Map.take(params, ["question_duration_seconds"])
 end
