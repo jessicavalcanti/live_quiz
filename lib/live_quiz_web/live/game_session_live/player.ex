@@ -463,6 +463,10 @@ defmodule LiveQuizWeb.GameSessionLive.Player do
     {:noreply, socket |> assign(:session, session) |> load_match()}
   end
 
+  def handle_info({:ranking_updated, _ranking}, socket), do: {:noreply, socket}
+
+  def handle_info({:question_scored, _session, _ranking}, socket), do: {:noreply, socket}
+
   # The one event of the match this screen has nothing to do with: how many
   # people have answered is the host's number, and putting it here would tell
   # whoever is still choosing how far behind the room they are.

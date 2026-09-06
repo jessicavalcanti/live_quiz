@@ -320,6 +320,10 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
     {:noreply, socket |> assign(:session, session) |> load_match()}
   end
 
+  def handle_info({:ranking_updated, _ranking}, socket), do: {:noreply, socket}
+
+  def handle_info({:question_scored, _session, _ranking}, socket), do: {:noreply, socket}
+
   # The one event of the match that carries no struct (AD-45): with twenty-five
   # people answering, all this screen does with it is redraw a number.
   def handle_info({:answer_submitted, _session_id, count}, socket) do

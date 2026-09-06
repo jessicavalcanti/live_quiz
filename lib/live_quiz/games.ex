@@ -882,6 +882,7 @@ defmodule LiveQuiz.Games do
 
       case outcome do
         {:closed, closed} ->
+          score_and_publish_ranking(closed)
           broadcast(closed.id, {:question_closed, closed})
           {:ok, closed}
 
@@ -917,6 +918,7 @@ defmodule LiveQuiz.Games do
   def close_question_by_timeout(session_id) when is_integer(session_id) do
     case close_due_question(session_id) do
       {:ok, {:closed, closed}} ->
+        score_and_publish_ranking(closed)
         broadcast(closed.id, {:question_closed, closed})
         {:ok, closed}
 
@@ -1022,7 +1024,8 @@ defmodule LiveQuiz.Games do
   end
 
   defp score_participants(participants, answers, question, session) do
-    Enum.map(participants, fn participant ->
+    participants
+    |> Enum.map(fn participant ->
       answer = Map.get(answers, participant.id)
       score = calculate_answer_score(answer, question, session)
       answered? = not is_nil(answer)
@@ -1042,6 +1045,11 @@ defmodule LiveQuiz.Games do
       |> Repo.update!()
       |> participant_ranking_data()
     end)
+    |> Enum.sort_by(
+      &{-&1.score, -&1.correct_answers, &1.total_response_time_ms, &1.participant_id}
+    )
+    |> Enum.with_index(1)
+    |> Enum.map(fn {participant, position} -> Map.put(participant, :position, position) end)
   end
 
   defp response_time_ms(nil, _started_at), do: 0
@@ -1060,7 +1068,27 @@ defmodule LiveQuiz.Games do
     :ok
   end
 
-  defp ranking_data(participants), do: Enum.map(participants, &participant_ranking_data/1)
+  defp ranking_data(participants) do
+    participants
+    |> Enum.map(&participant_ranking_data/1)
+    |> Enum.sort_by(
+      &{-&1.score, -&1.correct_answers, &1.total_response_time_ms, &1.participant_id}
+    )
+    |> Enum.with_index(1)
+    |> Enum.map(fn {participant, position} -> Map.put(participant, :position, position) end)
+  end
+
+  defp ranking_participants(session_id) do
+    Participant
+    |> where([p], p.game_session_id == ^session_id)
+    |> order_by([p],
+      desc: p.score,
+      desc: p.correct_answers,
+      asc: p.total_response_time_ms,
+      asc: p.id
+    )
+    |> Repo.all()
+  end
 
   defp participant_ranking_data(participant) do
     %{
@@ -1071,6 +1099,12 @@ defmodule LiveQuiz.Games do
       incorrect_answers: participant.incorrect_answers,
       total_response_time_ms: participant.total_response_time_ms
     }
+  end
+
+  defp participant_ranking_data(participant, position) do
+    participant
+    |> participant_ranking_data()
+    |> Map.put(:position, position)
   end
 
   @doc """
@@ -1087,6 +1121,7 @@ defmodule LiveQuiz.Games do
     case score_question(session_id, question_position) do
       {:ok, %{session: session, ranking_data: ranking_data, scored?: true}} ->
         broadcast(session.id, {:question_scored, session, ranking_data})
+        publish_ranking(session.id, ranking_data)
         {:ok, ranking_data}
 
       {:ok, %{ranking_data: ranking_data, scored?: false}} ->
@@ -1095,6 +1130,54 @@ defmodule LiveQuiz.Games do
       {:error, reason} ->
         {:error, reason}
     end
+  end
+
+  defp score_and_publish_ranking(%GameSession{
+         id: session_id,
+         current_question_position: position
+       }) do
+    case score_question(session_id, position) do
+      {:ok, %{ranking_data: ranking_data, scored?: true}} ->
+        publish_ranking(session_id, ranking_data)
+
+      {:ok, %{scored?: false}} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("could not score closed question: #{inspect(reason)}")
+    end
+  end
+
+  @doc """
+  Returns the current ranking of a match to its host or a participant.
+
+  The query orders every participant by the competition rules, then assigns a
+  sequential position in that same order. A participant remains visible after
+  disconnecting because ranking is based on persisted metrics, not presence.
+  """
+  @spec current_ranking(GameSession.t(), Scope.t() | Participant.t()) ::
+          {:ok, [map()]} | {:error, :unauthorized}
+  def current_ranking(%GameSession{} = session, viewer) do
+    current = reload_session(session)
+
+    if allowed_to_watch?(current, viewer) do
+      current.id
+      |> ranking_participants()
+      |> Enum.with_index(1)
+      |> Enum.map(fn {participant, position} ->
+        participant_ranking_data(participant, position)
+      end)
+      |> then(&{:ok, &1})
+    else
+      {:error, :unauthorized}
+    end
+  end
+
+  @doc "Publishes the ranking after the transaction that calculated it commits."
+  @spec publish_ranking(integer(), [map()]) :: :ok
+  def publish_ranking(game_session_id, ranking)
+      when is_integer(game_session_id) and is_list(ranking) do
+    broadcast(game_session_id, {:ranking_updated, ranking})
   end
 
   @doc """
@@ -1192,6 +1275,7 @@ defmodule LiveQuiz.Games do
 
         if closed? do
           QuestionTimer.stop(session.id)
+          score_and_publish_ranking(session)
           broadcast(session.id, {:question_closed, session})
         end
 
