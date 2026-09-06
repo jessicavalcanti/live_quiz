@@ -48,6 +48,13 @@ defmodule LiveQuizWeb.Api.V1.Schemas.GameSession do
           description: "Identificador do quiz de origem, nulo se o quiz tiver sido excluído",
           nullable: true
         },
+        question_duration_seconds: %Schema{
+          type: :integer,
+          description:
+            "Tempo de cada pergunta da partida, em segundos. Escolhido na abertura da sala e imutável depois que a partida começa (AD-38)",
+          enum: Room.question_durations(),
+          example: 30
+        },
         reserved_slots: %Schema{
           type: :integer,
           description:
@@ -98,6 +105,7 @@ defmodule LiveQuizWeb.Api.V1.Schemas.GameSession do
         :status,
         :quiz_title,
         :quiz_id,
+        :question_duration_seconds,
         :reserved_slots,
         :max_participants,
         :connected_count,
@@ -111,6 +119,7 @@ defmodule LiveQuizWeb.Api.V1.Schemas.GameSession do
         "status" => "waiting",
         "quiz_title" => "Geografia",
         "quiz_id" => 12,
+        "question_duration_seconds" => 30,
         "reserved_slots" => 0,
         "max_participants" => 25,
         "connected_count" => 0,

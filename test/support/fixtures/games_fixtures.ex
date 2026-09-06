@@ -13,8 +13,13 @@ defmodule LiveQuiz.GamesFixtures do
   import LiveQuiz.AccountsFixtures
   import LiveQuiz.QuizzesFixtures
 
+  import Ecto.Query
+
   alias LiveQuiz.Accounts.Scope
+  alias LiveQuiz.Games.Answer
   alias LiveQuiz.Games.GameSession
+  alias LiveQuiz.Games.GameSessionAnswerOption
+  alias LiveQuiz.Games.GameSessionQuestion
   alias LiveQuiz.Games.Participant
   alias LiveQuiz.Games.ParticipantToken
   alias LiveQuiz.Quizzes.Quiz
@@ -23,6 +28,13 @@ defmodule LiveQuiz.GamesFixtures do
   @join_code_alphabet String.graphemes("23456789ABCDEFGHJKLMNPQRSTUVWXYZ")
   @join_code_length 6
   @join_code_space 32 ** 6
+  @question_state_fields [
+    :current_question_position,
+    :current_question_started_at,
+    :current_question_ends_at,
+    :current_question_closed_at
+  ]
+  @snapshot_option_texts ["Brasília", "Rio de Janeiro", "São Paulo", "Salvador"]
 
   @doc """
   A join code drawn from the AD-25 alphabet, unique within the test run.
@@ -52,14 +64,25 @@ defmodule LiveQuiz.GamesFixtures do
 
   Besides the schema fields, `attrs` accepts `:host` (a `%User{}`) and `:quiz`
   (a `%Quiz{}` or `nil`, for a room whose quiz was deleted).
+
+  The quiz it makes up when none is given comes with one complete question, so
+  the room is startable the way a real one is: `start_game_session/3` freezes
+  the quiz into the match and refuses one with nothing to play (F3-02).
+
+  The `current_question_*` columns are written straight through, without a
+  changeset: no changeset casts them on purpose, since moving the match from one
+  question to the next belongs to the context (F3-03).
   """
   @spec game_session_fixture(map()) :: GameSession.t()
   def game_session_fixture(attrs \\ %{}) do
     attrs = Map.new(attrs)
     host = Map.get_lazy(attrs, :host, &user_fixture/0)
-    quiz = Map.get_lazy(attrs, :quiz, fn -> quiz_fixture(Scope.for_user(host)) end)
+    quiz = Map.get_lazy(attrs, :quiz, fn -> playable_quiz(host) end)
 
-    {status, attrs} = attrs |> Map.drop([:host, :quiz]) |> Map.pop(:status)
+    question_state = Map.take(attrs, @question_state_fields)
+
+    {status, attrs} =
+      attrs |> Map.drop([:host, :quiz | @question_state_fields]) |> Map.pop(:status)
 
     attrs =
       Enum.into(attrs, %{
@@ -70,6 +93,7 @@ defmodule LiveQuiz.GamesFixtures do
     %GameSession{host_id: host.id, quiz_id: quiz && quiz.id}
     |> GameSession.create_changeset(attrs)
     |> apply_status(status)
+    |> Ecto.Changeset.change(question_state)
     |> Repo.insert!()
   end
 
@@ -114,9 +138,157 @@ defmodule LiveQuiz.GamesFixtures do
     {participant, token}
   end
 
+  @doc """
+  Inserts one snapshot question in the given room.
+
+  Besides the schema fields, `attrs` accepts `:question` (the `%Question{}` it
+  was copied from, or `nil` for a snapshot whose quiz is already gone). The
+  position defaults to the next free one in the room.
+  """
+  @spec game_session_question_fixture(GameSession.t(), map()) :: GameSessionQuestion.t()
+  def game_session_question_fixture(%GameSession{} = session, attrs \\ %{}) do
+    attrs = Map.new(attrs)
+    question = Map.get(attrs, :question)
+
+    changes =
+      attrs
+      |> Map.drop([:question])
+      |> Enum.into(%{
+        position: next_snapshot_question_position(session),
+        question_text: "Qual é a capital do Brasil?"
+      })
+
+    %GameSessionQuestion{game_session_id: session.id, question_id: question && question.id}
+    |> GameSessionQuestion.changeset(changes)
+    |> Repo.insert!()
+  end
+
+  @doc """
+  Inserts one option of a snapshot question.
+
+  Besides the schema fields, `attrs` accepts `:original_answer_option` (the
+  `%AnswerOption{}` it was copied from, or `nil`). The position defaults to the
+  next free one in the question.
+  """
+  @spec game_session_answer_option_fixture(GameSessionQuestion.t(), map()) ::
+          GameSessionAnswerOption.t()
+  def game_session_answer_option_fixture(%GameSessionQuestion{} = question, attrs \\ %{}) do
+    attrs = Map.new(attrs)
+    original = Map.get(attrs, :original_answer_option)
+
+    changes =
+      attrs
+      |> Map.drop([:original_answer_option])
+      |> Enum.into(%{
+        text: "Alternativa #{System.unique_integer([:positive])}",
+        position: next_snapshot_option_position(question),
+        is_correct: false
+      })
+
+    %GameSessionAnswerOption{
+      game_session_question_id: question.id,
+      original_answer_option_id: original && original.id
+    }
+    |> GameSessionAnswerOption.changeset(changes)
+    |> Repo.insert!()
+  end
+
+  @doc """
+  Inserts a whole snapshot: `:count` questions with four options each.
+
+  The option in position 1 is the correct one. Answers the questions in order,
+  with `answer_options` preloaded, which is the shape the execution reads.
+  """
+  @spec snapshot_fixture(GameSession.t(), keyword()) :: [GameSessionQuestion.t()]
+  def snapshot_fixture(%GameSession{} = session, opts \\ []) do
+    count = Keyword.get(opts, :count, 3)
+
+    for position <- 1..count//1 do
+      question =
+        game_session_question_fixture(session, %{
+          position: position,
+          question_text: "Pergunta #{position} da partida"
+        })
+
+      for {text, option_position} <- Enum.with_index(@snapshot_option_texts, 1) do
+        game_session_answer_option_fixture(question, %{
+          text: text,
+          position: option_position,
+          is_correct: option_position == 1
+        })
+      end
+
+      Repo.preload(question, :answer_options)
+    end
+  end
+
+  @doc """
+  Inserts the answer of a participant to the question the option belongs to.
+
+  The match and the question are taken from the participation and the option, so
+  a fixture never builds an answer that points at two different rooms.
+  """
+  @spec answer_fixture(Participant.t(), GameSessionAnswerOption.t(), map()) :: Answer.t()
+  def answer_fixture(
+        %Participant{} = participant,
+        %GameSessionAnswerOption{} = option,
+        attrs \\ %{}
+      ) do
+    attrs = Map.new(attrs)
+
+    %Answer{}
+    |> Answer.changeset(%{
+      game_session_id: participant.game_session_id,
+      game_session_question_id: option.game_session_question_id,
+      participant_id: participant.id,
+      game_session_answer_option_id: option.id,
+      answered_at: Map.get(attrs, :answered_at) || now_usec()
+    })
+    |> Repo.insert!()
+  end
+
   @doc "The current instant with the second precision the schemas persist."
   @spec now() :: DateTime.t()
   def now, do: DateTime.truncate(DateTime.utc_now(), :second)
+
+  @doc """
+  The current instant with the microsecond precision the execution persists.
+
+  The columns of phase 3 keep the fraction that the phase 4 speed bonus needs,
+  so their fixtures must not truncate to the second like `now/0` does.
+  """
+  @spec now_usec() :: DateTime.t()
+  def now_usec, do: DateTime.utc_now()
+
+  defp next_snapshot_question_position(%GameSession{} = session) do
+    position =
+      Repo.one(
+        from q in GameSessionQuestion,
+          where: q.game_session_id == ^session.id,
+          select: max(q.position)
+      )
+
+    (position || 0) + 1
+  end
+
+  defp next_snapshot_option_position(%GameSessionQuestion{} = question) do
+    position =
+      Repo.one(
+        from o in GameSessionAnswerOption,
+          where: o.game_session_question_id == ^question.id,
+          select: max(o.position)
+      )
+
+    (position || 0) + 1
+  end
+
+  defp playable_quiz(host) do
+    scope = Scope.for_user(host)
+    quiz = quiz_fixture(scope)
+    question_fixture(scope, quiz)
+
+    quiz
+  end
 
   defp quiz_title(%Quiz{title: title}), do: title
   defp quiz_title(nil), do: "Quiz removido"

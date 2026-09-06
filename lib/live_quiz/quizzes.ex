@@ -114,6 +114,27 @@ defmodule LiveQuiz.Quizzes do
   end
 
   @doc """
+  Same as `get_quiz_with_questions!/2`, answering `:error` instead of raising.
+
+  A quiz that vanished between two decisions is an ordinary outcome for whoever
+  has to react to it — starting a match freezes the quiz and has to say
+  `:quiz_unavailable` rather than blow up (F3-02) — so this is the read for
+  callers that treat absence as data.
+  """
+  @spec fetch_quiz_with_questions(Scope.t(), integer() | String.t()) :: {:ok, Quiz.t()} | :error
+  def fetch_quiz_with_questions(%Scope{} = scope, id) do
+    scope
+    |> owned_quizzes()
+    |> where([q], q.id == ^id)
+    |> with_questions_count()
+    |> Repo.one()
+    |> case do
+      nil -> :error
+      %Quiz{} = quiz -> {:ok, Repo.preload(quiz, questions: [:answer_options])}
+    end
+  end
+
+  @doc """
   Creates a quiz owned by the scope user.
 
   The owner comes from the scope and is never read from `attrs`.

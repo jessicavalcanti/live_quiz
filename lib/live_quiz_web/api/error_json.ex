@@ -13,12 +13,22 @@ defmodule LiveQuizWeb.Api.ErrorJSON do
   @doc """
   Renders an error of the API.
 
-    * `"error.json"` — a single human readable message, given in `:detail`;
+    * `"error.json"` — a single human readable message, given in `:detail`, and
+      the stable `:code` of the refusal when it has one;
     * `"changeset.json"` — the field errors of an invalid changeset, already
       translated to pt-BR;
     * `"<status>.json"` — the standard message of that status.
 
+  The message is written for a person and is free to change; the code is written
+  for a client and is not. Renaming one would break whoever branches on it, so
+  the refusals that carry a code are the ones a client is expected to act on —
+  reconsult the state, correct the payload — and never a decoration on every
+  error the API can produce.
   """
+  def render("error.json", %{detail: detail, code: code}) do
+    %{errors: %{detail: detail, code: code}}
+  end
+
   def render("error.json", %{detail: detail}) do
     %{errors: %{detail: detail}}
   end

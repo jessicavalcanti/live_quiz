@@ -43,8 +43,6 @@ defmodule LiveQuizWeb.Api.V1.GameSessionController do
 
   action_fallback LiveQuizWeb.Api.FallbackController
 
-  tags ["Salas"]
-
   @code_parameter [
     in: :path,
     description: "Código de acesso da sala, com 6 caracteres",
@@ -63,12 +61,29 @@ defmodule LiveQuizWeb.Api.V1.GameSessionController do
   Opens a room for a quiz of the authenticated user.
   """
   operation :create,
+    tags: ["Salas"],
     summary: "Abre uma sala para um quiz do usuário autenticado",
     security: [%{"bearerAuth" => []}],
     description: """
     O host vem do token. Um quiz de outra pessoa, um `quiz_id` que não é um
     identificador e um corpo sem `quiz_id` respondem igualmente `404`: a API não
     confirma a existência de quiz alheio (AD-10).
+
+    `question_duration_seconds` é opcional e vale para todas as perguntas da
+    partida (AD-38): 10, 20, 30 ou 60, com 30 como padrão. É imutável depois do
+    início e qualquer outro valor responde `422` `validation_error`, com a
+    mensagem agrupada sob o campo.
+
+    **Recusas.** Abrir uma sala é anterior à execução, então nenhuma delas traz
+    `errors.code`; o `422` usa o envelope de validação por campo.
+
+    | Status | Motivo |
+    |---|---|
+    | 401 | sem token de conta — `unauthenticated` |
+    | 404 | quiz inexistente, de outro dono ou não informado — `not_found` |
+    | 409 | você já tem uma sala ativa, já participa de outra, ou o quiz sumiu |
+    | 422 | quiz sem perguntas ou duração fora de 10/20/30/60 — `validation_error` |
+    | 503 | não foi possível sortear um código de acesso |
     """,
     request_body: {"Quiz da sala", "application/json", GameSessionRequest, required: true},
     responses: [
@@ -86,8 +101,9 @@ defmodule LiveQuizWeb.Api.V1.GameSessionController do
          ErrorResponse}
     ]
 
-  def create(conn, %{"quiz_id" => quiz_id}) do
-    with {:ok, %GameSession{} = session} <- open_room(conn.assigns.current_scope, quiz_id) do
+  def create(conn, %{"quiz_id" => quiz_id} = params) do
+    with {:ok, %GameSession{} = session} <-
+           open_room(conn.assigns.current_scope, quiz_id, room_params(params)) do
       conn
       |> put_status(:created)
       |> render(:show, room(session))
@@ -101,6 +117,7 @@ defmodule LiveQuizWeb.Api.V1.GameSessionController do
   entered it yet may know.
   """
   operation :show,
+    tags: ["Salas"],
     summary: "Consulta pública de uma sala pelo código",
     description: """
     Aberta a qualquer pessoa, com ou sem conta. Devolve apenas título do quiz,
@@ -130,6 +147,7 @@ defmodule LiveQuizWeb.Api.V1.GameSessionController do
   The read of the host: the whole room, with the lobby list.
   """
   operation :host_show,
+    tags: ["Salas"],
     summary: "Detalha a sala do host, com o lobby",
     security: [%{"bearerAuth" => []}],
     description: """
@@ -159,6 +177,7 @@ defmodule LiveQuizWeb.Api.V1.GameSessionController do
   never reissued, so losing it is losing that participation (AD-24).
   """
   operation :join,
+    tags: ["Salas"],
     summary: "Entra em uma sala, com ou sem conta",
     description: """
     Não exige identidade nenhuma. Um `Bearer` vincula a participação à conta; as
@@ -198,11 +217,26 @@ defmodule LiveQuizWeb.Api.V1.GameSessionController do
   connected — counted by the server.
   """
   operation :start,
+    tags: ["Partida"],
     summary: "Inicia a partida",
     security: [%{"bearerAuth" => []}],
     description: """
     Só o host, só a partir de `waiting` e só com alguém conectado. Quem conta os
     conectados é o servidor: um `connected_count` enviado no corpo é ignorado.
+
+    Iniciar congela as perguntas e as alternativas do quiz dentro da partida.
+    Chamar de novo em uma partida já iniciada devolve `200` com a mesma partida,
+    sem congelar nada outra vez. Nenhuma pergunta abre aqui: a primeira abre no
+    `next`.
+
+    **Recusas.** Nenhuma traz `errors.code`: todas se distinguem pelo status.
+
+    | Status | Motivo |
+    |---|---|
+    | 401 | sem token de conta — `unauthenticated` |
+    | 404 | sala inexistente ou de outro host — `not_found` (AD-10) |
+    | 409 | ninguém conectado para começar — `no_connected_participants` |
+    | 409 | sala já encerrada, ou o quiz da sala não existe mais |
     """,
     parameters: [code: @code_parameter],
     responses: [
@@ -210,8 +244,8 @@ defmodule LiveQuizWeb.Api.V1.GameSessionController do
       unauthorized: {"Não autenticado", "application/json", ErrorResponse},
       not_found: {"Sala inexistente ou de outro host", "application/json", ErrorResponse},
       conflict:
-        {"Sala já iniciada ou encerrada, ou sem participante conectado", "application/json",
-         ErrorResponse}
+        {"Sala encerrada, sem participante conectado ou com o quiz indisponível",
+         "application/json", ErrorResponse}
     ]
 
   def start(conn, %{"code" => code}) do
@@ -228,6 +262,7 @@ defmodule LiveQuizWeb.Api.V1.GameSessionController do
   Ends the room by the host's own decision, in the lobby or after it started.
   """
   operation :cancel,
+    tags: ["Salas"],
     summary: "Cancela a sala",
     security: [%{"bearerAuth" => []}],
     description: "Só o host, em `waiting` ou `in_progress`. Uma sala já encerrada não reabre.",
@@ -271,8 +306,8 @@ defmodule LiveQuizWeb.Api.V1.GameSessionController do
   # A quiz of somebody else raises inside the transaction; an id that is not one
   # never reaches the database. Both mean the same thing to a client: there is
   # no such quiz.
-  defp open_room(%Scope{} = scope, quiz_id) do
-    Games.create_game_session(scope, quiz_id)
+  defp open_room(%Scope{} = scope, quiz_id, attrs) do
+    Games.create_game_session(scope, quiz_id, attrs)
   rescue
     Ecto.NoResultsError -> {:error, :not_found}
     Ecto.Query.CastError -> {:error, :not_found}
@@ -283,4 +318,11 @@ defmodule LiveQuizWeb.Api.V1.GameSessionController do
   # without it is an empty participation — which the changeset answers with 422
   # instead of a 500.
   defp join_params(params), do: Map.take(params, ["nickname"])
+
+  # The duration is the one thing the host chooses when opening a room (AD-38),
+  # and it is chosen here rather than at the start so the lobby can already
+  # announce the pace. A body that leaves it out gets the default of the
+  # changeset; a duration that is not one of the allowed ones is refused there
+  # too, in pt-BR, and never silently rounded to the nearest legal value.
+  defp room_params(params), do: Map.take(params, ["question_duration_seconds"])
 end

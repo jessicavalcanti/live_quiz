@@ -174,6 +174,75 @@ corretas, quantidade diferente de 4, textos repetidos — voltam em **422** sob 
 `answer_options`, com as mesmas mensagens da interface web, e o 51º cadastro responde 422 com o
 limite atingido.
 
+### Partida
+
+Conduzir e jogar uma partida inteira pela API é possível: a paridade com a interface web é total, e
+nenhuma regra de execução vive só na LiveView. As oito chamadas abaixo, nesta ordem, são uma partida
+completa — no Swagger UI elas estão reunidas sob a tag **Partida**, com corpo, respostas e erros de
+cada uma.
+
+| Rota | Credencial | Descrição |
+|---|---|---|
+| `POST /api/v1/game-sessions` | `Bearer` | abre a sala e fixa a duração das perguntas |
+| `POST /api/v1/game-sessions/:code/start` | `Bearer` (host) | congela o snapshot do quiz e inicia |
+| `POST /api/v1/game-sessions/:code/next` | `Bearer` (host) | avança e **abre** a próxima pergunta |
+| `POST /api/v1/game-sessions/:code/answers` | `Participant` | responde a pergunta aberta (pode trocar) |
+| `POST /api/v1/game-sessions/:code/close-question` | `Bearer` (host) | encerra a pergunta por comando |
+| `GET /api/v1/game-sessions/:code/state` | qualquer uma | estado atual, na visão de quem pergunta |
+| `GET /api/v1/game-sessions/:code/questions/:position/results` | qualquer uma | apuração de uma pergunta encerrada |
+| `POST /api/v1/game-sessions/:code/finish` | `Bearer` (host) | finaliza a partida |
+
+A sala é endereçada pelo **código de acesso** de 6 caracteres, o mesmo que o participante digita
+para entrar. Os comandos do host usam `Authorization: Bearer <jwt>`; **responder usa
+`Authorization: Participant <token>`**, a credencial devolvida uma única vez pelo `join` — o host
+não joga, e o `Bearer` dele não identifica participação nenhuma em `/answers`.
+
+`question_duration_seconds` vale 10, 20, 30 ou 60 segundos, com **30 como padrão**, é escolhido na
+abertura da sala e não muda depois do início. **O tempo é sempre do servidor:** use o `ends_at` de
+`/state`, que é o prazo absoluto; `seconds_left` é conveniência e envelhece no transporte. E o
+gabarito não vem antes da hora: com a pergunta aberta, nenhuma alternativa devolvida a quem joga
+traz `is_correct`, e a apuração de uma pergunta que ainda não encerrou responde `409`.
+
+Como o `409` significa coisas diferentes, as recusas da execução trazem um `code` estável em inglês
+em `errors.code`, ao lado da mensagem em pt-BR — é nele que o cliente decide entre corrigir o
+payload e reconsultar o estado:
+
+| Status | `errors.code` | Quando |
+|---|---|---|
+| 409 | `invalid_status` | comando incompatível com o status da partida |
+| 409 | `no_open_question` | encerramento pedido sem pergunta aberta |
+| 409 | `no_more_questions` | avanço além da última pergunta |
+| 409 | `stale` | `expected_position` desatualizada: reconsulte `/state` |
+| 409 | `question_closed` | resposta em pergunta já encerrada |
+| 409 | `time_is_up` | resposta depois do prazo |
+| 409 | `question_open` | apuração pedida antes do encerramento |
+| 422 | `option_not_found` | alternativa que não pertence à pergunta aberta |
+| 422 | `invalid_expected_position` | corpo de `/next` sem `expected_position` |
+| 422 | `invalid_answer_option_id` | corpo de `/answers` sem `answer_option_id` |
+| 403 | `left_session` | credencial de quem saiu desta sala |
+
+As demais recusas se distinguem pelo status e trazem só a mensagem: `401` sem credencial ou com a
+credencial do tipo errado, `403` credencial válida de quem não pode fazer aquilo, `404` sala ou
+posição inexistente, `409` início sem ninguém conectado e `422` payload inválido, com as mensagens
+agrupadas por campo.
+
+```bash
+curl -s -X POST http://localhost:4000/api/v1/game-sessions \
+  -H "Authorization: Bearer $ACCESS_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"quiz_id":1,"question_duration_seconds":20}'
+
+curl -s -X POST http://localhost:4000/api/v1/game-sessions/K7P4Q2/next \
+  -H "Authorization: Bearer $ACCESS_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"expected_position":null}'
+
+curl -s -X POST http://localhost:4000/api/v1/game-sessions/K7P4Q2/answers \
+  -H "Authorization: Participant $PARTICIPANT_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"answer_option_id":42}'
+
+curl -s http://localhost:4000/api/v1/game-sessions/K7P4Q2/state \
+  -H "Authorization: Participant $PARTICIPANT_TOKEN"
+```
+
 O **access token** dura 15 minutos e o **refresh token**, 30 dias; eles são distinguidos pelo claim
 `typ`, e um refresh token não é aceito em rotas protegidas. O segredo de assinatura é independente
 do `secret_key_base` do Phoenix e vem de `GUARDIAN_SECRET_KEY` em produção.

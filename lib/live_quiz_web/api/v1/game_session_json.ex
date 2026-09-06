@@ -60,6 +60,7 @@ defmodule LiveQuizWeb.Api.V1.GameSessionJSON do
       status: session.status,
       quiz_title: session.quiz_title,
       quiz_id: session.quiz_id,
+      question_duration_seconds: session.question_duration_seconds,
       reserved_slots: reserved_slots,
       max_participants: Games.max_participants(),
       connected_count: connected_count,

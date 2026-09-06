@@ -2,9 +2,12 @@ defmodule LiveQuizWeb.GameSessionController do
   @moduledoc """
   Opens the room the "Iniciar partida" button of the dashboard asks for.
 
-  Creating a room is not a screen (F2-08): the button posts here, the context
-  decides, and the answer is always a redirect — to the lobby of the brand new
-  room, or back to the dashboard carrying the reason it was refused.
+  Creating a room takes no screen of its own (F2-08): a post lands here, the
+  context decides, and the answer is always a redirect — to the lobby of the
+  brand new room, or back to the dashboard carrying the reason it was refused.
+  Since F3-07 the dashboard asks for the duration of the questions before
+  opening the room, and creates it from the LiveView itself; this action stays
+  as the plain browser path, which opens a room with the default duration.
 
   A host who already has a live room is the one case that is not an error to
   read: they are taken to the room they already have, which is the same thing
