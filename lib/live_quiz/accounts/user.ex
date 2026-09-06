@@ -2,6 +2,7 @@ defmodule LiveQuiz.Accounts.User do
   use Ecto.Schema
   import Ecto.Changeset
 
+  alias LiveQuiz.Games.GameResult
   alias LiveQuiz.Games.GameSession
   alias LiveQuiz.Games.Participant
 
@@ -15,6 +16,7 @@ defmodule LiveQuiz.Accounts.User do
 
     has_many :hosted_game_sessions, GameSession, foreign_key: :host_id
     has_many :participations, Participant
+    has_many :game_results, GameResult
 
     timestamps(type: :utc_datetime)
   end
