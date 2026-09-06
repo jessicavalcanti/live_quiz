@@ -40,3 +40,6 @@ npm-debug.log
 
 # Diário da esteira de stories (.claude/skills/esteira).
 /.claude/esteira/
+
+# Diário local da esteira no Codex.
+/.agents/esteira/

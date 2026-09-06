@@ -1032,6 +1032,7 @@ defmodule LiveQuiz.Games do
       answered? = not is_nil(answer)
       correct? = answered? and score > 0
       response_time = response_time_ms(answer, session.current_question_started_at)
+      if answered?, do: stamp_response_time(answer, response_time)
 
       metrics = %{
         score: participant.score + score,
@@ -1051,6 +1052,12 @@ defmodule LiveQuiz.Games do
     )
     |> Enum.with_index(1)
     |> Enum.map(fn {participant, position} -> Map.put(participant, :position, position) end)
+  end
+
+  defp stamp_response_time(%Answer{} = answer, response_time) do
+    answer
+    |> Ecto.Changeset.change(response_time_ms: response_time)
+    |> Repo.update!()
   end
 
   defp response_time_ms(nil, _started_at), do: 0
@@ -2807,7 +2814,7 @@ defmodule LiveQuiz.Games do
          "answer" => chosen && chosen.text,
          "correct" => chosen && chosen.is_correct,
          "answered_at" => answer && DateTime.to_iso8601(answer.answered_at),
-         "response_time_ms" => 0
+         "response_time_ms" => (answer && answer.response_time_ms) || 0
        }}
     end)
   end

@@ -78,6 +78,41 @@ defmodule LiveQuiz.Games.ResultsTest do
              Games.list_game_results(scope, %{quiz_id: finished.quiz_id}, %{per_page: 10})
   end
 
+  test "carries the real response time of each question into the result" do
+    host = user_fixture()
+    session = game_session_fixture(%{host: host, status: :in_progress})
+    [question] = snapshot_fixture(session, count: 1)
+    answered = participant_fixture(session)
+    silent = participant_fixture(session)
+    correct = Enum.find(question.answer_options, & &1.is_correct)
+
+    started_at = ~U[2026-09-06 12:00:00.000000Z]
+    ends_at = DateTime.add(started_at, session.question_duration_seconds, :second)
+
+    Repo.update_all(from(s in GameSession, where: s.id == ^session.id),
+      set: [
+        current_question_position: 1,
+        current_question_started_at: started_at,
+        current_question_ends_at: ends_at,
+        current_question_closed_at: ends_at
+      ]
+    )
+
+    answer_fixture(answered, correct, %{
+      answered_at: DateTime.add(started_at, 1_200, :millisecond)
+    })
+
+    assert {:ok, _ranking} = Games.score_closed_question(Repo.get!(GameSession, session.id), 1)
+    assert {:ok, _} = Games.finish_game_session(Scope.for_user(host), session)
+
+    assert {:ok, result} = Games.get_game_result(Scope.for_user(host), session.id, answered.id)
+    assert result.question_results["1"]["response_time_ms"] == 1_200
+    assert result.total_response_time_ms == 1_200
+
+    assert {:ok, empty} = Games.get_game_result(Scope.for_user(host), session.id, silent.id)
+    assert empty.question_results["1"]["response_time_ms"] == 0
+  end
+
   test "keeps a result after the quiz is deleted" do
     host = user_fixture()
     session = game_session_fixture(%{host: host, status: :in_progress})
