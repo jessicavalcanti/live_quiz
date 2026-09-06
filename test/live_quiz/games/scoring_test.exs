@@ -134,6 +134,21 @@ defmodule LiveQuiz.Games.ScoringTest do
       assert reload_participant(disconnected).correct_answers == 1
     end
 
+    test "stamps the response time on every answered question" do
+      %{session: session, question: question} = closed_context()
+      participant = participant_fixture(session)
+      correct = Enum.find(question.answer_options, & &1.is_correct)
+
+      answer =
+        answer_fixture(participant, correct, %{
+          answered_at: DateTime.add(session.current_question_started_at, 2_500, :millisecond)
+        })
+
+      assert {:ok, _ranking} = Games.score_closed_question(session, 1)
+      assert Repo.get!(Answer, answer.id).response_time_ms == 2_500
+      assert reload_participant(participant).total_response_time_ms == 2_500
+    end
+
     test "rejects an open question and an unknown position" do
       %{session: session, question: question} = closed_context()
 
