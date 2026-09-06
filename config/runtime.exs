@@ -28,6 +28,10 @@ if config_env() == :dev do
   config :live_quiz, LiveQuizWeb.Endpoint,
     live_reload: [
       web_console_logger: true,
+      # O código é montado do host para dentro do container, e eventos de
+      # inotify não atravessam esse tipo de montagem: sem a sondagem, o
+      # navegador nunca recarregaria sozinho.
+      backend: :fs_poll,
       patterns: [
         # Static assets, except user uploads
         ~r"priv/static/(?!uploads/).*\.(js|css|png|jpeg|jpg|gif|svg)$"E,

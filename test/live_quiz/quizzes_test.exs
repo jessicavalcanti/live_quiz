@@ -2,9 +2,14 @@ defmodule LiveQuiz.QuizzesTest do
   use LiveQuiz.DataCase, async: true
 
   import LiveQuiz.AccountsFixtures
+  import LiveQuiz.GamesFixtures
   import LiveQuiz.QuizzesFixtures
 
+  alias Ecto.Adapters.SQL.Sandbox
+  alias LiveQuiz.Games
+  alias LiveQuiz.Games.GameSession
   alias LiveQuiz.Quizzes
+  alias LiveQuiz.Quizzes.Question
   alias LiveQuiz.Quizzes.Quiz
 
   setup do
@@ -443,12 +448,261 @@ defmodule LiveQuiz.QuizzesTest do
     end
   end
 
+  describe "bloqueio por sala ativa" do
+    setup %{scope: scope} do
+      quiz = quiz_fixture(scope, %{title: "Capitais"})
+      {:ok, first} = Quizzes.create_question(scope, quiz, question_attrs())
+      {:ok, second} = Quizzes.create_question(scope, quiz, question_attrs())
+      session = game_session_fixture(%{quiz: quiz, status: :waiting})
+
+      %{quiz: quiz, first: first, second: second, session: session}
+    end
+
+    test "recusa a edição do quiz com a sala aguardando participantes", %{
+      scope: scope,
+      quiz: quiz
+    } do
+      assert {:error, :quiz_locked} = Quizzes.update_quiz(scope, quiz, %{title: "Outro título"})
+      assert Repo.get!(Quiz, quiz.id).title == "Capitais"
+    end
+
+    test "recusa a edição do quiz com a sala em andamento", %{
+      scope: scope,
+      quiz: quiz,
+      session: session
+    } do
+      move_to!(session, :in_progress)
+
+      assert {:error, :quiz_locked} = Quizzes.update_quiz(scope, quiz, %{title: "Outro título"})
+      assert Repo.get!(Quiz, quiz.id).title == "Capitais"
+    end
+
+    test "recusa a exclusão do quiz e não apaga nada", %{scope: scope, quiz: quiz} do
+      assert {:error, :quiz_locked} = Quizzes.delete_quiz(scope, quiz)
+      assert Repo.get(Quiz, quiz.id)
+      assert questions_of(quiz) == 2
+    end
+
+    test "recusa a criação de pergunta", %{scope: scope, quiz: quiz} do
+      assert {:error, :quiz_locked} = Quizzes.create_question(scope, quiz, question_attrs())
+      assert questions_of(quiz) == 2
+    end
+
+    test "recusa a edição do texto da pergunta", %{scope: scope, first: first} do
+      assert {:error, :quiz_locked} = Quizzes.update_question(scope, first, %{text: "Mudou?"})
+      assert Repo.get!(Question, first.id).text == first.text
+    end
+
+    test "recusa a alteração de uma alternativa", %{scope: scope, first: first} do
+      option = hd(first.answer_options)
+
+      attrs = %{
+        answer_options:
+          Enum.map(
+            first.answer_options,
+            &%{
+              id: &1.id,
+              text: "#{&1.text} (revisado)",
+              position: &1.position,
+              is_correct: &1.is_correct
+            }
+          )
+      }
+
+      assert {:error, :quiz_locked} = Quizzes.update_question(scope, first, attrs)
+      assert Repo.get!(LiveQuiz.Quizzes.AnswerOption, option.id).text == option.text
+    end
+
+    test "recusa a exclusão de pergunta", %{scope: scope, first: first} do
+      assert {:error, :quiz_locked} = Quizzes.delete_question(scope, first)
+      assert Repo.get(Question, first.id)
+    end
+
+    test "recusa a reordenação de perguntas", %{scope: scope, quiz: quiz, second: second} do
+      assert {:error, :quiz_locked} = Quizzes.move_question(scope, second, :up)
+      assert positions_of(quiz) == [1, 2]
+    end
+
+    test "não afeta outro quiz sem sala", %{scope: scope} do
+      other = quiz_fixture(scope, %{title: "Sem sala"})
+
+      assert {:ok, updated} = Quizzes.update_quiz(scope, other, %{title: "Editado"})
+      assert updated.title == "Editado"
+    end
+
+    test "não afeta a criação de um quiz novo", %{scope: scope} do
+      assert {:ok, _quiz} = Quizzes.create_quiz(scope, %{title: "Recém-criado"})
+    end
+
+    test "libera as sete operações depois que a sala é cancelada", context do
+      move_to!(context.session, :cancelled)
+
+      assert_every_write_accepted(context)
+    end
+
+    test "libera as sete operações depois que a sala expira", context do
+      move_to!(context.session, :expired)
+
+      assert_every_write_accepted(context)
+    end
+
+    test "mantém a leitura liberada, com locked? verdadeiro", %{scope: scope, quiz: quiz} do
+      assert %Quiz{locked?: true} = read = Quizzes.get_quiz!(scope, quiz.id)
+      assert read.title == "Capitais"
+
+      assert %Quiz{locked?: true} = full = Quizzes.get_quiz_with_questions!(scope, quiz.id)
+      assert length(full.questions) == 2
+    end
+
+    # A sandbox empresta uma conexão só, então as tarefas abaixo se revezam nela
+    # em vez de rodarem de fato ao mesmo tempo. O que está sob teste é o
+    # resultado que a regra tem de produzir seja qual for o intercalamento:
+    # nunca a sala aberta e a edição aceita valendo ao mesmo tempo.
+    test "abrir a sala e editar o quiz ao mesmo tempo nunca vale as duas coisas", %{scope: scope} do
+      quiz = quiz_fixture(scope, %{title: "Disputado"})
+      {:ok, _question} = Quizzes.create_question(scope, quiz, question_attrs())
+      owner = self()
+
+      [room, edit] =
+        [:room, :edit]
+        |> Enum.map(fn step ->
+          Task.async(fn ->
+            Sandbox.allow(Repo, owner, self())
+
+            case step do
+              :room -> Games.create_game_session(scope, quiz.id)
+              :edit -> Quizzes.update_quiz(scope, quiz, %{title: "Editado"})
+            end
+          end)
+        end)
+        |> Task.await_many(30_000)
+
+      assert {:ok, _session} = room
+      stored = Repo.get!(Quiz, quiz.id)
+
+      case edit do
+        # A edição chegou antes da sala existir.
+        {:ok, _updated} -> assert stored.title == "Editado"
+        {:error, :quiz_locked} -> assert stored.title == "Disputado"
+      end
+
+      # Seja qual for a ordem, a partir daqui a sala está aberta e o bloqueio
+      # vale — não há janela que sobreviva à corrida.
+      assert {:error, :quiz_locked} = Quizzes.update_quiz(scope, quiz, %{title: "Depois"})
+    end
+  end
+
+  describe "locked? nas leituras" do
+    test "vem falso para um quiz sem sala", %{scope: scope} do
+      quiz = quiz_fixture(scope)
+
+      assert Quizzes.get_quiz!(scope, quiz.id).locked? == false
+      assert Quizzes.get_quiz_with_questions!(scope, quiz.id).locked? == false
+      assert [%Quiz{locked?: false}] = Quizzes.list_quizzes(scope).entries
+    end
+
+    test "marca só o quiz bloqueado na listagem", %{scope: scope} do
+      locked = quiz_fixture(scope, %{title: "Com sala"})
+      first = quiz_fixture(scope, %{title: "Sem sala 1"})
+      second = quiz_fixture(scope, %{title: "Sem sala 2"})
+      game_session_fixture(%{quiz: locked, status: :waiting})
+
+      flags =
+        scope
+        |> Quizzes.list_quizzes()
+        |> Map.fetch!(:entries)
+        |> Map.new(&{&1.id, &1.locked?})
+
+      assert flags == %{locked.id => true, first.id => false, second.id => false}
+    end
+
+    test "nunca vem nulo, em nenhuma das três leituras", %{scope: scope} do
+      quiz = quiz_fixture(scope)
+      game_session_fixture(%{quiz: quiz, status: :in_progress})
+
+      for read <- [
+            Quizzes.get_quiz!(scope, quiz.id),
+            Quizzes.get_quiz_with_questions!(scope, quiz.id),
+            hd(Quizzes.list_quizzes(scope).entries)
+          ] do
+        assert is_boolean(read.locked?)
+      end
+    end
+
+    test "volta a ser falso depois que a sala é encerrada", %{scope: scope} do
+      quiz = quiz_fixture(scope)
+      session = game_session_fixture(%{quiz: quiz, status: :waiting})
+
+      assert Quizzes.get_quiz!(scope, quiz.id).locked?
+
+      move_to!(session, :cancelled)
+
+      refute Quizzes.get_quiz!(scope, quiz.id).locked?
+    end
+
+    test "a listagem continua em duas consultas com o bloqueio marcado", %{scope: scope} do
+      for index <- 1..10 do
+        quiz = quiz_fixture(scope, %{title: "Quiz #{index}"})
+        game_session_fixture(%{quiz: quiz, status: :waiting})
+      end
+
+      assert count_queries(fn -> Quizzes.list_quizzes(scope, per_page: 100) end) == 2
+    end
+  end
+
   defp backdate!(%Quiz{} = quiz, seconds) do
     backdate_to!(quiz, DateTime.add(DateTime.utc_now(:second), seconds, :second))
   end
 
   defp backdate_to!(%Quiz{} = quiz, %DateTime{} = moment) do
     Repo.update_all(from(q in Quiz, where: q.id == ^quiz.id), set: [updated_at: moment])
+  end
+
+  # As sete operações de escrita da story, na ordem em que uma pode ser feita
+  # depois da outra: a exclusão do quiz vem por último porque leva o resto junto.
+  defp assert_every_write_accepted(%{scope: scope, quiz: quiz, first: first, second: second}) do
+    assert {:ok, _quiz} = Quizzes.update_quiz(scope, quiz, %{title: "Editado"})
+    assert {:ok, _third} = Quizzes.create_question(scope, quiz, question_attrs())
+    assert {:ok, _text} = Quizzes.update_question(scope, first, %{text: "Texto revisado?"})
+
+    options =
+      Enum.map(
+        first.answer_options,
+        &%{id: &1.id, text: "#{&1.text}!", position: &1.position, is_correct: &1.is_correct}
+      )
+
+    assert {:ok, _options} = Quizzes.update_question(scope, first, %{answer_options: options})
+    assert {:ok, _moved} = Quizzes.move_question(scope, second, :up)
+    assert {:ok, _deleted} = Quizzes.delete_question(scope, second)
+    assert {:ok, _gone} = Quizzes.delete_quiz(scope, quiz)
+
+    refute Repo.get(Quiz, quiz.id)
+  end
+
+  defp question_attrs do
+    %{
+      text: "Qual é a capital do Brasil?",
+      answer_options: [
+        %{text: "Rio de Janeiro", position: 1, is_correct: false},
+        %{text: "Brasília", position: 2, is_correct: true},
+        %{text: "São Paulo", position: 3, is_correct: false},
+        %{text: "Salvador", position: 4, is_correct: false}
+      ]
+    }
+  end
+
+  defp move_to!(%GameSession{} = session, status) do
+    session
+    |> GameSession.status_changeset(status)
+    |> Repo.update!()
+  end
+
+  defp questions_of(%Quiz{} = quiz) do
+    Repo.aggregate(from(q in Question, where: q.quiz_id == ^quiz.id), :count)
+  end
+
+  defp positions_of(%Quiz{} = quiz) do
+    Repo.all(from q in Question, where: q.quiz_id == ^quiz.id, select: q.position, order_by: q.id)
   end
 
   defp questions_left(questions) do

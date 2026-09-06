@@ -9,6 +9,12 @@ defmodule LiveQuizWeb.ApiSpec do
 
   Every endpoint is authenticated by the `bearerAuth` scheme declared here,
   except login and refresh, which override it with an empty requirement.
+
+  Rooms brought a second credential with them, and the two are declared side by
+  side rather than folded into one: an account holds a JWT, while somebody who
+  never signed up holds the opaque credential of a participation (AD-24). A
+  client that is both sends both, and an operation says which of the two it
+  accepts — some accept either, and the public read of a room accepts neither.
   """
 
   alias LiveQuizWeb.Endpoint
@@ -41,6 +47,15 @@ defmodule LiveQuizWeb.ApiSpec do
             scheme: "bearer",
             bearerFormat: "JWT",
             description: "Token de acesso obtido em POST /api/v1/session"
+          },
+          "participantAuth" => %SecurityScheme{
+            type: "http",
+            scheme: "Participant",
+            description: """
+            Credencial de participação, devolvida uma única vez por
+            POST /api/v1/game-sessions/{code}/join. Vale enquanto a sala estiver ativa
+            e identifica também participantes sem conta.
+            """
           }
         }
       },
@@ -53,7 +68,17 @@ defmodule LiveQuizWeb.ApiSpec do
     [
       %Tag{name: "Sessão", description: "Autenticação, renovação de token e usuário autenticado"},
       %Tag{name: "Quizzes", description: "Criação e gerenciamento dos quizzes do usuário"},
-      %Tag{name: "Perguntas", description: "Perguntas de um quiz e suas alternativas"}
+      %Tag{name: "Perguntas", description: "Perguntas de um quiz e suas alternativas"},
+      %Tag{
+        name: "Salas",
+        description: """
+        Criação de salas, entrada de participantes com ou sem conta e ciclo de vida da partida.
+
+        **Tempo real:** esta API não entrega eventos. A interface web usa LiveView e PubSub;
+        clientes REST devem consultar o estado dos endpoints de leitura. Phoenix Channels
+        estão previstos para uma fase futura, junto com o cliente mobile.
+        """
+      }
     ]
   end
 end

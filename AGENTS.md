@@ -295,10 +295,15 @@ mix coveralls   # cobertura
 ## 7. Ambiente de desenvolvimento
 
 ```bash
-docker compose up -d    # PostgreSQL 16 + Mailpit
-mix setup               # deps, banco, migrations, assets
-mix phx.server          # http://localhost:4000
+docker compose up -d --build   # aplicação + PostgreSQL 16 + Mailpit
+docker compose logs -f app     # acompanha o boot
 ```
+
+O `docker compose` é a única forma suportada de subir o ambiente. O container da aplicação roda
+`mix setup` antes do servidor e monta o código do host, então editar `lib/` recompila sem rebuild.
+A porta do banco é fixa em `5432` — não existe `DB_PORT`. Os comandos de verificação
+(`mix precommit`, `mix coveralls`) rodam na máquina, contra o banco publicado em `localhost:5432`,
+ou dentro do container com `docker compose exec app`.
 
 | Serviço | Endereço |
 |---|---|

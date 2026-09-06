@@ -3,8 +3,10 @@ defmodule LiveQuizWeb.Api.V1.QuizControllerTest do
 
   import Ecto.Query
   import LiveQuiz.AccountsFixtures
+  import LiveQuiz.GamesFixtures
   import LiveQuiz.QuizzesFixtures
 
+  alias LiveQuiz.Games.GameSession
   alias LiveQuiz.Quizzes.AnswerOption
   alias LiveQuiz.Quizzes.Question
   alias LiveQuiz.Quizzes.Quiz
@@ -12,6 +14,9 @@ defmodule LiveQuizWeb.Api.V1.QuizControllerTest do
 
   @unauthorized %{"errors" => %{"detail" => "Não autenticado"}}
   @not_found %{"errors" => %{"detail" => "Não encontrado"}}
+  @locked %{
+    "errors" => %{"detail" => "Este quiz possui uma sala ativa e não pode ser alterado"}
+  }
 
   setup :register_and_log_in_api_user
 
@@ -360,5 +365,85 @@ defmodule LiveQuizWeb.Api.V1.QuizControllerTest do
       assert json_response(conn, 404) == @not_found
       assert Repo.get(Quiz, theirs.id)
     end
+  end
+
+  describe "quiz com sala ativa" do
+    setup %{scope: scope} do
+      quiz = quiz_fixture(scope, %{title: "Geografia"})
+      question_fixture(scope, quiz)
+
+      %{quiz: quiz, session: game_session_fixture(%{quiz: quiz, status: :waiting})}
+    end
+
+    test "PUT responde 409 e não altera nada", %{conn: conn, quiz: quiz} do
+      conn = put(conn, ~p"/api/v1/quizzes/#{quiz.id}", %{"quiz" => %{"title" => "Trocado"}})
+
+      assert json_response(conn, 409) == @locked
+      assert Repo.get!(Quiz, quiz.id).title == "Geografia"
+    end
+
+    test "PATCH responde 409", %{conn: conn, quiz: quiz} do
+      conn = patch(conn, ~p"/api/v1/quizzes/#{quiz.id}", %{"quiz" => %{"title" => "Trocado"}})
+
+      assert json_response(conn, 409) == @locked
+    end
+
+    test "DELETE responde 409 e o quiz continua existindo", %{conn: conn, quiz: quiz} do
+      conn = delete(conn, ~p"/api/v1/quizzes/#{quiz.id}")
+
+      assert json_response(conn, 409) == @locked
+      assert Repo.get(Quiz, quiz.id)
+    end
+
+    test "GET continua respondendo 200", %{conn: conn, quiz: quiz} do
+      assert %{"data" => data} = conn |> get(~p"/api/v1/quizzes/#{quiz.id}") |> json_response(200)
+      assert data["id"] == quiz.id
+    end
+
+    test "volta a aceitar a edição depois que a sala é encerrada", %{
+      conn: conn,
+      quiz: quiz,
+      session: session
+    } do
+      close!(session)
+
+      conn = patch(conn, ~p"/api/v1/quizzes/#{quiz.id}", %{"quiz" => %{"title" => "Trocado"}})
+
+      assert %{"data" => data} = json_response(conn, 200)
+      assert data["title"] == "Trocado"
+    end
+
+    test "volta a aceitar a exclusão depois que a sala expira", %{
+      conn: conn,
+      quiz: quiz,
+      session: session
+    } do
+      close!(session, :expired)
+
+      assert response(delete(conn, ~p"/api/v1/quizzes/#{quiz.id}"), 204) == ""
+      refute Repo.get(Quiz, quiz.id)
+    end
+
+    test "o 404 tem precedência sobre o 409 para o quiz de outro dono", %{
+      conn: conn,
+      other_scope: other_scope
+    } do
+      theirs = quiz_fixture(other_scope, %{title: "Do Bruno"})
+      game_session_fixture(%{quiz: theirs, status: :waiting})
+
+      assert json_response(
+               patch(conn, ~p"/api/v1/quizzes/#{theirs.id}", %{"quiz" => %{"title" => "X"}}),
+               404
+             ) == @not_found
+
+      assert json_response(delete(conn, ~p"/api/v1/quizzes/#{theirs.id}"), 404) == @not_found
+      assert Repo.get!(Quiz, theirs.id).title == "Do Bruno"
+    end
+  end
+
+  defp close!(%GameSession{} = session, status \\ :cancelled) do
+    session
+    |> GameSession.status_changeset(status)
+    |> Repo.update!()
   end
 end

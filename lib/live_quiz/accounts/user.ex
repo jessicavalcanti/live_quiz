@@ -2,6 +2,9 @@ defmodule LiveQuiz.Accounts.User do
   use Ecto.Schema
   import Ecto.Changeset
 
+  alias LiveQuiz.Games.GameSession
+  alias LiveQuiz.Games.Participant
+
   schema "users" do
     field :name, :string
     field :email, :string
@@ -9,6 +12,9 @@ defmodule LiveQuiz.Accounts.User do
     field :hashed_password, :string, redact: true
     field :confirmed_at, :utc_datetime
     field :authenticated_at, :utc_datetime, virtual: true
+
+    has_many :hosted_game_sessions, GameSession, foreign_key: :host_id
+    has_many :participations, Participant
 
     timestamps(type: :utc_datetime)
   end
