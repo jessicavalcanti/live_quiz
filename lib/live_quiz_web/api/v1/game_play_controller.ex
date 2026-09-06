@@ -46,11 +46,10 @@ defmodule LiveQuizWeb.Api.V1.GamePlayController do
   alias LiveQuizWeb.Api.V1.Schemas.NextRequest
   alias LiveQuizWeb.Api.V1.Schemas.QuestionResultsResponse
   alias LiveQuizWeb.Api.V1.Schemas.SubmittedAnswerResponse
-  alias LiveQuizWeb.Api.V1.Schemas.ValidationErrorResponse
 
   action_fallback LiveQuizWeb.Api.FallbackController
 
-  tags ["Salas"]
+  tags ["Partida"]
 
   @code_parameter [
     in: :path,
@@ -82,6 +81,19 @@ defmodule LiveQuizWeb.Api.V1.GamePlayController do
 
     Uma pergunta ainda aberta é encerrada na mesma transação, e o prazo da nova
     é calculado pelo servidor a partir da duração escolhida na abertura da sala.
+
+    **Recusas.** A coluna `errors.code` traz o código estável do corpo quando ele
+    existe; onde está vazia, o status é a única distinção.
+
+    | Status | Motivo | `errors.code` |
+    |---|---|---|
+    | 401 | sem token de conta — `unauthenticated` | — |
+    | 403 | autenticado, mas não é o host desta partida — `forbidden` | — |
+    | 404 | sala inexistente ou código inválido — `not_found` | — |
+    | 409 | a partida não está em andamento | `invalid_status` |
+    | 409 | a posição informada não é mais a corrente | `stale` |
+    | 409 | a partida já aplicou a última pergunta | `no_more_questions` |
+    | 422 | corpo sem `expected_position` | `invalid_expected_position` |
     """,
     parameters: [code: @code_parameter],
     request_body: {"Posição corrente", "application/json", NextRequest, required: true},
@@ -118,6 +130,16 @@ defmodule LiveQuizWeb.Api.V1.GamePlayController do
     Só o host. Encerrar revela o gabarito e não termina a partida: mesmo a
     última pergunta espera o `finish`. Idempotente — encerrar de novo devolve
     `200` com o instante original, sem repetir a revelação.
+
+    **Recusas.**
+
+    | Status | Motivo | `errors.code` |
+    |---|---|---|
+    | 401 | sem token de conta — `unauthenticated` | — |
+    | 403 | autenticado, mas não é o host desta partida — `forbidden` | — |
+    | 404 | sala inexistente ou código inválido — `not_found` | — |
+    | 409 | a partida não está em andamento | `invalid_status` |
+    | 409 | não há pergunta aberta para encerrar | `no_open_question` |
     """,
     parameters: [code: @code_parameter],
     responses: [
@@ -151,6 +173,15 @@ defmodule LiveQuizWeb.Api.V1.GamePlayController do
     decisão dele, nunca consequência de acabarem as perguntas. Idempotente: uma
     partida já finalizada é devolvida como está. Uma sala no lobby, cancelada ou
     expirada responde `409`.
+
+    **Recusas.**
+
+    | Status | Motivo | `errors.code` |
+    |---|---|---|
+    | 401 | sem token de conta — `unauthenticated` | — |
+    | 403 | autenticado, mas não é o host desta partida — `forbidden` | — |
+    | 404 | sala inexistente ou código inválido — `not_found` | — |
+    | 409 | não há partida em andamento para finalizar | `invalid_status` |
     """,
     parameters: [code: @code_parameter],
     responses: [
@@ -184,10 +215,22 @@ defmodule LiveQuizWeb.Api.V1.GamePlayController do
     credencial de outra partida responde `403`.
 
     Responder de novo com a pergunta aberta troca a escolha e mantém uma única
-    linha (AD-41). Fora do prazo é `409` `time_is_up`, com a pergunta encerrada
-    é `409` `question_closed`, e a alternativa de outra pergunta é `422`
-    `option_not_found`. Quando esta resposta é a última que faltava, o corpo
-    volta com `question_closed` verdadeiro.
+    linha (AD-41). Quando esta resposta é a última que faltava, o corpo volta
+    com `question_closed` verdadeiro.
+
+    **Recusas.**
+
+    | Status | Motivo | `errors.code` |
+    |---|---|---|
+    | 401 | sem credencial de participação, o `Bearer` do host incluído — `unauthenticated` | — |
+    | 403 | credencial de outra partida — `forbidden` | — |
+    | 403 | credencial de quem saiu desta sala | `left_session` |
+    | 404 | sala inexistente ou código inválido — `not_found` | — |
+    | 409 | a partida não está em andamento | `invalid_status` |
+    | 409 | a pergunta já foi encerrada | `question_closed` |
+    | 409 | o prazo da pergunta venceu | `time_is_up` |
+    | 422 | a alternativa não pertence à pergunta aberta | `option_not_found` |
+    | 422 | corpo sem `answer_option_id` | `invalid_answer_option_id` |
     """,
     parameters: [code: @code_parameter],
     request_body: {"Alternativa escolhida", "application/json", AnswerRequest, required: true},
@@ -202,7 +245,7 @@ defmodule LiveQuizWeb.Api.V1.GamePlayController do
          ErrorResponse},
       unprocessable_entity:
         {"Corpo sem `answer_option_id` ou alternativa de outra pergunta", "application/json",
-         ValidationErrorResponse}
+         ErrorResponse}
     ]
 
   def answer(conn, %{"code" => code} = params) do
@@ -231,6 +274,14 @@ defmodule LiveQuizWeb.Api.V1.GamePlayController do
 
     `seconds_left` envelhece no transporte: o cronômetro da tela se desenha a
     partir de `ends_at`, que é o prazo absoluto do servidor (AD-39).
+
+    **Recusas.** Nenhuma traz `errors.code`: as três se distinguem pelo status.
+
+    | Status | Motivo |
+    |---|---|
+    | 401 | sem credencial de participação nem token de conta — `unauthenticated` |
+    | 403 | identificado, mas sem vínculo com esta partida — `forbidden` |
+    | 404 | sala inexistente ou código inválido — `not_found` |
     """,
     parameters: [code: @code_parameter],
     responses: [
@@ -259,6 +310,15 @@ defmodule LiveQuizWeb.Api.V1.GamePlayController do
     Uma pergunta que ainda não encerrou — ou que a partida nem alcançou —
     responde `409` com o código `question_open`: nem tela nem endpoint revelam
     gabarito antes da hora (AD-46). Uma posição que nunca foi congelada é `404`.
+
+    **Recusas.**
+
+    | Status | Motivo | `errors.code` |
+    |---|---|---|
+    | 401 | sem credencial de participação nem token de conta — `unauthenticated` | — |
+    | 403 | identificado, mas sem vínculo com esta partida — `forbidden` | — |
+    | 404 | sala ou posição inexistente — `not_found` | — |
+    | 409 | a pergunta ainda não foi encerrada | `question_open` |
     """,
     parameters: [code: @code_parameter, position: @position_parameter],
     responses: [

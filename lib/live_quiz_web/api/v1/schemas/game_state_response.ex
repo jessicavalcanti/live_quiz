@@ -121,7 +121,12 @@ defmodule LiveQuizWeb.Api.V1.Schemas.GameStateResponse do
           "ends_at" => "2026-09-05T18:04:30Z",
           "seconds_left" => 22,
           "last_question" => false,
-          "options" => [%{"id" => 41, "position" => 1, "text" => "São Paulo"}],
+          "options" => [
+            %{"id" => 41, "position" => 1, "text" => "São Paulo"},
+            %{"id" => 42, "position" => 2, "text" => "Brasília"},
+            %{"id" => 43, "position" => 3, "text" => "Rio de Janeiro"},
+            %{"id" => 44, "position" => 4, "text" => "Salvador"}
+          ],
           "my_answer_option_id" => 42
         }
       }

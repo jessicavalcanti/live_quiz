@@ -43,8 +43,6 @@ defmodule LiveQuizWeb.Api.V1.GameSessionController do
 
   action_fallback LiveQuizWeb.Api.FallbackController
 
-  tags ["Salas"]
-
   @code_parameter [
     in: :path,
     description: "Código de acesso da sala, com 6 caracteres",
@@ -63,6 +61,7 @@ defmodule LiveQuizWeb.Api.V1.GameSessionController do
   Opens a room for a quiz of the authenticated user.
   """
   operation :create,
+    tags: ["Salas"],
     summary: "Abre uma sala para um quiz do usuário autenticado",
     security: [%{"bearerAuth" => []}],
     description: """
@@ -71,8 +70,20 @@ defmodule LiveQuizWeb.Api.V1.GameSessionController do
     confirma a existência de quiz alheio (AD-10).
 
     `question_duration_seconds` é opcional e vale para todas as perguntas da
-    partida (AD-38): 10, 20, 30 ou 60, com 30 como padrão. Qualquer outro valor
-    responde `422` com a mensagem do campo.
+    partida (AD-38): 10, 20, 30 ou 60, com 30 como padrão. É imutável depois do
+    início e qualquer outro valor responde `422` `validation_error`, com a
+    mensagem agrupada sob o campo.
+
+    **Recusas.** Abrir uma sala é anterior à execução, então nenhuma delas traz
+    `errors.code`; o `422` usa o envelope de validação por campo.
+
+    | Status | Motivo |
+    |---|---|
+    | 401 | sem token de conta — `unauthenticated` |
+    | 404 | quiz inexistente, de outro dono ou não informado — `not_found` |
+    | 409 | você já tem uma sala ativa, já participa de outra, ou o quiz sumiu |
+    | 422 | quiz sem perguntas ou duração fora de 10/20/30/60 — `validation_error` |
+    | 503 | não foi possível sortear um código de acesso |
     """,
     request_body: {"Quiz da sala", "application/json", GameSessionRequest, required: true},
     responses: [
@@ -106,6 +117,7 @@ defmodule LiveQuizWeb.Api.V1.GameSessionController do
   entered it yet may know.
   """
   operation :show,
+    tags: ["Salas"],
     summary: "Consulta pública de uma sala pelo código",
     description: """
     Aberta a qualquer pessoa, com ou sem conta. Devolve apenas título do quiz,
@@ -135,6 +147,7 @@ defmodule LiveQuizWeb.Api.V1.GameSessionController do
   The read of the host: the whole room, with the lobby list.
   """
   operation :host_show,
+    tags: ["Salas"],
     summary: "Detalha a sala do host, com o lobby",
     security: [%{"bearerAuth" => []}],
     description: """
@@ -164,6 +177,7 @@ defmodule LiveQuizWeb.Api.V1.GameSessionController do
   never reissued, so losing it is losing that participation (AD-24).
   """
   operation :join,
+    tags: ["Salas"],
     summary: "Entra em uma sala, com ou sem conta",
     description: """
     Não exige identidade nenhuma. Um `Bearer` vincula a participação à conta; as
@@ -203,6 +217,7 @@ defmodule LiveQuizWeb.Api.V1.GameSessionController do
   connected — counted by the server.
   """
   operation :start,
+    tags: ["Partida"],
     summary: "Inicia a partida",
     security: [%{"bearerAuth" => []}],
     description: """
@@ -211,7 +226,17 @@ defmodule LiveQuizWeb.Api.V1.GameSessionController do
 
     Iniciar congela as perguntas e as alternativas do quiz dentro da partida.
     Chamar de novo em uma partida já iniciada devolve `200` com a mesma partida,
-    sem congelar nada outra vez.
+    sem congelar nada outra vez. Nenhuma pergunta abre aqui: a primeira abre no
+    `next`.
+
+    **Recusas.** Nenhuma traz `errors.code`: todas se distinguem pelo status.
+
+    | Status | Motivo |
+    |---|---|
+    | 401 | sem token de conta — `unauthenticated` |
+    | 404 | sala inexistente ou de outro host — `not_found` (AD-10) |
+    | 409 | ninguém conectado para começar — `no_connected_participants` |
+    | 409 | sala já encerrada, ou o quiz da sala não existe mais |
     """,
     parameters: [code: @code_parameter],
     responses: [
@@ -237,6 +262,7 @@ defmodule LiveQuizWeb.Api.V1.GameSessionController do
   Ends the room by the host's own decision, in the lobby or after it started.
   """
   operation :cancel,
+    tags: ["Salas"],
     summary: "Cancela a sala",
     security: [%{"bearerAuth" => []}],
     description: "Só o host, em `waiting` ou `in_progress`. Uma sala já encerrada não reabre.",
