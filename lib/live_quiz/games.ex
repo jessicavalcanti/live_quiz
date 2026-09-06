@@ -1399,6 +1399,21 @@ defmodule LiveQuiz.Games do
     end
   end
 
+  @doc "Fetches a participant's own result by its stable result identifier."
+  @spec get_my_game_result(Scope.t(), integer() | String.t()) ::
+          {:ok, GameResult.t()} | {:error, :not_found}
+  def get_my_game_result(%Scope{} = scope, id) do
+    query =
+      from r in GameResult,
+        where: r.id == ^id and r.user_id == ^scope.user.id,
+        preload: [:game_session, :participant]
+
+    case Repo.one(query) do
+      %GameResult{} = result -> {:ok, result}
+      nil -> {:error, :not_found}
+    end
+  end
+
   @doc "Lists the finished results belonging to the authenticated participant."
   @spec list_game_results(Scope.t(), map() | keyword(), map() | keyword()) :: map()
   def list_game_results(%Scope{} = scope, filters, pagination) do
