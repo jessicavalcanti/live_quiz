@@ -929,6 +929,175 @@ defmodule LiveQuiz.Games do
   end
 
   @doc """
+  Calculates an answer's score from the frozen answer key and server timestamps.
+
+  Correct answers are worth up to 1000 points, proportional to the time left
+  when they arrived. Missing and incorrect answers are worth zero.
+  """
+  @spec calculate_answer_score(Answer.t() | nil, GameSessionQuestion.t(), GameSession.t()) ::
+          non_neg_integer()
+  def calculate_answer_score(nil, %GameSessionQuestion{}, %GameSession{}), do: 0
+
+  def calculate_answer_score(
+        %Answer{} = answer,
+        %GameSessionQuestion{answer_options: options},
+        %GameSession{question_duration_seconds: duration} = session
+      )
+      when is_list(options) and is_integer(duration) and duration > 0 do
+    option = Enum.find(options, &(&1.id == answer.game_session_answer_option_id))
+
+    if option && option.is_correct do
+      elapsed_ms = elapsed_time_ms(answer.answered_at, session.current_question_started_at)
+      remaining_ms = max(duration * 1_000 - elapsed_ms, 0)
+      min(div(1_000 * remaining_ms, duration * 1_000), 1_000)
+    else
+      0
+    end
+  end
+
+  defp elapsed_time_ms(%DateTime{} = answered_at, %DateTime{} = started_at) do
+    max(DateTime.diff(answered_at, started_at, :millisecond), 0)
+  end
+
+  defp score_question(session_id, question_position) do
+    Repo.transaction(fn ->
+      lock_match(session_id)
+
+      session = lock_session(session_id)
+
+      case session do
+        nil -> Repo.rollback(:not_found)
+        %GameSession{} = current -> score_locked_question(current, session_id, question_position)
+      end
+    end)
+  end
+
+  defp score_locked_question(session, session_id, question_position) do
+    with {:ok, running} <- ensure_running(session),
+         :ok <- ensure_question_settled(running, question_position),
+         {:ok, question} <- lock_snapshot_question(session_id, question_position) do
+      answers = answers_for_question(question.id)
+      participants = participants_for_scoring(session_id)
+
+      case question.scored_at do
+        %DateTime{} ->
+          %{session: running, ranking_data: ranking_data(participants), scored?: false}
+
+        nil ->
+          scores = score_participants(participants, answers, question, running)
+          mark_question_scored(question)
+
+          %{session: running, ranking_data: scores, scored?: true}
+      end
+    else
+      {:error, reason} -> Repo.rollback(reason)
+    end
+  end
+
+  defp lock_snapshot_question(session_id, position) do
+    GameSessionQuestion
+    |> where([q], q.game_session_id == ^session_id and q.position == ^position)
+    |> lock("FOR UPDATE")
+    |> preload(:answer_options)
+    |> Repo.one()
+    |> case do
+      nil -> {:error, :not_found}
+      question -> {:ok, question}
+    end
+  end
+
+  defp answers_for_question(question_id) do
+    Answer
+    |> where([a], a.game_session_question_id == ^question_id)
+    |> preload(:game_session_answer_option)
+    |> Repo.all()
+    |> Map.new(&{&1.participant_id, &1})
+  end
+
+  defp participants_for_scoring(session_id) do
+    Participant
+    |> where([p], p.game_session_id == ^session_id)
+    |> order_by([p], asc: p.id)
+    |> Repo.all()
+  end
+
+  defp score_participants(participants, answers, question, session) do
+    Enum.map(participants, fn participant ->
+      answer = Map.get(answers, participant.id)
+      score = calculate_answer_score(answer, question, session)
+      answered? = not is_nil(answer)
+      correct? = answered? and score > 0
+      response_time = response_time_ms(answer, session.current_question_started_at)
+
+      metrics = %{
+        score: participant.score + score,
+        correct_answers: participant.correct_answers + if(correct?, do: 1, else: 0),
+        incorrect_answers:
+          participant.incorrect_answers + if(answered? and not correct?, do: 1, else: 0),
+        total_response_time_ms: participant.total_response_time_ms + response_time
+      }
+
+      participant
+      |> Ecto.Changeset.change(metrics)
+      |> Repo.update!()
+      |> participant_ranking_data()
+    end)
+  end
+
+  defp response_time_ms(nil, _started_at), do: 0
+
+  defp response_time_ms(%Answer{answered_at: answered_at}, %DateTime{} = started_at) do
+    elapsed_time_ms(answered_at, started_at)
+  end
+
+  defp mark_question_scored(%GameSessionQuestion{id: id}) do
+    {1, _} =
+      Repo.update_all(
+        from(q in GameSessionQuestion, where: q.id == ^id and is_nil(q.scored_at)),
+        set: [scored_at: now_usec()]
+      )
+
+    :ok
+  end
+
+  defp ranking_data(participants), do: Enum.map(participants, &participant_ranking_data/1)
+
+  defp participant_ranking_data(participant) do
+    %{
+      participant_id: participant.id,
+      nickname: participant.nickname,
+      score: participant.score,
+      correct_answers: participant.correct_answers,
+      incorrect_answers: participant.incorrect_answers,
+      total_response_time_ms: participant.total_response_time_ms
+    }
+  end
+
+  @doc """
+  Consolidates every participant's last answer for a closed question.
+
+  A persisted marker, protected by the match and question row locks, makes
+  repeated and concurrent calls return the same ranking without duplicating
+  participant metrics. The event is published only after commit.
+  """
+  @spec score_closed_question(GameSession.t(), pos_integer()) ::
+          {:ok, [map()]} | {:error, :question_open | :not_found | :invalid_status}
+  def score_closed_question(%GameSession{id: session_id}, question_position)
+      when is_integer(question_position) and question_position > 0 do
+    case score_question(session_id, question_position) do
+      {:ok, %{session: session, ranking_data: ranking_data, scored?: true}} ->
+        broadcast(session.id, {:question_scored, session, ranking_data})
+        {:ok, ranking_data}
+
+      {:ok, %{ranking_data: ranking_data, scored?: false}} ->
+        {:ok, ranking_data}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @doc """
   Every running match sitting on a question that is still taking answers.
 
   This is what the boot recovery of F3-05 reads. Matches that are over never
