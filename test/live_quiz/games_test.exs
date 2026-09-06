@@ -4113,6 +4113,446 @@ defmodule LiveQuiz.GamesTest do
     end
   end
 
+  describe "question_results/3" do
+    test "a pergunta encerrada traz o gabarito, a distribuição e as ausências" do
+      %{scope: scope, session: session, questions: questions, participants: participants} =
+        open_match_with(25)
+
+      {answering, absent} = Enum.split(participants, 22)
+      {for_brasilia, rest} = Enum.split(answering, 15)
+      {for_rio, for_sao_paulo} = Enum.split(rest, 3)
+
+      answer_all(for_brasilia, option_at(questions, 1, 1))
+      answer_all(for_rio, option_at(questions, 1, 2))
+      answer_all(for_sao_paulo, option_at(questions, 1, 3))
+
+      assert {:ok, closed} = Games.close_question(scope, session)
+      assert {:ok, results} = Games.question_results(closed, 1, scope)
+
+      assert length(absent) == 3
+      assert results.position == 1
+      assert results.question_count == 3
+      assert results.question_text == "Pergunta 1 da partida"
+      assert results.answers_count == 22
+      assert results.no_answer_count == 3
+      assert results.participants_count == 25
+
+      assert Enum.map(results.options, & &1.position) == [1, 2, 3, 4]
+
+      assert Enum.map(results.options, & &1.text) == [
+               "Brasília",
+               "Rio de Janeiro",
+               "São Paulo",
+               "Salvador"
+             ]
+
+      assert Enum.map(results.options, & &1.count) == [15, 3, 4, 0]
+      assert Enum.map(results.options, & &1.is_correct) == [true, false, false, false]
+    end
+
+    test "as contagens fecham com zero, uma, doze e vinte e cinco respostas" do
+      for answered <- [0, 1, 12, 25] do
+        %{scope: scope, session: session, questions: questions, participants: participants} =
+          open_match_with(25)
+
+        participants |> Enum.take(answered) |> answer_all(option_at(questions, 1, 1))
+
+        assert {:ok, closed} = Games.close_question(scope, session)
+        assert {:ok, results} = Games.question_results(closed, 1, scope)
+
+        assert results.answers_count == answered
+        assert results.participants_count == 25
+        assert Enum.sum_by(results.options, & &1.count) == results.answers_count
+        assert results.answers_count + results.no_answer_count == results.participants_count
+      end
+    end
+
+    test "quem saiu voluntariamente fica fora do denominador" do
+      %{scope: scope, session: session, participants: participants} = open_match_with(25)
+
+      for participant <- Enum.take(participants, 2) do
+        assert {:ok, _left} = Games.leave_game_session(participant)
+      end
+
+      assert {:ok, closed} = Games.close_question(scope, session)
+      assert {:ok, results} = Games.question_results(closed, 1, scope)
+
+      assert results.participants_count == 23
+      assert results.answers_count == 0
+      assert results.no_answer_count == 23
+    end
+
+    test "quem apenas caiu continua contando como ausente" do
+      %{scope: scope, session: session, questions: questions, participants: [present, dropped]} =
+        open_match_with(2)
+
+      assert {:ok, connected, _connection_id} = Games.claim_participant_connection(present)
+      answer_all([connected], option_at(questions, 1, 1))
+
+      assert {:ok, closed} = Games.close_question(scope, session)
+      assert {:ok, results} = Games.question_results(closed, 1, scope)
+
+      assert Participant.in_lobby?(Repo.get!(Participant, dropped.id))
+      assert results.participants_count == 2
+      assert results.answers_count == 1
+      assert results.no_answer_count == 1
+    end
+
+    test "a troca conta uma vez só, e apenas na alternativa que ficou" do
+      %{scope: scope, session: session, questions: questions, participants: [participant]} =
+        open_match_with(1)
+
+      assert {:ok, _first} = Games.answer_question(participant, option_at(questions, 1, 2).id, 0)
+      assert {:ok, _swap} = Games.answer_question(participant, option_at(questions, 1, 4).id, 0)
+
+      assert {:ok, closed} = Games.close_question(scope, session)
+      assert {:ok, results} = Games.question_results(closed, 1, scope)
+
+      assert results.answers_count == 1
+      assert results.no_answer_count == 0
+      assert Enum.map(results.options, & &1.count) == [0, 0, 0, 1]
+    end
+
+    test "a pergunta aberta não é apurada" do
+      %{scope: scope, session: session, participant: participant} = open_match(%{})
+
+      assert Games.question_results(session, 1, scope) == {:error, :question_open}
+      assert Games.question_results(session, 1, participant) == {:error, :question_open}
+    end
+
+    test "uma pergunta que a partida ainda não alcançou não é apurada" do
+      %{scope: scope, session: session} = open_match_with(0)
+
+      assert {:ok, closed} = Games.close_question(scope, session)
+      assert Games.question_results(closed, 2, scope) == {:error, :question_open}
+      assert Games.question_results(closed, 3, scope) == {:error, :question_open}
+    end
+
+    test "antes do primeiro avanço nenhuma pergunta é apurada" do
+      %{scope: scope, session: session} = match_of(3)
+
+      assert Games.question_results(session, 1, scope) == {:error, :question_open}
+    end
+
+    test "posição inexistente devolve not_found" do
+      %{scope: scope, session: session} = open_match_with(0)
+      assert {:ok, closed} = Games.close_question(scope, session)
+
+      assert Games.question_results(closed, 4, scope) == {:error, :not_found}
+      assert Games.question_results(closed, 0, scope) == {:error, :not_found}
+    end
+
+    test "quem não é host nem participante não apura" do
+      %{scope: scope, session: session} = open_match_with(0)
+      assert {:ok, closed} = Games.close_question(scope, session)
+
+      stranger = participant_fixture(game_session_fixture())
+
+      assert Games.question_results(closed, 1, user_scope_fixture()) == {:error, :unauthorized}
+      assert Games.question_results(closed, 1, stranger) == {:error, :unauthorized}
+      assert Games.question_results(closed, 4, user_scope_fixture()) == {:error, :unauthorized}
+    end
+
+    test "a visão do host não traz a própria resposta" do
+      %{scope: scope, session: session, questions: questions, participants: [participant]} =
+        open_match_with(1)
+
+      assert {:ok, _answered} =
+               Games.answer_question(participant, option_at(questions, 1, 1).id, 0)
+
+      assert {:ok, closed} = Games.close_question(scope, session)
+      assert {:ok, results} = Games.question_results(closed, 1, scope)
+
+      assert Map.has_key?(results, :my_answer_option_id)
+      assert Map.has_key?(results, :my_answer_correct?)
+      assert is_nil(results.my_answer_option_id)
+      assert is_nil(results.my_answer_correct?)
+    end
+
+    test "quem jogou vê a própria escolha e se acertou" do
+      %{
+        scope: scope,
+        session: session,
+        questions: questions,
+        participants: [right, wrong, silent]
+      } = open_match_with(3)
+
+      correct = option_at(questions, 1, 1)
+      missed = option_at(questions, 1, 3)
+
+      assert {:ok, _hit} = Games.answer_question(right, correct.id, 0)
+      assert {:ok, _miss} = Games.answer_question(wrong, missed.id, 0)
+
+      assert {:ok, closed} = Games.close_question(scope, session)
+
+      assert {:ok, hit} = Games.question_results(closed, 1, right)
+      assert hit.my_answer_option_id == correct.id
+      assert hit.my_answer_correct?
+
+      assert {:ok, miss} = Games.question_results(closed, 1, wrong)
+      assert miss.my_answer_option_id == missed.id
+      refute miss.my_answer_correct?
+
+      assert {:ok, none} = Games.question_results(closed, 1, silent)
+      assert is_nil(none.my_answer_option_id)
+      assert is_nil(none.my_answer_correct?)
+    end
+
+    test "quem jogou com conta apura pela própria conta" do
+      %{scope: scope, session: session, questions: questions} = open_match_with(0)
+      player = user_scope_fixture()
+      participant = participant_fixture(session, %{user: player.user})
+      correct = option_at(questions, 1, 1)
+
+      assert {:ok, _answered} = Games.answer_question(participant, correct.id, 0)
+      assert {:ok, closed} = Games.close_question(scope, session)
+
+      assert {:ok, results} = Games.question_results(closed, 1, player)
+      assert results.my_answer_option_id == correct.id
+      assert results.my_answer_correct?
+    end
+
+    test "uma pergunta anterior continua apurável durante e depois da partida" do
+      %{scope: scope, session: session, questions: questions, participants: [participant]} =
+        open_match_with(1)
+
+      assert {:ok, _answered} =
+               Games.answer_question(participant, option_at(questions, 1, 1).id, 0)
+
+      assert {:ok, second} = Games.advance_question(scope, session, 1)
+
+      assert {:ok, running} = Games.question_results(second, 1, scope)
+      assert running.answers_count == 1
+      assert Enum.map(running.options, & &1.count) == [1, 0, 0, 0]
+
+      assert {:ok, finished} = Games.finish_game_session(scope, second)
+
+      assert {:ok, over} = Games.question_results(finished, 1, participant)
+      assert over.answers_count == 1
+      assert over.my_answer_correct?
+
+      assert {:ok, last} = Games.question_results(finished, 2, scope)
+      assert last.answers_count == 0
+      assert last.no_answer_count == 1
+    end
+
+    test "a apuração funciona com o quiz de origem já excluído" do
+      %{scope: scope, session: session, questions: questions} = match_of(3, %{quiz: nil})
+      participant = participant_fixture(session)
+
+      assert {:ok, open} = Games.advance_question(scope, session, nil)
+
+      assert {:ok, _answered} =
+               Games.answer_question(participant, option_at(questions, 1, 1).id, 0)
+
+      assert {:ok, closed} = Games.close_question(scope, open)
+      assert {:ok, results} = Games.question_results(closed, 1, participant)
+
+      assert results.answers_count == 1
+      assert Enum.map(results.options, & &1.is_correct) == [true, false, false, false]
+      assert results.my_answer_correct?
+    end
+
+    test "uma pergunta sem alternativas ainda apura o denominador" do
+      scope = user_scope_fixture()
+      session = game_session_fixture(%{host: scope.user, status: :in_progress})
+      game_session_question_fixture(session, %{position: 1})
+      participant_fixture(session)
+      participant_fixture(session)
+
+      assert {:ok, open} = Games.advance_question(scope, session, nil)
+      assert {:ok, closed} = Games.close_question(scope, open)
+      assert {:ok, results} = Games.question_results(closed, 1, scope)
+
+      assert results.options == []
+      assert results.answers_count == 0
+      assert results.participants_count == 2
+      assert results.no_answer_count == 2
+    end
+
+    test "a apuração não toca nas tabelas do quiz" do
+      %{scope: scope, session: session, questions: questions, participants: [participant]} =
+        open_match_with(1)
+
+      assert {:ok, _answered} =
+               Games.answer_question(participant, option_at(questions, 1, 1).id, 0)
+
+      assert {:ok, closed} = Games.close_question(scope, session)
+
+      refute_quiz_tables_queried(fn ->
+        assert {:ok, _host} = Games.question_results(closed, 1, scope)
+        assert {:ok, _playing} = Games.question_results(closed, 1, participant)
+        assert {:ok, _summary} = Games.game_summary(closed, scope)
+      end)
+    end
+
+    test "uma partida de vinte e cinco pessoas apura as três perguntas" do
+      %{scope: scope, session: session, questions: questions, participants: participants} =
+        open_match_with(25)
+
+      Enum.reduce(1..3//1, session, fn position, current ->
+        current =
+          if position == 1 do
+            current
+          else
+            {:ok, advanced} = Games.advance_question(scope, current, position - 1)
+            advanced
+          end
+
+        answered = position * 5
+
+        participants
+        |> Enum.take(answered)
+        |> answer_all(option_at(questions, position, position))
+
+        {:ok, closed} = Games.close_question(scope, current)
+        {:ok, results} = Games.question_results(closed, position, scope)
+
+        assert results.position == position
+        assert results.answers_count == answered
+        assert results.no_answer_count == 25 - answered
+        assert results.participants_count == 25
+        assert Enum.sum_by(results.options, & &1.count) == answered
+        assert Enum.at(results.options, position - 1).count == answered
+
+        closed
+      end)
+    end
+  end
+
+  describe "game_summary/2" do
+    test "a partida em andamento traz o que já foi jogado" do
+      %{scope: scope, session: session, questions: questions, participants: [a, b]} =
+        open_match_with(2)
+
+      assert {:ok, _first} = Games.answer_question(a, option_at(questions, 1, 1).id, 0)
+      assert {:ok, _second} = Games.answer_question(b, option_at(questions, 1, 2).id, 0)
+
+      assert {:ok, summary} = Games.game_summary(session, scope)
+
+      assert summary.status == :in_progress
+      assert summary.question_count == 3
+      assert summary.questions_played == 1
+      assert summary.answers_count == 2
+      assert summary.participants_count == 2
+    end
+
+    test "antes do primeiro avanço nada foi aplicado" do
+      %{scope: scope, session: session} = match_of(3)
+
+      assert {:ok, summary} = Games.game_summary(session, scope)
+
+      assert summary.questions_played == 0
+      assert summary.answers_count == 0
+      assert summary.participants_count == 0
+    end
+
+    test "a partida finalizada traz as perguntas aplicadas e as respostas registradas" do
+      %{scope: scope, session: session, questions: questions} = match_of(10)
+      participants = for _seat <- 1..18//1, do: participant_fixture(session)
+
+      for question <- questions, participant <- participants do
+        answer_fixture(participant, hd(question.answer_options))
+      end
+
+      played = on_question(session, 10, started_at: minutes_ago_usec(1), closed_at: now_usec())
+      finished = close_session(played, :finished)
+
+      assert {:ok, summary} = Games.game_summary(finished, scope)
+
+      assert summary.status == :finished
+      assert summary.question_count == 10
+      assert summary.questions_played == 10
+      assert summary.answers_count == 180
+      assert summary.participants_count == 18
+    end
+
+    test "quem jogou lê o resumo depois de a partida terminar" do
+      %{scope: scope, session: session, questions: questions, participants: [participant]} =
+        open_match_with(1)
+
+      assert {:ok, _answered} =
+               Games.answer_question(participant, option_at(questions, 1, 1).id, 0)
+
+      assert {:ok, finished} = Games.finish_game_session(scope, session)
+
+      assert {:ok, summary} = Games.game_summary(finished, participant)
+
+      assert summary.status == :finished
+      assert summary.questions_played == 1
+      assert summary.answers_count == 1
+    end
+
+    test "quem não é host nem participante não lê o resumo" do
+      %{session: session} = match_of(3)
+
+      assert Games.game_summary(session, user_scope_fixture()) == {:error, :unauthorized}
+
+      assert Games.game_summary(session, participant_fixture(game_session_fixture())) ==
+               {:error, :unauthorized}
+    end
+  end
+
+  describe "contagem de respostas ao vivo" do
+    test "o host vê o total da pergunta aberta, sem a distribuição" do
+      %{scope: scope, session: session, questions: questions, participants: participants} =
+        open_match_with(25)
+
+      participants |> Enum.take(17) |> answer_all(option_at(questions, 1, 1))
+
+      assert {:ok, state} = Games.game_state(session, scope)
+
+      assert state.answers_count == 17
+      assert Enum.all?(state.options, &(not Map.has_key?(&1, :count)))
+      assert Games.question_results(session, 1, scope) == {:error, :question_open}
+    end
+
+    test "o total do host é zero antes do primeiro avanço" do
+      %{scope: scope, session: session} = match_of(3)
+
+      assert {:ok, state} = Games.game_state(session, scope)
+
+      assert state.answers_count == 0
+    end
+
+    test "quem joga não recebe a contagem de respostas" do
+      %{session: session, participant: participant} = open_match(%{})
+
+      assert {:ok, state} = Games.game_state(session, participant)
+
+      refute Map.has_key?(state, :answers_count)
+    end
+  end
+
+  describe "quadro de eventos da execução" do
+    test "uma partida inteira publica os cinco eventos no tópico da sala" do
+      scope = user_scope_fixture()
+      session = game_session_fixture(%{host: scope.user})
+      participant = participant_fixture(session)
+      session_id = session.id
+
+      :ok = Games.subscribe(session_id)
+
+      assert {:ok, started} = Games.start_game_session(scope, session, 1)
+      assert_receive {:game_started, %GameSession{status: :in_progress}}
+
+      assert {:ok, open} = Games.advance_question(scope, started, nil)
+      assert_receive {:question_advanced, %GameSession{current_question_position: 1}}
+
+      [question] = Games.list_snapshot_questions(open)
+      option = hd(question.answer_options)
+
+      assert {:ok, _answered} = Games.answer_question(participant, option.id, 0)
+      assert_receive {:answer_submitted, ^session_id, 1}
+
+      assert {:ok, closed} = Games.close_question(scope, open)
+      assert_receive {:question_closed, %GameSession{}}
+
+      assert {:ok, _finished} = Games.finish_game_session(scope, closed)
+      assert_receive {:game_finished, %GameSession{status: :finished}}
+    end
+  end
+
   # A match sitting on its first question, open, with `count` people signed up —
   # the state every answer starts from.
   defp open_match_with(count) do
@@ -4130,6 +4570,16 @@ defmodule LiveQuiz.GamesTest do
   defp open_match(_context) do
     context = open_match_with(1)
     Map.put(context, :participant, hd(context.participants))
+  end
+
+  # Everybody picks the same alternative, through the context, so a tally is
+  # always read off answers that went through every rule of `answer_question/3`.
+  # `connected_count` is zero on purpose: the tests choose when the question
+  # closes instead of letting the last answer close it.
+  defp answer_all(participants, option) do
+    for participant <- participants do
+      assert {:ok, _recorded} = Games.answer_question(participant, option.id, 0)
+    end
   end
 
   # The deadline is written by the context out of the duration of the room, so a
