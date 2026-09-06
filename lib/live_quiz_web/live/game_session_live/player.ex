@@ -36,10 +36,14 @@ defmodule LiveQuizWeb.GameSessionLive.Player do
   there is no "cancel", and no local mark that could disagree with the
   database after a reconnection.
 
-  The answer key never reaches here while the question is open (AD-46), and the
-  screen renders nothing derived from it even after it closes: the reveal is
-  its own story. A refusal — the question closed, the deadline passed — is a
-  discreet notice and the waiting state, never a screen that stops responding.
+  The answer key never reaches here while the question is open (AD-46): it
+  arrives with the reveal and not one moment before. When the question closes,
+  the same place that held the alternatives shows which one was right, how the
+  room answered and whether this person got it — there is no second screen and
+  no navigation, because leaving this address would break the reconnection and
+  the sense of one continuous match. A refusal — the question closed, the
+  deadline passed — is a discreet notice and the waiting state, never a screen
+  that stops responding.
 
   Three endings are told apart on purpose. A cancelled room, a room that
   expired for want of a host and a room whose access moved to another tab are
@@ -56,6 +60,8 @@ defmodule LiveQuizWeb.GameSessionLive.Player do
   alias LiveQuiz.Games.Participant
   alias LiveQuiz.Games.Presence
   alias LiveQuizWeb.Formatters
+  alias LiveQuizWeb.GameOver
+  alias LiveQuizWeb.QuestionResults
   alias Phoenix.Socket.Broadcast
 
   @impl true
@@ -81,6 +87,8 @@ defmodule LiveQuizWeb.GameSessionLive.Player do
       |> assign(:question_count, 0)
       |> assign(:game_state, nil)
       |> assign(:selected_option_id, nil)
+      |> assign(:results, nil)
+      |> assign(:summary, nil)
       |> assign(:notice, nil)
       |> stream(:participants, [])
 
@@ -119,7 +127,13 @@ defmodule LiveQuizWeb.GameSessionLive.Player do
         block(socket, session)
 
       {:error, :session_ended} ->
-        socket |> assign(:session, session) |> assign(:ended, ended_reason(session))
+        # There is no live participation to come back to, but whoever holds the
+        # credential of this room is still somebody who played it: it is what
+        # authorizes reading how far the match got.
+        socket
+        |> assign(:session, session)
+        |> assign(:ended, ended_reason(session))
+        |> assign(:summary, summary_for_token(session, token))
 
       {:error, :not_found} ->
         back_to_join(socket)
@@ -218,6 +232,7 @@ defmodule LiveQuizWeb.GameSessionLive.Player do
     socket
     |> assign(:game_state, state)
     |> assign(:selected_option_id, state.my_answer_option_id)
+    |> load_results(state)
   end
 
   defp settle(socket, %{status: :waiting}), do: clear_match(socket)
@@ -230,7 +245,45 @@ defmodule LiveQuizWeb.GameSessionLive.Player do
     socket
     |> assign(:game_state, nil)
     |> assign(:selected_option_id, nil)
+    |> assign(:results, nil)
     |> assign(:notice, nil)
+  end
+
+  # The reveal is asked for only once the question is done with: while it is
+  # open the context refuses it (AD-46), which is also what happens in the few
+  # seconds between a deadline running out on screen and the timer actually
+  # closing the question. A refusal is "nothing to reveal yet", and the screen
+  # keeps saying "aguarde" instead of pretending it knows the answer key.
+  defp load_results(socket, %{question_state: :closed, question_number: position}) do
+    %{session: session, participant: participant} = socket.assigns
+
+    case Games.question_results(session, position, participant) do
+      {:ok, results} -> assign(socket, :results, results)
+      {:error, _nothing_to_reveal} -> assign(socket, :results, nil)
+    end
+  end
+
+  defp load_results(socket, _open_or_pending), do: assign(socket, :results, nil)
+
+  # What the match added up to, read once, when the room is already over: it is
+  # the one number the ending screen shows, and no screen of this phase shows it
+  # while the match is running.
+  defp load_summary(socket) do
+    %{session: session, participant: participant} = socket.assigns
+
+    case Games.game_summary(session, participant) do
+      {:ok, summary} -> assign(socket, :summary, summary)
+      {:error, :unauthorized} -> assign(socket, :summary, nil)
+    end
+  end
+
+  defp summary_for_token(%GameSession{} = session, token) do
+    with {:ok, %Participant{} = participant} <- Games.get_participation_by_token(token),
+         {:ok, summary} <- Games.game_summary(session, participant) do
+      summary
+    else
+      _no_participation_to_read -> nil
+    end
   end
 
   defp playing?(%GameSession{status: status}), do: status == :in_progress
@@ -432,6 +485,7 @@ defmodule LiveQuizWeb.GameSessionLive.Player do
   defp close(socket, session) do
     socket
     |> assign(:session, session)
+    |> load_summary()
     |> assign(:ended, ended_reason(session))
   end
 
@@ -459,11 +513,17 @@ defmodule LiveQuizWeb.GameSessionLive.Player do
           <% @access_lost? -> %>
             <.access_lost_screen />
           <% @ended -> %>
-            <.closed_screen ended={@ended} session={@session} />
+            <GameOver.game_over
+              session={@session}
+              summary={@summary}
+              reason={@ended}
+              viewer={:player}
+            />
           <% @game_state -> %>
             <.match
               game_state={@game_state}
               selected_option_id={@selected_option_id}
+              results={@results}
               notice={@notice}
               host_connected?={@host_connected?}
               leaving?={@leaving?}
@@ -576,6 +636,7 @@ defmodule LiveQuizWeb.GameSessionLive.Player do
 
   attr :game_state, :map, required: true
   attr :selected_option_id, :integer, default: nil
+  attr :results, :map, default: nil
   attr :notice, :string, default: nil
   attr :host_connected?, :boolean, required: true
   attr :leaving?, :boolean, required: true
@@ -694,13 +755,14 @@ defmodule LiveQuizWeb.GameSessionLive.Player do
       </p>
     </article>
 
-    <%!-- A revelação da correta e da distribuição é a F3-10; aqui a pergunta
-    encerrada é o mesmo estado da espera entre uma pergunta e outra, porque do
-    lado de quem joga não há nada a fazer em nenhum dos dois. --%>
+    <%!-- A pergunta encerrada é o mesmo lugar da pergunta aberta, com outro
+    conteúdo: navegar para outra tela quebraria a continuidade e a reconexão. A
+    revelação só entra quando a apuração existe — entre o prazo vencer na tela e
+    o timer encerrar de fato, o que há é a espera. --%>
     <section
       :if={closed?(@game_state)}
       id="question-waiting"
-      class="mt-6 rounded-2xl border border-base-300 p-8 text-center"
+      class="mt-6 rounded-2xl border border-base-300 p-6 text-center sm:p-8"
     >
       <h1 id="question-progress" class="text-lg font-semibold">
         Pergunta {@game_state.question_number} de {@game_state.question_count}
@@ -710,7 +772,9 @@ defmodule LiveQuizWeb.GameSessionLive.Player do
         Pergunta encerrada
       </p>
 
-      <p class="mt-3 text-base-content/70">
+      <QuestionResults.question_results :if={@results} results={@results} viewer={:player} />
+
+      <p class="mt-6 text-base-content/70">
         Aguarde: o host abre a próxima pergunta quando quiser.
       </p>
     </section>
@@ -851,35 +915,4 @@ defmodule LiveQuizWeb.GameSessionLive.Player do
     </section>
     """
   end
-
-  attr :ended, :atom, required: true
-  attr :session, GameSession, required: true
-
-  defp closed_screen(assigns) do
-    ~H"""
-    <section id="room-closed" role="status" class="py-16 text-center">
-      <h1 class="text-2xl font-bold">{closed_title(@ended)}</h1>
-      <p class="mt-3 text-base-content/70">{closed_message(@ended)}</p>
-
-      <div class="mt-6">
-        <.button id="back-to-join" variant="primary" navigate={~p"/join"}>
-          Entrar em outra sala
-        </.button>
-      </div>
-    </section>
-    """
-  end
-
-  defp closed_title(:cancelled), do: "Sala cancelada pelo host"
-  defp closed_title(:expired), do: "Sala encerrada por ausência do host"
-  defp closed_title(_reason), do: "Partida encerrada"
-
-  defp closed_message(:cancelled),
-    do: "O host encerrou esta sala. Nada deu errado do seu lado: é só entrar em outra."
-
-  defp closed_message(:expired),
-    do: "O host ficou fora tempo demais e a sala foi encerrada. Você pode entrar em outra."
-
-  defp closed_message(_reason),
-    do: "Esta partida chegou ao fim. Você pode entrar em outra sala."
 end
