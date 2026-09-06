@@ -483,8 +483,9 @@ defmodule LiveQuizWeb.GameSessionLive.HostTest do
 
       html = lv |> element("#start-game") |> render_click()
 
-      assert html =~ "Partida iniciada"
-      assert has_element?(lv, "#game-started")
+      assert html =~ "Pronto para começar"
+      assert has_element?(lv, "#match")
+      assert has_element?(lv, "#match-pending")
       refute has_element?(lv, "#join-code-panel")
       refute has_element?(lv, "#start-game")
 
@@ -508,13 +509,562 @@ defmodule LiveQuizWeb.GameSessionLive.HostTest do
 
     test "o evento de início chegado de outra aba atualiza a tela", %{
       conn: conn,
+      user: user,
+      session: session
+    } do
+      session |> participant_fixture() |> connect_participant()
+
+      {:ok, lv, _html} = live(conn, ~p"/game-sessions/#{session.join_code}/host")
+
+      {:ok, _started} = Games.start_game_session(Scope.for_user(user), session, 1)
+
+      assert has_element?(lv, "#match-pending")
+      refute has_element?(lv, "#start-game")
+    end
+  end
+
+  describe "tela da partida" do
+    setup [:register_and_log_in_user, :running_room]
+
+    test "antes do primeiro avanço a tela fica pronta para começar", %{
+      conn: conn,
+      session: session
+    } do
+      {:ok, lv, html} = live(conn, ~p"/game-sessions/#{session.join_code}/host")
+
+      assert html =~ "Pronto para começar"
+      assert has_element?(lv, "#match")
+      assert has_element?(lv, "#match-pending")
+      refute has_element?(lv, "#current-question")
+      refute has_element?(lv, "#share-session")
+      refute has_element?(lv, "#start-game")
+    end
+
+    test "a pergunta aberta traz posição, enunciado, alternativas e gabarito", %{
+      conn: conn,
+      scope: scope,
+      session: session,
+      questions: [first | _rest]
+    } do
+      {:ok, _open} = Games.advance_question(scope, session, nil)
+
+      {:ok, lv, _html} = live(conn, ~p"/game-sessions/#{session.join_code}/host")
+
+      assert lv |> element("#question-progress") |> render() =~ "Pergunta 1 de 3"
+      assert lv |> element("#question-text") |> render() =~ "Pergunta 1 da partida"
+
+      [correct | wrong] = Enum.sort_by(first.answer_options, & &1.position)
+
+      for option <- first.answer_options do
+        assert lv |> element("#option-#{option.id}") |> render() =~ option.text
+      end
+
+      assert lv |> element("#option-#{correct.id}") |> render() =~ "Resposta correta"
+
+      for option <- wrong do
+        refute lv |> element("#option-#{option.id}") |> render() =~ "Resposta correta"
+      end
+    end
+
+    test "a contagem é desenhada a partir do prazo absoluto do servidor", %{
+      conn: conn,
+      scope: scope,
+      session: session
+    } do
+      {:ok, open} = Games.advance_question(scope, session, nil)
+
+      {:ok, lv, _html} = live(conn, ~p"/game-sessions/#{session.join_code}/host")
+
+      countdown = lv |> element("#question-countdown-1") |> render()
+
+      assert countdown =~ DateTime.to_iso8601(open.current_question_ends_at)
+      assert countdown =~ ~s(role="timer")
+    end
+
+    test "recarregar no meio da pergunta reconstrói o tempo que resta", %{
+      conn: conn,
+      scope: scope,
+      session: session
+    } do
+      {:ok, open} = Games.advance_question(scope, session, nil)
+      ending_in(open, 12)
+
+      {:ok, lv, _html} = live(conn, ~p"/game-sessions/#{session.join_code}/host")
+
+      assert lv |> element("#question-progress") |> render() =~ "Pergunta 1 de 3"
+      assert lv |> element("#question-countdown-1") |> render() =~ ~r/>\s*0:1[12]\s*</
+    end
+
+    test "o host que volta na pergunta 3 cai direto nela", %{
+      conn: conn,
+      scope: scope,
+      session: session
+    } do
+      play_to(scope, session, 3)
+
+      {:ok, lv, _html} = live(conn, ~p"/game-sessions/#{session.join_code}/host")
+
+      assert lv |> element("#question-progress") |> render() =~ "Pergunta 3 de 3"
+      assert has_element?(lv, "#question-countdown-3")
+    end
+
+    test "o contador de respostas sobe com as respostas que chegam", %{
+      conn: conn,
+      scope: scope,
+      session: session,
+      questions: [first | _rest]
+    } do
+      [one, two, _three] =
+        for index <- 1..3, do: participant_fixture(session, %{nickname: "P#{index}"})
+
+      [option | _rest] = first.answer_options
+      {:ok, _open} = Games.advance_question(scope, session, nil)
+
+      {:ok, lv, _html} = live(conn, ~p"/game-sessions/#{session.join_code}/host")
+
+      assert answers_counter(lv) == "Respostas: 0 / 3"
+
+      {:ok, _answer} = Games.answer_question(one, option.id, 3)
+      assert answers_counter(lv) == "Respostas: 1 / 3"
+
+      {:ok, _answer} = Games.answer_question(two, option.id, 3)
+      assert answers_counter(lv) == "Respostas: 2 / 3"
+    end
+
+    test "o contador redesenha o número que o evento de resposta carrega", %{
+      conn: conn,
+      scope: scope,
+      session: session
+    } do
+      for index <- 1..3, do: participant_fixture(session, %{nickname: "P#{index}"})
+      {:ok, _open} = Games.advance_question(scope, session, nil)
+
+      {:ok, lv, _html} = live(conn, ~p"/game-sessions/#{session.join_code}/host")
+
+      send(lv.pid, {:answer_submitted, session.id, 2})
+
+      assert answers_counter(lv) == "Respostas: 2 / 3"
+    end
+
+    test "quem saiu da sala não conta no denominador", %{
+      conn: conn,
+      scope: scope,
+      session: session
+    } do
+      [_one, _two, three] =
+        for index <- 1..3, do: participant_fixture(session, %{nickname: "P#{index}"})
+
+      {:ok, _left} = Games.leave_game_session(three)
+      {:ok, _open} = Games.advance_question(scope, session, nil)
+
+      {:ok, lv, _html} = live(conn, ~p"/game-sessions/#{session.join_code}/host")
+
+      assert answers_counter(lv) == "Respostas: 0 / 2"
+    end
+  end
+
+  describe "controles da partida" do
+    setup [:register_and_log_in_user, :running_room]
+
+    test "antes do primeiro avanço só avançar comanda alguma coisa", %{
+      conn: conn,
       session: session
     } do
       {:ok, lv, _html} = live(conn, ~p"/game-sessions/#{session.join_code}/host")
 
-      send(lv.pid, {:game_started, %{session | status: :in_progress}})
+      assert has_element?(lv, "#close-question[disabled]")
+      refute has_element?(lv, "#advance-question[disabled]")
+      refute has_element?(lv, "#finish-game[disabled]")
+      refute has_element?(lv, "#finish-game.btn-success")
+    end
 
-      assert has_element?(lv, "#game-started")
+    test "com a pergunta aberta só encerrar fica habilitado", %{
+      conn: conn,
+      scope: scope,
+      session: session
+    } do
+      {:ok, _open} = Games.advance_question(scope, session, nil)
+
+      {:ok, lv, _html} = live(conn, ~p"/game-sessions/#{session.join_code}/host")
+
+      refute has_element?(lv, "#close-question[disabled]")
+      assert has_element?(lv, "#advance-question[disabled]")
+      assert has_element?(lv, ~s{#advance-question[aria-disabled="true"]})
+      refute has_element?(lv, "#finish-game[disabled]")
+    end
+
+    test "com a pergunta encerrada só avançar volta a comandar", %{
+      conn: conn,
+      scope: scope,
+      session: session
+    } do
+      {:ok, open} = Games.advance_question(scope, session, nil)
+      {:ok, _closed} = Games.close_question(scope, open)
+
+      {:ok, lv, _html} = live(conn, ~p"/game-sessions/#{session.join_code}/host")
+
+      assert has_element?(lv, "#close-question[disabled]")
+      refute has_element?(lv, "#advance-question[disabled]")
+      refute has_element?(lv, "#question-countdown-1")
+      assert has_element?(lv, "#question-closed-badge")
+    end
+
+    test "na última pergunta encerrada avançar sai de cena e finalizar ganha destaque", %{
+      conn: conn,
+      scope: scope,
+      session: session
+    } do
+      last = play_to(scope, session, 3)
+      {:ok, _closed} = Games.close_question(scope, last)
+
+      {:ok, lv, _html} = live(conn, ~p"/game-sessions/#{session.join_code}/host")
+
+      assert has_element?(lv, "#advance-question[disabled]")
+      assert has_element?(lv, "#close-question[disabled]")
+      assert has_element?(lv, "#finish-game.btn-success")
+    end
+
+    test "encerrar pela tela para a contagem e libera o avanço", %{
+      conn: conn,
+      scope: scope,
+      session: session
+    } do
+      {:ok, _open} = Games.advance_question(scope, session, nil)
+
+      {:ok, lv, _html} = live(conn, ~p"/game-sessions/#{session.join_code}/host")
+
+      lv |> element("#close-question") |> render_click()
+
+      assert has_element?(lv, "#question-closed-badge")
+      refute has_element?(lv, "#question-countdown-1")
+      assert has_element?(lv, "#close-question[disabled]")
+      refute has_element?(lv, "#advance-question[disabled]")
+
+      assert Repo.get!(GameSession, session.id).current_question_closed_at
+    end
+
+    test "avançar leva a posição corrente e abre a pergunta seguinte", %{
+      conn: conn,
+      scope: scope,
+      session: session
+    } do
+      {:ok, open} = Games.advance_question(scope, session, nil)
+      {:ok, _closed} = Games.close_question(scope, open)
+
+      {:ok, lv, _html} = live(conn, ~p"/game-sessions/#{session.join_code}/host")
+
+      assert has_element?(lv, ~s{#advance-question[phx-value-position="1"]})
+
+      lv |> element("#advance-question") |> render_click()
+
+      assert lv |> element("#question-progress") |> render() =~ "Pergunta 2 de 3"
+      assert Repo.get!(GameSession, session.id).current_question_position == 2
+    end
+
+    test "o primeiro avanço vai sem posição nenhuma", %{conn: conn, session: session} do
+      {:ok, lv, _html} = live(conn, ~p"/game-sessions/#{session.join_code}/host")
+
+      refute has_element?(lv, "#advance-question[phx-value-position]")
+
+      lv |> element("#advance-question") |> render_click()
+
+      assert Repo.get!(GameSession, session.id).current_question_position == 1
+    end
+
+    test "o duplo clique em avançar não pula pergunta", %{
+      conn: conn,
+      scope: scope,
+      session: session
+    } do
+      {:ok, open} = Games.advance_question(scope, session, nil)
+      {:ok, _closed} = Games.close_question(scope, open)
+
+      {:ok, lv, _html} = live(conn, ~p"/game-sessions/#{session.join_code}/host")
+
+      render_click(lv, "advance_question", %{"position" => "1"})
+      render_click(lv, "advance_question", %{"position" => "1"})
+
+      assert Repo.get!(GameSession, session.id).current_question_position == 2
+      assert lv |> element("#question-progress") |> render() =~ "Pergunta 2 de 3"
+    end
+
+    test "um avanço com posição de outra pergunta não anda", %{
+      conn: conn,
+      scope: scope,
+      session: session
+    } do
+      {:ok, open} = Games.advance_question(scope, session, nil)
+      {:ok, _closed} = Games.close_question(scope, open)
+
+      {:ok, lv, _html} = live(conn, ~p"/game-sessions/#{session.join_code}/host")
+
+      render_click(lv, "advance_question", %{"position" => "3"})
+
+      assert Repo.get!(GameSession, session.id).current_question_position == 1
+    end
+
+    test "um avanço com posição forjada não anda", %{
+      conn: conn,
+      scope: scope,
+      session: session
+    } do
+      {:ok, open} = Games.advance_question(scope, session, nil)
+      {:ok, _closed} = Games.close_question(scope, open)
+
+      {:ok, lv, _html} = live(conn, ~p"/game-sessions/#{session.join_code}/host")
+
+      render_click(lv, "advance_question", %{"position" => "não é posição"})
+
+      assert Repo.get!(GameSession, session.id).current_question_position == 1
+    end
+
+    test "um avanço forçado depois da última pergunta explica que acabou", %{
+      conn: conn,
+      scope: scope,
+      session: session
+    } do
+      last = play_to(scope, session, 3)
+      {:ok, _closed} = Games.close_question(scope, last)
+
+      {:ok, lv, _html} = live(conn, ~p"/game-sessions/#{session.join_code}/host")
+
+      html = render_click(lv, "advance_question", %{"position" => "3"})
+
+      assert html =~ "Esta era a última pergunta"
+      assert Repo.get!(GameSession, session.id).current_question_position == 3
+    end
+
+    test "um encerramento forçado antes da primeira pergunta avisa sem quebrar", %{
+      conn: conn,
+      session: session
+    } do
+      {:ok, lv, _html} = live(conn, ~p"/game-sessions/#{session.join_code}/host")
+
+      assert render_click(lv, "close_question", %{}) =~ "Não há pergunta aberta para encerrar"
+    end
+
+    test "comandar uma partida encerrada por trás da tela avisa sem quebrar", %{
+      conn: conn,
+      scope: scope,
+      session: session
+    } do
+      {:ok, _open} = Games.advance_question(scope, session, nil)
+
+      {:ok, lv, _html} = live(conn, ~p"/game-sessions/#{session.join_code}/host")
+
+      # A partida termina sem passar pelo contexto, então nenhum evento chega ao
+      # LiveView: é a corrida entre o clique do host e o prazo de expiração.
+      Repo.update!(GameSession.status_changeset(session, :expired))
+
+      assert render_click(lv, "close_question", %{}) =~
+               "Esta sala não está mais no estado necessário"
+    end
+
+    test "finalizar pede confirmação e só então encerra a partida", %{
+      conn: conn,
+      scope: scope,
+      session: session
+    } do
+      {:ok, open} = Games.advance_question(scope, session, nil)
+      {:ok, _closed} = Games.close_question(scope, open)
+
+      {:ok, lv, _html} = live(conn, ~p"/game-sessions/#{session.join_code}/host")
+
+      lv |> element("#finish-game") |> render_click()
+
+      assert has_element?(lv, "#finish-game-modal")
+      assert render(lv) =~ "não poderá ser retomada"
+      assert Repo.get!(GameSession, session.id).status == :in_progress
+
+      html = lv |> element("#confirm-finish") |> render_click()
+
+      assert html =~ "Partida encerrada"
+      assert has_element?(lv, "#room-closed")
+      refute has_element?(lv, "#match")
+      assert Repo.get!(GameSession, session.id).status == :finished
+    end
+
+    test "fechar a confirmação mantém a partida rodando", %{conn: conn, session: session} do
+      {:ok, lv, _html} = live(conn, ~p"/game-sessions/#{session.join_code}/host")
+
+      lv |> element("#finish-game") |> render_click()
+      lv |> element("#finish-game-modal button", "Continuar jogando") |> render_click()
+
+      refute has_element?(lv, "#finish-game-modal")
+      assert has_element?(lv, "#match")
+      assert Repo.get!(GameSession, session.id).status == :in_progress
+    end
+
+    test "cancelar no meio da partida continua pedindo confirmação", %{
+      conn: conn,
+      scope: scope,
+      session: session
+    } do
+      {:ok, _open} = Games.advance_question(scope, session, nil)
+
+      {:ok, lv, _html} = live(conn, ~p"/game-sessions/#{session.join_code}/host")
+
+      lv |> element("#cancel-room") |> render_click()
+
+      assert has_element?(lv, "#cancel-room-modal")
+      assert Repo.get!(GameSession, session.id).status == :in_progress
+
+      html = lv |> element("#confirm-cancel") |> render_click()
+
+      assert html =~ "Sala cancelada"
+      assert has_element?(lv, "#room-closed")
+      assert Repo.get!(GameSession, session.id).status == :cancelled
+    end
+  end
+
+  describe "eventos da partida" do
+    setup [:register_and_log_in_user, :running_room]
+
+    test "o encerramento pelo prazo chega sozinho à tela", %{
+      conn: conn,
+      scope: scope,
+      session: session
+    } do
+      {:ok, open} = Games.advance_question(scope, session, nil)
+
+      {:ok, lv, _html} = live(conn, ~p"/game-sessions/#{session.join_code}/host")
+
+      assert has_element?(lv, "#question-countdown-1")
+
+      ending_in(open, -1)
+      {:ok, _closed} = Games.close_question_by_timeout(session.id)
+
+      assert has_element?(lv, "#question-closed-badge")
+      refute has_element?(lv, "#question-countdown-1")
+      refute has_element?(lv, "#advance-question[disabled]")
+    end
+
+    test "o encerramento por todo mundo ter respondido chega sozinho à tela", %{
+      conn: conn,
+      scope: scope,
+      session: session,
+      questions: [first | _rest]
+    } do
+      participants = for index <- 1..3, do: participant_fixture(session, %{nickname: "P#{index}"})
+      [option | _rest] = first.answer_options
+      {:ok, _open} = Games.advance_question(scope, session, nil)
+
+      {:ok, lv, _html} = live(conn, ~p"/game-sessions/#{session.join_code}/host")
+
+      for participant <- participants do
+        {:ok, _answer} = Games.answer_question(participant, option.id, 3)
+      end
+
+      assert has_element?(lv, "#question-closed-badge")
+      assert answers_counter(lv) == "Respostas: 3 / 3"
+    end
+
+    test "o avanço vindo de outra conexão do host atualiza a tela", %{
+      conn: conn,
+      scope: scope,
+      session: session
+    } do
+      {:ok, lv, _html} = live(conn, ~p"/game-sessions/#{session.join_code}/host")
+
+      assert has_element?(lv, "#match-pending")
+
+      {:ok, _open} = Games.advance_question(scope, session, nil)
+
+      assert lv |> element("#question-progress") |> render() =~ "Pergunta 1 de 3"
+    end
+
+    test "a partida finalizada em outra conexão leva a tela ao encerramento", %{
+      conn: conn,
+      scope: scope,
+      session: session
+    } do
+      {:ok, lv, _html} = live(conn, ~p"/game-sessions/#{session.join_code}/host")
+
+      {:ok, _finished} = Games.finish_game_session(scope, session)
+
+      assert has_element?(lv, "#room-closed")
+      assert render(lv) =~ "Partida encerrada"
+      refute has_element?(lv, "#match")
+    end
+
+    test "o cancelamento no meio da partida leva a tela ao encerramento", %{
+      conn: conn,
+      scope: scope,
+      session: session
+    } do
+      {:ok, _open} = Games.advance_question(scope, session, nil)
+
+      {:ok, lv, _html} = live(conn, ~p"/game-sessions/#{session.join_code}/host")
+
+      {:ok, _cancelled} = Games.cancel_game_session(scope, session)
+
+      assert has_element?(lv, "#room-closed")
+      assert render(lv) =~ "Sala cancelada"
+      refute has_element?(lv, "#match")
+    end
+
+    test "a expiração no meio da partida leva a tela ao encerramento", %{
+      conn: conn,
+      scope: scope,
+      session: session
+    } do
+      {:ok, _open} = Games.advance_question(scope, session, nil)
+
+      {:ok, lv, _html} = live(conn, ~p"/game-sessions/#{session.join_code}/host")
+
+      {:ok, _expired} = Games.expire_game_session(session)
+
+      assert has_element?(lv, "#room-closed")
+      assert render(lv) =~ "Sala encerrada por ausência"
+    end
+  end
+
+  describe "acesso à tela da partida" do
+    setup [:register_and_log_in_user, :running_room]
+
+    test "a partida de outra pessoa responde 404", %{conn: conn, session: session} do
+      %{conn: stranger} = log_in_fresh_user(conn)
+
+      assert_raise Ecto.NoResultsError, fn ->
+        live(stranger, ~p"/game-sessions/#{session.join_code}/host")
+      end
+    end
+
+    test "quem está jogando não entra na tela do host", %{session: session} do
+      player = user_fixture()
+      participant_fixture(session, %{user: player})
+
+      conn = log_in_user(build_conn(), player)
+
+      assert_raise Ecto.NoResultsError, fn ->
+        live(conn, ~p"/game-sessions/#{session.join_code}/host")
+      end
+    end
+
+    test "a segunda aba assume a partida e a primeira para de comandar", %{
+      conn: conn,
+      scope: scope,
+      session: session
+    } do
+      {:ok, _open} = Games.advance_question(scope, session, nil)
+
+      {:ok, first, _html} = live(conn, ~p"/game-sessions/#{session.join_code}/host")
+      {:ok, second, _html} = live(conn, ~p"/game-sessions/#{session.join_code}/host")
+
+      assert has_element?(first, "#access-lost-notice")
+      assert has_element?(first, "#close-question[disabled]")
+      assert has_element?(first, "#advance-question[disabled]")
+      assert has_element?(first, "#finish-game[disabled]")
+      assert has_element?(first, "#cancel-room[disabled]")
+
+      render_click(first, "close_question", %{})
+      render_click(first, "confirm_finish", %{})
+
+      assert is_nil(Repo.get!(GameSession, session.id).current_question_closed_at)
+      assert Repo.get!(GameSession, session.id).status == :in_progress
+
+      refute has_element?(second, "#access-lost-notice")
+      refute has_element?(second, "#close-question[disabled]")
     end
   end
 
@@ -741,6 +1291,57 @@ defmodule LiveQuizWeb.GameSessionLive.HostTest do
     :ok = Games.subscribe(session.id)
 
     %{quiz: quiz, session: session}
+  end
+
+  # Uma partida de três perguntas já congeladas, parada antes do primeiro
+  # avanço: o estado de onde todos os comandos da execução partem.
+  defp running_room(%{user: user, scope: scope}) do
+    quiz = quiz_fixture(scope, %{title: "Geografia"})
+    for _ <- 1..3, do: question_fixture(scope, quiz)
+
+    session = game_session_fixture(%{host: user, quiz: quiz, status: :in_progress})
+    questions = snapshot_fixture(session, count: 3)
+
+    :ok = Games.subscribe(session.id)
+
+    %{quiz: quiz, session: session, questions: questions}
+  end
+
+  # As colunas da pergunta corrente não têm changeset de propósito — mover a
+  # partida de uma pergunta para a outra é papel do contexto —, então o teste
+  # que precisa de um prazo específico escreve direto.
+  defp ending_in(%GameSession{} = session, seconds) do
+    started_at =
+      DateTime.utc_now()
+      |> DateTime.add(seconds, :second)
+      |> DateTime.add(-session.question_duration_seconds, :second)
+
+    session
+    |> Ecto.Changeset.change(%{
+      current_question_started_at: started_at,
+      current_question_ends_at:
+        DateTime.add(started_at, session.question_duration_seconds, :second)
+    })
+    |> Repo.update!()
+  end
+
+  defp play_to(scope, %GameSession{} = session, position) do
+    Enum.reduce(1..position//1, session, fn target, current ->
+      expected = if target == 1, do: nil, else: target - 1
+      {:ok, advanced} = Games.advance_question(scope, current, expected)
+
+      advanced
+    end)
+  end
+
+  defp answers_counter(lv) do
+    lv
+    |> element("#answers-count")
+    |> render()
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.text()
+    |> String.replace(~r/\s+/, " ")
+    |> String.trim()
   end
 
   defp log_in_fresh_user(conn) do

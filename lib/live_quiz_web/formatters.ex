@@ -64,6 +64,30 @@ defmodule LiveQuizWeb.Formatters do
     "#{questions(question_count)} · #{duration_seconds} segundos por pergunta"
   end
 
+  @doc """
+  Writes a number of seconds as the `m:ss` the host reads off the projection.
+
+  It draws the first frame of the countdown and nothing else: the number comes
+  from `seconds_left`, which ages the instant it is rendered (AD-39), and from
+  there on the hook redraws the same element against the absolute deadline.
+
+  ## Examples
+
+      iex> LiveQuizWeb.Formatters.format_countdown(22)
+      "0:22"
+
+      iex> LiveQuizWeb.Formatters.format_countdown(60)
+      "1:00"
+
+      iex> LiveQuizWeb.Formatters.format_countdown(0)
+      "0:00"
+
+  """
+  @spec format_countdown(non_neg_integer()) :: String.t()
+  def format_countdown(seconds) when is_integer(seconds) and seconds >= 0 do
+    "#{div(seconds, 60)}:#{pad(rem(seconds, 60))}"
+  end
+
   defp questions(1), do: "1 pergunta"
   defp questions(count), do: "#{count} perguntas"
 
