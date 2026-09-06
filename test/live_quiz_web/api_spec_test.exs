@@ -271,12 +271,33 @@ defmodule LiveQuizWeb.ApiSpecTest do
 
       schemas = spec["components"]["schemas"]
 
-      assert map_size(schemas) == 37
+      assert map_size(schemas) == 41
 
       for {name, schema} <- schemas do
         assert is_binary(schema["description"]), "schema #{name} está sem description"
         assert schema["example"], "schema #{name} está sem example"
       end
+    end
+
+    test "describes the result payloads without anonymous objects", %{conn: conn} do
+      spec = conn |> get(~p"/api/openapi") |> json_response(200)
+
+      assert spec["components"]["schemas"]["RankingResponse"]["properties"]["data"]["items"] ==
+               %{"$ref" => "#/components/schemas/RankingEntry"}
+
+      assert spec["components"]["schemas"]["GameResultResponse"]["properties"]["data"] ==
+               %{"$ref" => "#/components/schemas/GameResult"}
+
+      assert spec["components"]["schemas"]["GameResultListResponse"]["properties"]["data"][
+               "items"
+             ] ==
+               %{"$ref" => "#/components/schemas/GameResult"}
+
+      assert spec["paths"]["/api/v1/quizzes/{quiz_id}/game-history"]["get"]["responses"]["200"][
+               "content"
+             ]["application/json"]["schema"] == %{
+               "$ref" => "#/components/schemas/GameHistoryResponse"
+             }
     end
   end
 
