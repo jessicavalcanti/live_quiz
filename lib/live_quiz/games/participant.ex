@@ -40,6 +40,11 @@ defmodule LiveQuiz.Games.Participant do
     field :joined_at, :utc_datetime
     field :left_at, :utc_datetime
     field :released_at, :utc_datetime
+    field :score, :integer, default: 0
+    field :correct_answers, :integer, default: 0
+    field :incorrect_answers, :integer, default: 0
+    field :total_response_time_ms, :integer, default: 0
+    field :final_position, :integer
 
     # Filled in by the Presence (F2-06), never read from the database.
     field :connected, :boolean, virtual: true, default: false
