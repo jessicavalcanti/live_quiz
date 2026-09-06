@@ -87,12 +87,40 @@ defmodule LiveQuiz.Games do
   `claim_host_connection/2` for the host — only moves the live access from one
   connection to another, always with an `UPDATE` and never with an `INSERT`.
 
+  When a question ends, `question_results/3` is what everybody reads: the frozen
+  answer key, how many people picked each alternative and how many picked none.
+  It is recomputed on every reading rather than persisted — the numbers are a
+  couple of aggregates and materializing a result belongs to phase 4 — and it
+  refuses a question that has not ended, so the key cannot leak through a screen
+  or an endpoint that asks too early. `game_summary/2` closes the match with the
+  same reading: how far it got and how much was answered. Neither of them scores
+  anything; there is no point, bonus or position in phase 3.
+
   Everything a room does is announced on `topic/1` after the transaction that
   did it has committed (AD-31): a subscriber woken by `{:participant_joined, p}`
   that reads the database has to find the participation there. Events are
   tuples carrying structs, so a subscriber pattern matches them and the
   compiler has something to complain about when one of them changes. Nothing
   outside this module publishes them.
+
+  ## Events of a running match
+
+  All of them travel on the room's single topic, the same one the lobby of
+  phase 2 uses (AD-45); the execution adds no topic of its own.
+
+  | Event | Published by |
+  |---|---|
+  | `{:game_started, %GameSession{}}` | `start_game_session/3` |
+  | `{:question_advanced, %GameSession{}}` | `advance_question/3` |
+  | `{:answer_submitted, session_id, count}` | `answer_question/3` |
+  | `{:question_closed, %GameSession{}}` | `close_question/2`, `close_question_by_timeout/1` and `answer_question/3` |
+  | `{:game_finished, %GameSession{}}` | `finish_game_session/2` |
+
+  `{:answer_submitted, session_id, count}` is the one event of the match that
+  carries no struct: with twenty-five people answering, every answer wakes
+  twenty-six screens, and the only thing any of them does with it is redraw a
+  number (AD-45). It is published for a swap too — the count does not move, but
+  a screen that missed the previous message still gets the right total.
 
   ## Test seam
 
@@ -1023,8 +1051,12 @@ defmodule LiveQuiz.Games do
 
   `viewer` decides the shape, and the choice is made here rather than in the
   presentation layer so that the web and the API cannot drift apart. The host
-  always gets the answer key. Everybody else gets `correct: nil` while the
-  question is open and the real key once it closes (AD-46), plus
+  always gets the answer key, plus `answers_count` — how many people have
+  answered the question of the moment, which is the only thing about the
+  answers a question still open gives away. The distribution by alternative
+  waits for the question to close and lives in `question_results/3`, so nobody
+  is nudged into voting with the crowd. Everybody else gets `correct: nil`
+  while the question is open and the real key once it closes (AD-46), plus
   `my_answer_option_id` with their own choice.
 
   Only the host and the people who took part may look; anybody else gets
@@ -1048,6 +1080,8 @@ defmodule LiveQuiz.Games do
         my_answer_option_id: 42
       }
 
+  The host's shape carries `answers_count: 17` where the playing one carries
+  `my_answer_option_id`.
   """
   @spec game_state(GameSession.t(), Scope.t() | Participant.t()) ::
           {:ok, map()} | {:error, :unauthorized}
@@ -1058,6 +1092,88 @@ defmodule LiveQuiz.Games do
       {:ok, build_game_state(current, viewer)}
     else
       {:error, :unauthorized}
+    end
+  end
+
+  @doc """
+  The tally of a question that has closed: answer key, distribution and absences.
+
+  This is what everybody sees at the reveal, and it is the same reading for the
+  host and for whoever played — the only difference is that a participant also
+  learns what they had picked and whether it was right.
+
+  The distribution is aggregated by the database and the alternatives come from
+  the snapshot, so one nobody chose is listed with `count: 0` instead of
+  disappearing from the screen (AD-43), and the order is always the snapshot's.
+  `is_correct` is the frozen answer key (AD-36) and never a reading of the quiz,
+  which is why a match whose quiz was deleted tallies just the same.
+
+  "No answer" is a difference, never a row: `participants_count` counts the
+  active participations of the match — whoever left on purpose is out, whoever
+  merely dropped off is in, because they are still someone who did not answer —
+  and what is left after the answers is `no_answer_count`. Both numbers are read
+  in a single statement, so somebody leaving in the middle cannot produce a
+  tally that does not add up.
+
+  Only a question the match is done with is tallied. While it is open — and
+  while the match has not reached it — the answer is `{:error, :question_open}`,
+  so neither a screen nor an endpoint can reveal the key ahead of time (AD-46).
+  A position that was never frozen is `:not_found`, and anybody who is neither
+  the host nor a participant is `:unauthorized`.
+
+      %{
+        position: 2,
+        question_count: 10,
+        question_text: "Qual é a capital do Brasil?",
+        answers_count: 22,
+        no_answer_count: 3,
+        participants_count: 25,
+        options: [
+          %{id: 41, position: 1, text: "São Paulo", is_correct: false, count: 4},
+          %{id: 42, position: 2, text: "Brasília", is_correct: true, count: 15},
+          %{id: 43, position: 3, text: "Rio de Janeiro", is_correct: false, count: 3},
+          %{id: 44, position: 4, text: "Salvador", is_correct: false, count: 0}
+        ],
+        my_answer_option_id: 42,
+        my_answer_correct?: true
+      }
+
+  `my_answer_option_id` and `my_answer_correct?` are `nil` for the host and for
+  whoever did not answer. There is no score, no speed bonus and no position
+  here: phase 4 computes those on top of exactly these numbers.
+  """
+  @spec question_results(GameSession.t(), pos_integer(), Scope.t() | Participant.t()) ::
+          {:ok, map()} | {:error, :question_open | :not_found | :unauthorized}
+  def question_results(%GameSession{} = session, position, viewer) when is_integer(position) do
+    current = reload_session(session)
+
+    with :ok <- ensure_allowed_to_watch(current, viewer),
+         {:ok, question} <- get_snapshot_question(current, position),
+         :ok <- ensure_question_settled(current, position) do
+      {:ok, build_question_results(current, question, viewer)}
+    end
+  end
+
+  @doc """
+  What a match adds up to: how far it got and how much was answered.
+
+  `questions_played` is the position the match reached, which is the number of
+  questions actually applied — a match finished on question 7 of 10 played
+  seven. `answers_count` is every answer of the match, one per participation and
+  question (AD-41), so a swap counts once.
+
+  It reads the match wherever it is: asking in the middle brings what has been
+  played so far, and the ending screen asks for it once the match is over. Only
+  the host and the people who took part may read it.
+  """
+  @spec game_summary(GameSession.t(), Scope.t() | Participant.t()) ::
+          {:ok, map()} | {:error, :unauthorized}
+  def game_summary(%GameSession{} = session, viewer) do
+    current = reload_session(session)
+
+    case ensure_allowed_to_watch(current, viewer) do
+      :ok -> {:ok, build_game_summary(current)}
+      {:error, :unauthorized} = error -> error
     end
   end
 
@@ -2211,10 +2327,129 @@ defmodule LiveQuiz.Games do
     }
 
     if host? do
-      base
+      Map.put(base, :answers_count, current_answers_count(session))
     else
       Map.put(base, :my_answer_option_id, own_answer_option_id(session, question, viewer))
     end
+  end
+
+  defp build_question_results(
+         %GameSession{} = session,
+         %GameSessionQuestion{} = question,
+         viewer
+       ) do
+    rows = option_distribution(session, question)
+    options = Enum.map(rows, &Map.delete(&1, :participants_count))
+    answers_count = Enum.reduce(options, 0, fn option, total -> total + option.count end)
+    participants_count = participants_count(rows, session)
+    {my_option_id, my_correct?} = own_result(session, question, viewer, options)
+
+    %{
+      position: question.position,
+      question_count: snapshot_question_count(session),
+      question_text: question.question_text,
+      answers_count: answers_count,
+      # Never negative: the denominator and the answers are read together, but a
+      # participation that leaves between two tallies would otherwise make the
+      # count of absences go below zero on the next reading.
+      no_answer_count: max(participants_count - answers_count, 0),
+      participants_count: participants_count,
+      options: options,
+      my_answer_option_id: my_option_id,
+      my_answer_correct?: my_correct?
+    }
+  end
+
+  # One statement for the distribution and for the denominator alike. The
+  # `LEFT JOIN` is what keeps an alternative nobody picked in the list with zero
+  # instead of dropping it (AD-43) — the most likely mistake of this reading —
+  # and the cross join carries the count of active participations along, so the
+  # two numbers describe the same instant.
+  defp option_distribution(%GameSession{id: session_id}, %GameSessionQuestion{id: question_id}) do
+    from(o in GameSessionAnswerOption,
+      cross_join: p in subquery(active_participations(session_id)),
+      left_join: a in Answer,
+      on: a.game_session_answer_option_id == o.id,
+      where: o.game_session_question_id == ^question_id,
+      group_by: [o.id, p.count],
+      order_by: [asc: o.position],
+      select: %{
+        id: o.id,
+        position: o.position,
+        text: o.text,
+        is_correct: o.is_correct,
+        count: count(a.id),
+        participants_count: p.count
+      }
+    )
+    |> Repo.all()
+  end
+
+  # Whoever left on purpose is out of the denominator; whoever merely dropped off
+  # is in, because being disconnected is still not having answered.
+  defp active_participations(session_id) do
+    from p in Participant,
+      where: p.game_session_id == ^session_id,
+      where: is_nil(p.left_at),
+      select: %{count: count(p.id)}
+  end
+
+  defp participants_count([%{participants_count: count} | _rest], %GameSession{}), do: count
+
+  # A snapshot question always freezes its alternatives, so this only answers a
+  # question stripped of them, and then the denominator still has to be right.
+  defp participants_count([], %GameSession{id: session_id}) do
+    %{count: count} = Repo.one(active_participations(session_id))
+    count
+  end
+
+  defp own_result(%GameSession{} = session, %GameSessionQuestion{} = question, viewer, options) do
+    with false <- host_view?(session, viewer),
+         %Participant{} = participant <- viewer_participant(session, viewer),
+         option_id when is_integer(option_id) <- chosen_option_id(participant, question) do
+      {option_id, correct_option?(options, option_id)}
+    else
+      _host_or_no_answer -> {nil, nil}
+    end
+  end
+
+  defp correct_option?(options, option_id) do
+    Enum.any?(options, &(&1.id == option_id and &1.is_correct))
+  end
+
+  defp build_game_summary(%GameSession{id: id} = session) do
+    %{count: participants_count} = Repo.one(active_participations(id))
+
+    %{
+      status: session.status,
+      question_count: snapshot_question_count(session),
+      questions_played: session.current_question_position || 0,
+      answers_count: Repo.aggregate(where(Answer, [a], a.game_session_id == ^id), :count),
+      participants_count: participants_count
+    }
+  end
+
+  # A question the match has moved past is settled, and the one being played is
+  # settled the moment it stops taking answers. A question the match has not
+  # reached yet is not settled either: the answer key of question 5 is no more
+  # public while the room plays question 2 than it is while it plays question 5.
+  defp ensure_question_settled(%GameSession{current_question_position: nil}, _position),
+    do: {:error, :question_open}
+
+  defp ensure_question_settled(
+         %GameSession{current_question_position: current} = session,
+         position
+       ) do
+    cond do
+      position < current -> :ok
+      position > current -> {:error, :question_open}
+      GameSession.question_open?(session) -> {:error, :question_open}
+      true -> :ok
+    end
+  end
+
+  defp ensure_allowed_to_watch(%GameSession{} = session, viewer) do
+    if allowed_to_watch?(session, viewer), do: :ok, else: {:error, :unauthorized}
   end
 
   defp question_state(%GameSession{current_question_position: nil}), do: :pending
