@@ -243,6 +243,82 @@ curl -s http://localhost:4000/api/v1/game-sessions/K7P4Q2/state \
   -H "Authorization: Participant $PARTICIPANT_TOKEN"
 ```
 
+### Ranking, resultados e histórico
+
+A pontuação, o ranking e o histórico ficam inteiros no contexto `LiveQuiz.Games` — nenhuma dessas
+contas vive em LiveView ou Controller, e a API só traduz parâmetros e devolve o que o contexto
+autorizou.
+
+**Como se pontua.** Uma resposta correta vale `1000 × tempo_restante ÷ duração`, arredondado para
+baixo e limitado a **1000 pontos** — quem responde no instante da abertura leva tudo, quem responde
+no prazo final leva zero. Resposta errada e pergunta não respondida valem **0**. O cálculo usa
+apenas o gabarito congelado no snapshot e os carimbos de tempo do servidor: um relógio adiantado no
+cliente não muda pontuação.
+
+A consolidação acontece **uma única vez, ao encerrar cada pergunta**, sobre a última resposta
+persistida — trocar de alternativa enquanto a pergunta está aberta é permitido e só a escolha final
+conta. Encerrar a mesma pergunta de novo não repontua ninguém.
+
+**Como se desempata.** Na ordem: maior pontuação, maior número de acertos, menor tempo total de
+resposta e, por último, ordem de chegada na sala. O critério é determinístico — a mesma partida
+produz sempre a mesma classificação.
+
+**Quem some da tela não some do ranking.** A classificação é lida das métricas persistidas, não da
+presença: quem desconecta continua posicionado com os pontos que já fez, e as perguntas que perder
+valem 0.
+
+**O resultado final é imutável.** Ao finalizar, cada participante ganha uma linha em `game_results`
+com o título do quiz, as perguntas, as alternativas, a resposta escolhida, o tempo e a pontuação
+copiados para dentro do registro. Editar ou **excluir o quiz depois não altera o histórico** — a
+referência ao quiz fica nula, o conteúdo permanece. Só partida com status `finished` entra no
+histórico: cancelada e expirada não são resultado comparável. Finalizar duas vezes, ou em paralelo,
+produz um resultado só.
+
+| Rota | Credencial | Descrição |
+|---|---|---|
+| `GET /api/v1/game-sessions/:code/ranking` | `Bearer` (host) ou `Participant` | ranking corrente da partida, já ordenado e posicionado |
+| `GET /api/v1/game-sessions/:code/results` | `Bearer` (host) | partida encerrada e o resultado de **todos** os participantes |
+| `GET /api/v1/game-sessions/:code/results/me` | `Bearer` | somente o resultado de quem pergunta |
+| `GET /api/v1/users/me/game-results` | `Bearer` | histórico permanente do usuário, paginado |
+| `GET /api/v1/quizzes/:quiz_id/game-history` | `Bearer` (dono do quiz) | partidas encerradas de um quiz, com vencedor e número de participantes |
+
+O ranking é o único desses endpoints que aceita as **duas credenciais** — host e participante veem a
+mesma lista, com `participant_id`, `nickname`, `score`, `correct_answers`, `incorrect_answers`,
+`total_response_time_ms` e `position`. Quem não tem acesso àquela partida recebe **403**.
+
+Resultado individual e resultado completo são endpoints diferentes de propósito: **o participante lê
+o seu, o host lê a partida inteira**. Não existe atalho para ler o resultado alheio — o que não é
+seu responde 404, indistinguível de inexistente.
+
+`GET /users/me/game-results` e `GET /quizzes/:quiz_id/game-history` aceitam `page` (padrão 1),
+`per_page` (padrão 20, **teto de 100**), `quiz_id` e o intervalo `from`/`to` em `AAAA-MM-DD`,
+**interpretado em UTC**. Diferente da listagem de quizzes, aqui filtro inválido não volta para o
+padrão em silêncio: responde **422** com `errors.code` igual a `invalid_filter`. As duas respondem
+com `data` e `meta` (`page`, `per_page`, `total_entries`, `total_pages`).
+
+```bash
+curl -s http://localhost:4000/api/v1/game-sessions/K7P4Q2/ranking \
+  -H "Authorization: Participant $PARTICIPANT_TOKEN"
+
+curl -s http://localhost:4000/api/v1/game-sessions/K7P4Q2/results \
+  -H "Authorization: Bearer $ACCESS_TOKEN"
+
+curl -s 'http://localhost:4000/api/v1/users/me/game-results?page=1&per_page=20&from=2026-09-01' \
+  -H "Authorization: Bearer $ACCESS_TOKEN"
+
+curl -s 'http://localhost:4000/api/v1/quizzes/7/game-history?to=2026-09-30' \
+  -H "Authorization: Bearer $ACCESS_TOKEN"
+```
+
+Cada resultado traz `question_results`: um mapa indexado pela posição da pergunta, com o enunciado,
+as quatro alternativas e qual delas era correta, a alternativa escolhida, o instante da resposta e o
+tempo gasto nela. É o que alimenta o detalhe pergunta a pergunta das telas.
+
+**Histórico exige conta.** Visitante joga, entra no ranking e vê o resultado da partida que jogou,
+mas não acumula histórico permanente: sem identidade persistente, não há a quem atribuir a linha. Na
+interface, o histórico fica em `/game-results` (as suas partidas) e `/game-history` (as partidas que
+você conduziu, com o detalhe de cada participante em `/game-history/:id/participants/:result_id`).
+
 O **access token** dura 15 minutos e o **refresh token**, 30 dias; eles são distinguidos pelo claim
 `typ`, e um refresh token não é aceito em rotas protegidas. O segredo de assinatura é independente
 do `secret_key_base` do Phoenix e vem de `GUARDIAN_SECRET_KEY` em produção.
@@ -374,8 +450,8 @@ config/              configuração por ambiente (dev, test, prod, runtime)
 priv/repo/           migrations e seeds
 ```
 
-Regras de negócio vivem nos **contextos** (`LiveQuiz.Accounts`, `LiveQuiz.Quizzes`), nunca em
-LiveView ou Controller, e nenhum acesso ao `Repo` acontece fora deles.
+Regras de negócio vivem nos **contextos** (`LiveQuiz.Accounts`, `LiveQuiz.Quizzes`,
+`LiveQuiz.Games`), nunca em LiveView ou Controller, e nenhum acesso ao `Repo` acontece fora deles.
 
 ---
 
