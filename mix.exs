@@ -4,7 +4,7 @@ defmodule LiveQuiz.MixProject do
   def project do
     [
       app: :live_quiz,
-      version: "0.1.0",
+      version: "0.2.0",
       elixir: "~> 1.17",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
@@ -83,6 +83,7 @@ defmodule LiveQuiz.MixProject do
       {:open_api_spex, "~> 3.18"},
       {:tz, "~> 0.28"},
       {:dns_cluster, "~> 0.2.0"},
+      {:eqrcode, "~> 0.2"},
       {:bandit, "~> 1.5"},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:excoveralls, "~> 0.18", only: :test}

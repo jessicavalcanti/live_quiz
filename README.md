@@ -17,17 +17,25 @@ repositório estão em [`AGENTS.md`](AGENTS.md).
 | Erlang/OTP | 29 |
 | Docker + Docker Compose | v2 |
 
-O PostgreSQL e o servidor de e-mail sobem em containers — não é preciso instalá-los na máquina.
+Aplicação, PostgreSQL e servidor de e-mail sobem em containers — nada disso precisa ser instalado
+na máquina. O `docker compose` é a **única** forma suportada de subir o ambiente; a porta `5432`
+precisa estar livre para o container do banco.
+
+Elixir e Erlang na máquina são opcionais: servem para rodar `mix test`, `mix precommit` e o Credo
+fora do container (é o que o CI faz).
 
 ---
 
 ## Subindo o ambiente de desenvolvimento
 
 ```bash
-docker compose up -d   # PostgreSQL 16 + Mailpit
-mix setup              # dependências, banco, migrations e assets
-mix phx.server         # http://localhost:4000
+docker compose up -d --build   # aplicação + PostgreSQL 16 + Mailpit
+docker compose logs -f app     # acompanha o boot
 ```
+
+O container da aplicação roda `mix setup` (dependências, banco, migrations, seeds e assets) antes de
+subir o servidor, então a primeira execução demora alguns minutos. As seguintes reaproveitam os
+volumes `deps` e `build` e sobem em segundos.
 
 | Serviço | Endereço |
 |---|---|
@@ -35,28 +43,42 @@ mix phx.server         # http://localhost:4000
 | Mailpit (e-mails de desenvolvimento) | http://localhost:8025 |
 | PostgreSQL | `localhost:5432` (`postgres` / `postgres`) |
 
+O código-fonte é montado do host para dentro do container: editar um arquivo em `lib/` recompila na
+próxima requisição e recarrega a aba do navegador, sem rebuild de imagem. Só é preciso reconstruir a
+imagem (`docker compose up -d --build`) ao mexer no `Dockerfile`.
+
+Comandos `mix` dentro do container:
+
+```bash
+docker compose exec app mix ecto.migrate
+docker compose exec app mix test
+docker compose exec app iex -S mix
+```
+
+Rodar a suíte na máquina também funciona (`mix test`), porque o banco fica publicado em
+`localhost:5432` — é assim que o CI roda.
+
 Todo e-mail enviado em desenvolvimento é entregue ao Mailpit e fica visível na caixa de entrada em
 `http://localhost:8025` — nada sai para a internet.
 
 ### Portas já ocupadas na sua máquina
 
-As portas do host são configuráveis por variável de ambiente. Se você já tem um PostgreSQL na 5432,
-por exemplo:
+A porta do banco é fixa: **5432**, tanto no container quanto em `dev` e `test`. Não há variável para
+mudá-la, e um PostgreSQL local (ou o banco de outro projeto) ocupando a 5432 impede o `docker compose
+up -d`. Pare o que estiver na porta antes de subir o ambiente:
 
 ```bash
-DB_PORT=5433 docker compose up -d
-DB_PORT=5433 mix setup
-DB_PORT=5433 mix phx.server
+lsof -nP -iTCP:5432 -sTCP:LISTEN   # quem está na porta
 ```
+
+As demais portas do host continuam configuráveis por variável de ambiente:
 
 | Variável | Padrão | O que muda |
 |---|---|---|
-| `DB_PORT` | `5432` | porta do PostgreSQL no host (compose, `dev` e `test`) |
+| `APP_PORT` | `4000` | porta da aplicação no host |
 | `SMTP_PORT` | `1025` | porta SMTP do Mailpit |
 | `MAILPIT_UI_PORT` | `8025` | porta da caixa de entrada do Mailpit |
 | `DEMO_PORT` | `4000` | porta da aplicação nas demonstrações (`bin/demo`) |
-
-Exportar a variável no seu shell (`export DB_PORT=5433`) evita repeti-la em cada comando.
 
 ---
 

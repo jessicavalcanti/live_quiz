@@ -72,6 +72,42 @@ defmodule LiveQuizWeb.ConnCase do
   end
 
   @doc """
+  Hands the connection the credential of one room, as the browser would.
+
+  It writes through `LiveQuizWeb.ParticipantAuth.put_token/3` and moves the
+  resulting cookie to the request side, so the tests exercise the very same
+  signing the application does instead of a hand-rolled copy of it.
+  """
+  def put_participant_token(conn, code, token) do
+    cookie = LiveQuizWeb.ParticipantAuth.cookie_name()
+
+    conn =
+      conn
+      |> Plug.Test.init_test_session(%{})
+      |> Map.replace!(:secret_key_base, LiveQuizWeb.Endpoint.config(:secret_key_base))
+
+    %{value: signed} =
+      conn
+      |> LiveQuizWeb.ParticipantAuth.put_token(code, token)
+      |> Map.fetch!(:resp_cookies)
+      |> Map.fetch!(cookie)
+
+    Plug.Test.put_req_cookie(conn, cookie, signed)
+  end
+
+  @doc """
+  Puts an `Authorization: Participant <token>` header on the `conn`.
+
+  It prepends instead of replacing, so a request can carry the JWT of an account
+  and the credential of a participation at the same time — which is how the API
+  recognizes somebody as both. Apply it **after** `log_in_api_user/3`, which
+  replaces the header.
+  """
+  def put_api_participant(conn, token) do
+    Plug.Conn.prepend_req_headers(conn, [{"authorization", "Participant " <> token}])
+  end
+
+  @doc """
   Setup helper that registers a user and authenticates the `conn` with a JWT.
 
       setup :register_and_log_in_api_user

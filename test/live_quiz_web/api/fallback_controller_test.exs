@@ -54,8 +54,14 @@ defmodule LiveQuizWeb.Api.FallbackControllerTest do
              }
     end
 
-    test "renders 401 for an unauthorized request" do
+    test "renders 403 for somebody identified who may not do this" do
       conn = call({:error, :unauthorized})
+
+      assert json_response(conn, 403) == %{"errors" => %{"detail" => "Acesso negado"}}
+    end
+
+    test "renders 401 for a request the server could not identify" do
+      conn = call({:error, :unauthenticated})
 
       assert json_response(conn, 401) == %{"errors" => %{"detail" => "Não autenticado"}}
     end
@@ -64,6 +70,54 @@ defmodule LiveQuizWeb.Api.FallbackControllerTest do
       conn = call({:error, :not_found})
 
       assert json_response(conn, 404) == %{"errors" => %{"detail" => "Não encontrado"}}
+    end
+
+    test "renders 404 for a room that was not found" do
+      conn = call({:error, :session_not_found})
+
+      assert json_response(conn, 404) == %{"errors" => %{"detail" => "Não encontrado"}}
+    end
+
+    test "renders 422 for a quiz without questions" do
+      conn = call({:error, :quiz_not_playable})
+
+      assert json_response(conn, 422) == %{
+               "errors" => %{"detail" => "O quiz precisa ter ao menos uma pergunta"}
+             }
+    end
+
+    test "renders 409 for every conflict with the state of a room" do
+      conflicts = [
+        {:host_already_in_session, "Você já possui uma sala ativa"},
+        {:already_participating, "Saia da sala em que você está para abrir uma nova"},
+        {:session_not_joinable, "Esta partida já começou"},
+        {:session_full, "Sala lotada"},
+        {:nickname_taken, "Este apelido já está em uso nesta sala"},
+        {:already_in_another_session, "Você já está participando de outra sala"},
+        {:no_connected_participants, "É preciso ao menos um participante conectado"},
+        {:invalid_transition, "Esta sala já foi encerrada"}
+      ]
+
+      for {reason, detail} <- conflicts do
+        conn = call({:error, reason})
+
+        assert json_response(conn, 409) == %{"errors" => %{"detail" => detail}},
+               "#{inspect(reason)} deveria responder 409 com #{inspect(detail)}"
+      end
+    end
+
+    test "renders 410 for a room that is over" do
+      conn = call({:error, :session_ended})
+
+      assert json_response(conn, 410) == %{"errors" => %{"detail" => "Esta sala foi encerrada"}}
+    end
+
+    test "renders 503 when no join code could be generated" do
+      conn = call({:error, :code_generation_failed})
+
+      assert json_response(conn, 503) == %{
+               "errors" => %{"detail" => "Não foi possível gerar um código. Tente novamente."}
+             }
     end
   end
 

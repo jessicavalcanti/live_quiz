@@ -9,6 +9,8 @@
 import Ecto.Query
 
 alias LiveQuiz.Accounts
+alias LiveQuiz.Games.GameSession
+alias LiveQuiz.Games.Participant
 alias LiveQuiz.Quizzes.Question
 alias LiveQuiz.Quizzes.Quiz
 alias LiveQuiz.Repo
@@ -51,6 +53,9 @@ fetch_or_create_user = fn ->
       user
   end
 end
+
+demo_join_code = "DEMA25"
+demo_participants = ["Ana", "Bruno", "Carla"]
 
 quizzes = [
   %{
@@ -141,5 +146,44 @@ if Mix.env() == :dev do
     IO.puts("Quiz de demonstração #{quiz_index + 1}/#{length(quizzes)}: #{quiz.title}")
   end
 
+  # Uma sala aguardando participantes, para abrir o lobby sem passar pelo fluxo
+  # de criação. O código é fixo e a busca é pela sala ativa do host, então rodar
+  # os seeds de novo reaproveita a sala em vez de esbarrar no índice único.
+  demo_quiz =
+    Repo.one(from q in Quiz, where: q.owner_id == ^user.id, order_by: [asc: q.id], limit: 1)
+
+  active_statuses = GameSession.active_statuses()
+
+  session =
+    Repo.one(
+      from s in GameSession,
+        where: s.host_id == ^user.id and s.status in ^active_statuses,
+        limit: 1
+    ) ||
+      %GameSession{host_id: user.id, quiz_id: demo_quiz.id}
+      |> GameSession.create_changeset(%{quiz_title: demo_quiz.title, join_code: demo_join_code})
+      |> Repo.insert!()
+
+  for nickname <- demo_participants do
+    normalized = Participant.normalize_nickname(nickname)
+
+    already_there? =
+      Repo.exists?(
+        from p in Participant,
+          where: p.game_session_id == ^session.id and p.nickname_normalized == ^normalized
+      )
+
+    unless already_there? do
+      %Participant{
+        game_session_id: session.id,
+        access_token_hash: :crypto.hash(:sha256, "demo-participant:#{session.id}:#{normalized}"),
+        joined_at: DateTime.truncate(DateTime.utc_now(), :second)
+      }
+      |> Participant.join_changeset(%{nickname: nickname})
+      |> Repo.insert!()
+    end
+  end
+
+  IO.puts("Sala de demonstração aguardando participantes: código #{session.join_code}")
   IO.puts("Pronto. Entre com #{demo_email} / #{demo_password}")
 end

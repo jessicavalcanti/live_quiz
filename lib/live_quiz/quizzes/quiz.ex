@@ -12,6 +12,7 @@ defmodule LiveQuiz.Quizzes.Quiz do
   import Ecto.Changeset
 
   alias LiveQuiz.Accounts.User
+  alias LiveQuiz.Games.GameSession
   alias LiveQuiz.Quizzes.Question
 
   @type t :: %__MODULE__{}
@@ -21,8 +22,15 @@ defmodule LiveQuiz.Quizzes.Quiz do
     field :description, :string
     field :questions_count, :integer, virtual: true
 
+    # Filled in by every read of the context through
+    # `LiveQuiz.Games.QuizLock.with_lock_flag/1` (F2-07), so the UI and the API
+    # read a ready boolean instead of asking once per row. Defaults to `false`
+    # so a quiz assembled by hand is never `nil`.
+    field :locked?, :boolean, virtual: true, default: false
+
     belongs_to :owner, User
     has_many :questions, Question, preload_order: [asc: :position]
+    has_many :game_sessions, GameSession
 
     timestamps(type: :utc_datetime)
   end

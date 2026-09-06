@@ -1,6 +1,7 @@
 defmodule LiveQuizWeb.Router do
   use LiveQuizWeb, :router
 
+  import LiveQuizWeb.ParticipantAuth
   import LiveQuizWeb.UserAuth
 
   pipeline :browser do
@@ -11,6 +12,7 @@ defmodule LiveQuizWeb.Router do
     plug :protect_from_forgery
     plug :put_secure_browser_headers
     plug :fetch_current_scope_for_user
+    plug :fetch_participant_tokens
   end
 
   pipeline :api do
@@ -20,6 +22,14 @@ defmodule LiveQuizWeb.Router do
 
   pipeline :api_authenticated do
     plug LiveQuizWeb.Api.AuthPipeline
+  end
+
+  # Somebody without an account has no JWT and never will: issuing one to a
+  # guest would be a claim about an identity that does not exist (AD-24). The
+  # credential of the participation is what identifies them here, and the plug
+  # reads an account token just as well, so a request may carry either or both.
+  pipeline :api_participant do
+    plug LiveQuizWeb.Api.ParticipantAuth
   end
 
   ## JSON API
@@ -43,6 +53,13 @@ defmodule LiveQuizWeb.Router do
 
     post "/session", SessionController, :create
     post "/session/refresh", SessionController, :refresh
+
+    # Rooms are addressed by code, not by id: it is what a client holds, and it
+    # keeps a sequential identifier out of an address anybody may open. Reading
+    # a room and entering it are open to people with no account at all, which is
+    # most of the people who ever join a quiz.
+    get "/game-sessions/:code", GameSessionController, :show
+    post "/game-sessions/:code/join", GameSessionController, :join
   end
 
   scope "/api/v1", LiveQuizWeb.Api.V1 do
@@ -60,6 +77,20 @@ defmodule LiveQuizWeb.Router do
     patch "/quizzes/:quiz_id/questions/:id", QuestionController, :update
     delete "/quizzes/:quiz_id/questions/:id", QuestionController, :delete
     patch "/quizzes/:quiz_id/questions/:id/move", QuestionController, :move
+
+    post "/game-sessions", GameSessionController, :create
+    get "/game-sessions/:code/host", GameSessionController, :host_show
+    post "/game-sessions/:code/start", GameSessionController, :start
+    post "/game-sessions/:code/cancel", GameSessionController, :cancel
+  end
+
+  scope "/api/v1", LiveQuizWeb.Api.V1 do
+    pipe_through [:api, :api_participant]
+
+    get "/game-sessions/:code/participants", ParticipantController, :index
+    get "/game-sessions/:code/me", ParticipantController, :show
+    post "/game-sessions/:code/rejoin", ParticipantController, :rejoin
+    delete "/game-sessions/:code/leave", ParticipantController, :leave
   end
 
   # Enable LiveDashboard and Swoosh mailbox preview in development
@@ -91,10 +122,12 @@ defmodule LiveQuizWeb.Router do
       live "/quizzes/:id/edit", QuizLive.Editor, :edit
       live "/quizzes/:id/questions/new", QuizLive.Editor, :new_question
       live "/quizzes/:id/questions/:question_id/edit", QuizLive.Editor, :edit_question
+      live "/game-sessions/:code/host", GameSessionLive.Host, :show
       live "/users/settings", UserLive.Settings, :edit
       live "/users/settings/confirm-email/:token", UserLive.Settings, :confirm_email
     end
 
+    post "/game-sessions", GameSessionController, :create
     post "/users/update-password", UserSessionController, :update_password
   end
 
@@ -102,8 +135,12 @@ defmodule LiveQuizWeb.Router do
     pipe_through [:browser]
 
     live_session :current_user,
-      on_mount: [{LiveQuizWeb.UserAuth, :mount_current_scope}] do
+      on_mount: [
+        {LiveQuizWeb.UserAuth, :mount_current_scope},
+        {LiveQuizWeb.ParticipantAuth, :mount_participant_tokens}
+      ] do
       live "/", LandingLive, :index
+      live "/join", GameSessionLive.Join, :new
       live "/users/register", UserLive.Registration, :new
       live "/users/log-in", UserLive.Login, :new
       live "/users/confirm/:token", UserLive.Confirmation, :new
@@ -111,6 +148,16 @@ defmodule LiveQuizWeb.Router do
       live "/users/reset-password/:token", UserLive.ResetPassword, :edit
     end
 
+    live_session :participant,
+      on_mount: [
+        {LiveQuizWeb.UserAuth, :mount_current_scope},
+        {LiveQuizWeb.ParticipantAuth, :mount_participant_tokens}
+      ] do
+      live "/game-sessions/:code", GameSessionLive.Player, :show
+    end
+
+    post "/game-sessions/join", GameSessionController, :join
+    delete "/game-sessions/:code/leave", GameSessionController, :leave
     post "/users/log-in", UserSessionController, :create
     delete "/users/log-out", UserSessionController, :delete
   end

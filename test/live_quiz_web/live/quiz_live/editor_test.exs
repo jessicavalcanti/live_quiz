@@ -2,10 +2,12 @@ defmodule LiveQuizWeb.QuizLive.EditorTest do
   use LiveQuizWeb.ConnCase, async: true
 
   import LiveQuiz.AccountsFixtures
+  import LiveQuiz.GamesFixtures
   import LiveQuiz.QuizzesFixtures
   import Phoenix.LiveViewTest
 
   alias LiveQuiz.Accounts.Scope
+  alias LiveQuiz.Games
   alias LiveQuiz.Quizzes
 
   setup :register_and_log_in_user
@@ -739,6 +741,169 @@ defmodule LiveQuizWeb.QuizLive.EditorTest do
       refute has_element?(lv, "#add-question-button[disabled]")
       refute has_element?(lv, "#question-limit-hint")
       assert length(stored_order(scope, quiz)) == Quizzes.max_questions() - 1
+    end
+  end
+
+  describe "sinalização de quiz com sala ativa" do
+    setup %{scope: scope, quiz: quiz} do
+      %{question: question_fixture(scope, quiz, %{text: "Pergunta A"})}
+    end
+
+    test "avisa e desabilita todas as ações de alteração", %{
+      conn: conn,
+      quiz: quiz,
+      question: question
+    } do
+      game_session_fixture(%{quiz: quiz, status: :waiting})
+
+      {:ok, lv, _html} = live(conn, ~p"/quizzes/#{quiz}/edit")
+
+      assert has_element?(lv, "#quiz-locked-notice")
+      assert lv |> element("#quiz-locked-notice") |> render() =~ "Este quiz possui uma sala ativa"
+
+      assert has_element?(lv, "#save-quiz-button[disabled]")
+      assert has_element?(lv, "#add-question-button[disabled]")
+      assert has_element?(lv, "#edit-question-#{question.id}[disabled]")
+      assert has_element?(lv, "#delete-question-#{question.id}[disabled]")
+      assert has_element?(lv, "#move-question-up-#{question.id}[disabled]")
+      assert has_element?(lv, "#move-question-down-#{question.id}[disabled]")
+
+      refute has_element?(
+               lv,
+               ~s{a[href="/quizzes/#{quiz.id}/questions/#{question.id}/edit"]}
+             )
+    end
+
+    test "os botões desabilitados apontam para a explicação", %{
+      conn: conn,
+      quiz: quiz,
+      question: question
+    } do
+      game_session_fixture(%{quiz: quiz, status: :in_progress})
+
+      {:ok, lv, _html} = live(conn, ~p"/quizzes/#{quiz}/edit")
+
+      for id <- [
+            "save-quiz-button",
+            "add-question-button",
+            "edit-question-#{question.id}",
+            "delete-question-#{question.id}"
+          ] do
+        assert has_element?(lv, ~s{##{id}[aria-disabled="true"]})
+        assert has_element?(lv, ~s{##{id}[aria-describedby="quiz-locked-notice"]})
+      end
+    end
+
+    test "sem sala ativa nada fica bloqueado", %{conn: conn, quiz: quiz, question: question} do
+      {:ok, lv, _html} = live(conn, ~p"/quizzes/#{quiz}/edit")
+
+      refute has_element?(lv, "#quiz-locked-notice")
+      refute has_element?(lv, "#save-quiz-button[disabled]")
+      refute has_element?(lv, "#add-question-button[disabled]")
+      refute has_element?(lv, "#delete-question-#{question.id}[disabled]")
+      refute has_element?(lv, "#edit-question-#{question.id}")
+    end
+
+    test "o bloqueio some depois que a sala é cancelada", %{
+      conn: conn,
+      scope: scope,
+      quiz: quiz,
+      question: question
+    } do
+      session = game_session_fixture(%{host: scope.user, quiz: quiz, status: :waiting})
+
+      {:ok, locked, _html} = live(conn, ~p"/quizzes/#{quiz}/edit")
+      assert has_element?(locked, "#quiz-locked-notice")
+
+      {:ok, _cancelled} = Games.cancel_game_session(scope, session)
+
+      {:ok, released, _html} = live(conn, ~p"/quizzes/#{quiz}/edit")
+
+      refute has_element?(released, "#quiz-locked-notice")
+      refute has_element?(released, "#delete-question-#{question.id}[disabled]")
+      refute has_element?(released, "#save-quiz-button[disabled]")
+    end
+  end
+
+  # A sinalização visual do bloqueio está no bloco acima; o que se garante aqui
+  # é que a tela recusa a escrita com um recado, em vez de estourar no match do
+  # contexto. A sala é aberta depois do mount justamente para exercitar esse
+  # caminho: os botões ainda estão na tela quando a regra passa a valer.
+  describe "quiz com sala ativa" do
+    setup %{scope: scope, quiz: quiz} do
+      %{
+        first: question_fixture(scope, quiz, %{text: "Pergunta A"}),
+        second: question_fixture(scope, quiz, %{text: "Pergunta B"})
+      }
+    end
+
+    test "recusa salvar o quiz e avisa", %{conn: conn, scope: scope, quiz: quiz} do
+      {:ok, lv, _html} = live(conn, ~p"/quizzes/#{quiz}/edit")
+      game_session_fixture(%{quiz: quiz, status: :waiting})
+
+      html =
+        lv
+        |> form("#quiz-form", %{"quiz" => %{"title" => "Geografia do Brasil"}})
+        |> render_submit()
+
+      assert html =~ "Este quiz possui uma sala ativa e não pode ser alterado"
+      assert Quizzes.get_quiz!(scope, quiz.id).title == "Geografia"
+    end
+
+    test "recusa excluir uma pergunta e avisa", %{conn: conn, quiz: quiz, second: second} do
+      {:ok, lv, _html} = live(conn, ~p"/quizzes/#{quiz}/edit")
+      game_session_fixture(%{quiz: quiz, status: :waiting})
+
+      lv |> element("#delete-question-#{second.id}") |> render_click()
+      html = lv |> element("#delete-question button", "Excluir pergunta") |> render_click()
+
+      assert html =~ "Este quiz possui uma sala ativa e não pode ser alterado"
+      assert has_element?(lv, "#question-#{second.id}")
+      assert LiveQuiz.Repo.get(LiveQuiz.Quizzes.Question, second.id)
+    end
+
+    test "recusa reordenar e mantém a ordem", %{
+      conn: conn,
+      scope: scope,
+      quiz: quiz,
+      first: first,
+      second: second
+    } do
+      {:ok, lv, _html} = live(conn, ~p"/quizzes/#{quiz}/edit")
+      game_session_fixture(%{quiz: quiz, status: :in_progress})
+
+      html = lv |> element("#move-question-up-#{second.id}") |> render_click()
+
+      assert html =~ "Este quiz possui uma sala ativa e não pode ser alterado"
+      assert stored_order(scope, quiz) == [first.id, second.id]
+    end
+
+    test "recusa adicionar uma pergunta e fecha o modal", %{
+      conn: conn,
+      scope: scope,
+      quiz: quiz
+    } do
+      {:ok, lv, _html} = live(conn, ~p"/quizzes/#{quiz}/questions/new")
+      game_session_fixture(%{quiz: quiz, status: :waiting})
+
+      lv |> form("#question-form", question: question_params()) |> render_submit()
+
+      assert_patch(lv, ~p"/quizzes/#{quiz}/edit")
+      assert render(lv) =~ "Este quiz possui uma sala ativa e não pode ser alterado"
+      assert length(Quizzes.get_quiz_with_questions!(scope, quiz.id).questions) == 2
+    end
+
+    test "recusa editar uma pergunta e fecha o modal", %{conn: conn, quiz: quiz, first: first} do
+      {:ok, lv, _html} = live(conn, ~p"/quizzes/#{quiz}/questions/#{first}/edit")
+      game_session_fixture(%{quiz: quiz, status: :waiting})
+
+      lv
+      |> form("#question-form", question: Map.put(question_params(), "text", "Pergunta Z"))
+      |> render_submit()
+
+      assert_patch(lv, ~p"/quizzes/#{quiz}/edit")
+      assert render(lv) =~ "Este quiz possui uma sala ativa e não pode ser alterado"
+      assert LiveQuiz.Repo.get!(LiveQuiz.Quizzes.Question, first.id).text == "Pergunta A"
     end
   end
 

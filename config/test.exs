@@ -11,8 +11,8 @@ config :bcrypt_elixir, :log_rounds, 1
 config :live_quiz, LiveQuiz.Repo,
   username: "postgres",
   password: "postgres",
-  hostname: "localhost",
-  port: String.to_integer(System.get_env("DB_PORT", "5432")),
+  hostname: System.get_env("DB_HOST", "localhost"),
+  port: 5432,
   database: "live_quiz_test#{System.get_env("MIX_TEST_PARTITION")}",
   pool: Ecto.Adapters.SQL.Sandbox,
   pool_size: System.schedulers_online() * 2
@@ -27,6 +27,15 @@ config :live_quiz, LiveQuizWeb.Endpoint,
 # Segredo dos JWTs da API na suíte de testes.
 config :live_quiz, LiveQuiz.Accounts.Guardian,
   secret_key: "1fTLJh9jj4MBtLmE5jCO5ujxW7NT8DYsoplU0tivequcjlouqSKDMhmgE3Luw609"
+
+# O sweeper de expiracao nao roda sozinho na suite: os testes chamam
+# `ExpirationSweeper.sweep_now/0` quando querem uma varredura.
+config :live_quiz, LiveQuiz.Games.ExpirationSweeper, enabled: false
+
+# A carencia do monitor da aplicacao fica longa de proposito: quem testa
+# temporizacao sobe um monitor proprio, com janela curta, e nenhuma espera
+# solta sobra de um teste para o outro.
+config :live_quiz, LiveQuiz.Games.HostMonitor, grace_period: 60_000
 
 # In test we don't send emails
 config :live_quiz, LiveQuiz.Mailer, adapter: Swoosh.Adapters.Test

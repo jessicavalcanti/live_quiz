@@ -119,6 +119,7 @@ defmodule LiveQuizWeb.Api.V1.QuizController do
       ok: {"Quiz atualizado", "application/json", QuizResponse},
       unauthorized: {"Não autenticado", "application/json", ErrorResponse},
       not_found: {"Quiz inexistente ou de outro dono", "application/json", ErrorResponse},
+      conflict: {"Quiz com sala ativa", "application/json", ErrorResponse},
       unprocessable_entity: {"Quiz inválido", "application/json", ValidationErrorResponse}
     ]
 
@@ -142,7 +143,8 @@ defmodule LiveQuizWeb.Api.V1.QuizController do
     responses: [
       no_content: "Quiz excluído",
       unauthorized: {"Não autenticado", "application/json", ErrorResponse},
-      not_found: {"Quiz inexistente ou de outro dono", "application/json", ErrorResponse}
+      not_found: {"Quiz inexistente ou de outro dono", "application/json", ErrorResponse},
+      conflict: {"Quiz com sala ativa", "application/json", ErrorResponse}
     ]
 
   def delete(conn, %{"id" => id}) do

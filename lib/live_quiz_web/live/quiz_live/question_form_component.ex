@@ -59,6 +59,10 @@ defmodule LiveQuizWeb.QuizLive.QuestionFormComponent do
         notify_parent(:question_limit_reached)
         {:noreply, socket}
 
+      {:error, :quiz_locked} ->
+        notify_parent(:quiz_locked)
+        {:noreply, socket}
+
       {:error, %Ecto.Changeset{} = changeset} ->
         {:noreply, refuse(socket, changeset, params, :insert)}
     end
@@ -68,6 +72,10 @@ defmodule LiveQuizWeb.QuizLive.QuestionFormComponent do
     case Quizzes.update_question(socket.assigns.current_scope, socket.assigns.question, params) do
       {:ok, _question} ->
         notify_parent({:saved, "Pergunta atualizada"})
+        {:noreply, socket}
+
+      {:error, :quiz_locked} ->
+        notify_parent(:quiz_locked)
         {:noreply, socket}
 
       {:error, %Ecto.Changeset{} = changeset} ->
