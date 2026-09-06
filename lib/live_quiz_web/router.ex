@@ -105,6 +105,17 @@ defmodule LiveQuizWeb.Router do
     post "/game-sessions/:code/answers", GamePlayController, :answer
     get "/game-sessions/:code/state", GamePlayController, :state
     get "/game-sessions/:code/questions/:position/results", GamePlayController, :results
+
+    get "/game-sessions/:code/ranking", GameResultController, :ranking
+  end
+
+  scope "/api/v1", LiveQuizWeb.Api.V1 do
+    pipe_through [:api, :api_authenticated]
+
+    get "/game-sessions/:code/results", GameResultController, :results
+    get "/game-sessions/:code/results/me", GameResultController, :my_result
+    get "/users/me/game-results", GameResultController, :my_history
+    get "/quizzes/:quiz_id/game-history", GameResultController, :quiz_history
   end
 
   # Enable LiveDashboard and Swoosh mailbox preview in development
