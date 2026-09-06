@@ -96,11 +96,32 @@ defmodule LiveQuizWeb.Api.V1.Schemas.QuestionResultsResponse do
           "participants_count" => 25,
           "options" => [
             %{
-              "id" => 42,
+              "id" => 41,
               "position" => 1,
+              "text" => "São Paulo",
+              "is_correct" => false,
+              "count" => 4
+            },
+            %{
+              "id" => 42,
+              "position" => 2,
               "text" => "Brasília",
               "is_correct" => true,
               "count" => 15
+            },
+            %{
+              "id" => 43,
+              "position" => 3,
+              "text" => "Rio de Janeiro",
+              "is_correct" => false,
+              "count" => 3
+            },
+            %{
+              "id" => 44,
+              "position" => 4,
+              "text" => "Salvador",
+              "is_correct" => false,
+              "count" => 0
             }
           ],
           "my_answer_option_id" => 42,

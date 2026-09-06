@@ -29,8 +29,10 @@ defmodule LiveQuizWeb.Api.V1.Schemas.GameSessionRequest do
         },
         question_duration_seconds: %Schema{
           type: :integer,
-          description: "Tempo de cada pergunta, em segundos. Opcional, 30 por padrão",
+          description:
+            "Tempo de cada pergunta, em segundos. Opcional, vale para a partida inteira e não muda depois do início",
           enum: GameSession.question_durations(),
+          default: %GameSession{}.question_duration_seconds,
           example: 30
         }
       },
