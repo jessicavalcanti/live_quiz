@@ -11,6 +11,7 @@ defmodule LiveQuizWeb.Api.V1.GameResultController do
 
   alias LiveQuiz.Games
   alias LiveQuizWeb.Api.V1.Schemas.ErrorResponse
+  alias LiveQuizWeb.Api.V1.Schemas.GameHistoryResponse
   alias LiveQuizWeb.Api.V1.Schemas.GameResultListResponse
   alias LiveQuizWeb.Api.V1.Schemas.GameResultResponse
   alias LiveQuizWeb.Api.V1.Schemas.RankingResponse
@@ -21,17 +22,33 @@ defmodule LiveQuizWeb.Api.V1.GameResultController do
   @code [in: :path, type: :string, required: true, description: "Código da partida"]
   @quiz_id [in: :path, type: :integer, required: true, description: "Identificador do quiz"]
   @history_parameters [
-    page: [in: :query, type: :integer],
-    per_page: [in: :query, type: :integer],
-    quiz_id: [in: :query, type: :integer],
-    from: [in: :query, type: :string],
-    to: [in: :query, type: :string]
+    page: [in: :query, type: :integer, description: "Página (padrão 1)", example: 1],
+    per_page: [
+      in: :query,
+      type: :integer,
+      description: "Itens por página (padrão 20, máximo 100)",
+      example: 20
+    ],
+    quiz_id: [in: :query, type: :integer, description: "Filtra pelo quiz", example: 7],
+    from: [
+      in: :query,
+      type: :string,
+      description: "Data inicial inclusiva (AAAA-MM-DD)",
+      example: "2026-09-01"
+    ],
+    to: [
+      in: :query,
+      type: :string,
+      description: "Data final inclusiva (AAAA-MM-DD)",
+      example: "2026-09-30"
+    ]
   ]
 
   @doc "Returns the current ranking to the host or a participant."
   operation :ranking,
     summary: "Consulta o ranking da partida",
-    description: "Retorna o ranking ordenado da partida para o host ou participante autorizado.",
+    description:
+      "Retorna o ranking ordenado da partida para o host ou participante autorizado. O ranking só fica disponível para uma identidade que tenha acesso à partida.",
     security: [%{"participantAuth" => []}, %{"bearerAuth" => []}],
     parameters: [code: @code],
     responses: [
@@ -51,6 +68,8 @@ defmodule LiveQuizWeb.Api.V1.GameResultController do
   @doc "Returns the complete immutable result to the host."
   operation :results,
     summary: "Consulta o resultado completo da partida",
+    description:
+      "Retorna a partida encerrada e todos os resultados. Operação restrita ao host autenticado; participantes devem usar o resultado individual.",
     security: [%{"bearerAuth" => []}],
     parameters: [code: @code],
     responses: [
@@ -69,6 +88,7 @@ defmodule LiveQuizWeb.Api.V1.GameResultController do
   @doc "Returns only the authenticated participant's immutable result."
   operation :my_result,
     summary: "Consulta o próprio resultado",
+    description: "Retorna somente o resultado do participante autenticado na partida encerrada.",
     security: [%{"bearerAuth" => []}],
     parameters: [code: @code],
     responses: [
@@ -87,6 +107,8 @@ defmodule LiveQuizWeb.Api.V1.GameResultController do
   @doc "Lists the authenticated user's finished results."
   operation :my_history,
     summary: "Lista o histórico do usuário",
+    description:
+      "Lista resultados de partidas encerradas pertencentes ao usuário do JWT. Aceita paginação e filtros opcionais por quiz e intervalo de datas; datas são interpretadas em UTC.",
     security: [%{"bearerAuth" => []}],
     parameters: @history_parameters,
     responses: [
@@ -106,10 +128,12 @@ defmodule LiveQuizWeb.Api.V1.GameResultController do
   @doc "Lists finished matches for a quiz owned by the authenticated host."
   operation :quiz_history,
     summary: "Lista o histórico de um quiz",
+    description:
+      "Lista partidas encerradas do quiz pertencente ao host autenticado. Aceita paginação e filtros opcionais por quiz e intervalo de datas; datas são interpretadas em UTC.",
     security: [%{"bearerAuth" => []}],
     parameters: [quiz_id: @quiz_id] ++ @history_parameters,
     responses: [
-      ok: {"Histórico do quiz", "application/json", GameResultListResponse},
+      ok: {"Histórico do quiz", "application/json", GameHistoryResponse},
       unauthorized: {"Não autenticado", "application/json", ErrorResponse},
       not_found: {"Quiz inexistente ou sem acesso", "application/json", ErrorResponse},
       unprocessable_entity: {"Filtro inválido", "application/json", ErrorResponse}
