@@ -472,18 +472,23 @@ defmodule LiveQuizWeb.Api.V1.GameSessionControllerTest do
              }
     end
 
-    test "iniciar duas vezes responde 409 na segunda", %{conn: conn, session: session} do
+    test "iniciar duas vezes responde 200 e não duplica o congelamento", %{
+      conn: conn,
+      session: session
+    } do
       session |> participant_fixture() |> connect()
 
-      assert conn
-             |> post(~p"/api/v1/game-sessions/#{session.join_code}/start")
-             |> json_response(200)
+      assert %{"data" => %{"started_at" => started_at}} =
+               conn
+               |> post(~p"/api/v1/game-sessions/#{session.join_code}/start")
+               |> json_response(200)
 
       conn = post(conn, ~p"/api/v1/game-sessions/#{session.join_code}/start")
 
-      assert json_response(conn, 409) == %{
-               "errors" => %{"detail" => "Esta sala já foi encerrada"}
-             }
+      assert %{"data" => %{"status" => "in_progress", "started_at" => ^started_at}} =
+               json_response(conn, 200)
+
+      assert Games.snapshot_question_count(session) == 1
     end
 
     test "uma sala encerrada responde 409", %{conn: conn, scope: scope} do

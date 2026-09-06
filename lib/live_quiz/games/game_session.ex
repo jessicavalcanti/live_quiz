@@ -164,6 +164,30 @@ defmodule LiveQuiz.Games.GameSession do
   end
 
   @doc """
+  Casts a change to how long each question of the match lasts.
+
+  The duration is chosen when the room is opened (AD-38) and stops being
+  negotiable the moment the match leaves `waiting`: a match already running
+  promised everybody a single deadline per question (AD-39), and moving it
+  halfway through would make the countdown people are watching a lie. A room
+  that is over is refused for the same reason — there is nothing left to time.
+  """
+  @spec duration_changeset(t(), map()) :: Ecto.Changeset.t()
+  def duration_changeset(session, attrs) do
+    session
+    |> cast(attrs, [:question_duration_seconds])
+    |> validate_required([:question_duration_seconds])
+    |> validate_inclusion(:question_duration_seconds, @question_durations,
+      message: "escolha uma das durações disponíveis"
+    )
+    |> validate_duration_still_open()
+    |> check_constraint(:question_duration_seconds,
+      name: :question_duration_allowed,
+      message: "escolha uma das durações disponíveis"
+    )
+  end
+
+  @doc """
   Moves the room to another status, stamping the matching timestamp.
 
   Going live stamps `started_at`; closing the room, by any reason, stamps
@@ -194,6 +218,25 @@ defmodule LiveQuiz.Games.GameSession do
   @spec host_presence_changeset(t(), map()) :: Ecto.Changeset.t()
   def host_presence_changeset(session, attrs) do
     cast(session, attrs, [:host_connection_id, :host_disconnected_at, :expires_at])
+  end
+
+  # Only an actual change is refused: re-submitting the duration the room
+  # already has is a no-op, not an attempt to move the goalposts.
+  defp validate_duration_still_open(%Ecto.Changeset{} = changeset) do
+    case {changeset.data.status, fetch_change(changeset, :question_duration_seconds)} do
+      {:waiting, _change} ->
+        changeset
+
+      {_started, :error} ->
+        changeset
+
+      {_started, {:ok, _new_duration}} ->
+        add_error(
+          changeset,
+          :question_duration_seconds,
+          "não pode ser alterada depois que a partida começa"
+        )
+    end
   end
 
   defp stamp_status_timestamps(changeset, :in_progress, at) do
