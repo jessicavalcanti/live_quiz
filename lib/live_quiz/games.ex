@@ -56,6 +56,15 @@ defmodule LiveQuiz.Games do
   the room, which is what makes a double click a `:stale` answer instead of a
   skipped question.
 
+  Answering is the other half of that movement, and the only command of a match
+  that is not the host's. `answer_question/3` keeps a single row per
+  participation and question and writes it with an upsert (AD-41), so changing
+  one's mind while the question is open replaces the choice instead of piling
+  another one on top, and two taps in the same instant cannot become two
+  answers. That same transaction is where the question closes when the answers
+  reach the number of people connected (AD-42), which is what keeps twenty-five
+  simultaneous taps from closing it twice.
+
   The expiration deadline is persisted in `expires_at` (AD-23) instead of living
   in a timer, so it survives a restart without being forgotten or renewed.
   `LiveQuiz.Games` only supplies the transitions; noticing that the host dropped
@@ -759,6 +768,132 @@ defmodule LiveQuiz.Games do
         {:already_closed, closed} ->
           {:ok, closed}
       end
+    end
+  end
+
+  @doc """
+  Records or replaces the answer of a participant to the question that is open.
+
+  Changing one's mind is part of playing: while the question is open the answer
+  may be sent again, and the last one is the one that counts. It is written by
+  a single upsert on `(participant_id, game_session_question_id)` (AD-41), so
+  two taps of the same person in the same instant end as one row instead of
+  racing a `SELECT` against an `INSERT`, and the unique index never reaches the
+  caller as an exception. The option and `answered_at` are both rewritten,
+  because phase 4 measures the speed of the choice that stayed, not of the one
+  that was abandoned.
+
+  Whether the answer arrived in time is decided here, against
+  `current_question_ends_at` as the database holds it (AD-39). A screen still
+  showing the question open is not an argument: a millisecond past the deadline
+  is `:time_is_up`.
+
+  `connected_count` comes from whoever watches the presence of the room (AD-23)
+  and is used for one thing only — deciding whether this answer was the last
+  one missing. When the answers of the current question reach it, the question
+  is closed inside this very transaction, under the same advisory lock the
+  host's commands take (AD-42), so two final answers cannot both conclude "only
+  I was missing" and close it twice. With nobody connected the rule never
+  fires, and the question waits for the deadline or for the host.
+
+  Being connected is deliberately *not* required in order to answer: somebody
+  may tap at the exact instant the presence has yet to register them, and
+  refusing that would punish the player for a detail of the infrastructure.
+  What is required is an active participation — whoever left the room answers
+  `:left_session` — a running match, an open question, and an option of that
+  very question, checked against the database instead of trusted from the id
+  that arrived.
+
+  Every accepted answer announces `{:answer_submitted, session_id, count}`
+  after the commit, and `{:question_closed, session}` as well when it was the
+  one that closed the question. A refused answer writes nothing and announces
+  nothing.
+
+  > Swapping the option over and over writes without a limit. That was weighed
+  > in the refinement and accepted; a rate limit, if it ever becomes necessary,
+  > belongs right here, before the transaction opens.
+  """
+  @spec answer_question(Participant.t(), integer(), non_neg_integer()) ::
+          {:ok, %{answer: Answer.t(), session: GameSession.t(), closed?: boolean()}}
+          | {:error,
+             :invalid_status
+             | :no_open_question
+             | :question_closed
+             | :time_is_up
+             | :option_not_found
+             | :left_session}
+  def answer_question(%Participant{} = participant, answer_option_id, connected_count)
+      when is_integer(answer_option_id) and is_integer(connected_count) and
+             connected_count >= 0 do
+    case record_answer(participant, answer_option_id, connected_count) do
+      {:ok, %{session: session, closed?: closed?, count: count} = recorded} ->
+        broadcast(session.id, {:answer_submitted, session.id, count})
+        if closed?, do: broadcast(session.id, {:question_closed, session})
+        {:ok, Map.take(recorded, [:answer, :session, :closed?])}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @doc """
+  The answer the participant currently holds on the question of the moment.
+
+  It is the choice that stayed, never a history: swapping rewrites the row. The
+  answer is given back while the question is open and after it closes, since
+  the reveal shows people what they had picked.
+
+  `nil` when the person has not answered, and also when the match has not
+  advanced to any question yet.
+  """
+  @spec get_current_answer(GameSession.t(), Participant.t()) :: Answer.t() | nil
+  def get_current_answer(%GameSession{} = session, %Participant{id: participant_id}) do
+    case current_question_id(session) do
+      nil ->
+        nil
+
+      question_id ->
+        Repo.get_by(Answer,
+          participant_id: participant_id,
+          game_session_question_id: question_id
+        )
+    end
+  end
+
+  @doc """
+  How many participations have already answered the question of the moment.
+
+  Whoever did not answer leaves no row at all (AD-43), so this is a plain count
+  and never a count of anything but real answers. Zero before the first advance.
+  """
+  @spec current_answers_count(GameSession.t()) :: non_neg_integer()
+  def current_answers_count(%GameSession{} = session) do
+    case current_question_id(session) do
+      nil -> 0
+      question_id -> question_id |> current_answers() |> Repo.aggregate(:count, :id)
+    end
+  end
+
+  @doc """
+  The ids of the participations that have already answered the question of the
+  moment.
+
+  It is what a screen needs to tell who the room is still waiting for, and it
+  is scoped to the current question alone: an answer to a previous one says
+  nothing about this one.
+  """
+  @spec answered_participant_ids(GameSession.t()) :: MapSet.t(integer())
+  def answered_participant_ids(%GameSession{} = session) do
+    case current_question_id(session) do
+      nil ->
+        MapSet.new()
+
+      question_id ->
+        question_id
+        |> current_answers()
+        |> select([a], a.participant_id)
+        |> Repo.all()
+        |> MapSet.new()
     end
   end
 
@@ -1667,6 +1802,134 @@ defmodule LiveQuiz.Games do
       {1, [closed]} -> {:closed, closed}
       {0, _unchanged} -> {:already_closed, reload_session(session)}
     end
+  end
+
+  # The whole chain runs in one transaction under the advisory lock of the room,
+  # which is what lets the decision to close the question be taken from the very
+  # count this answer produced (AD-42) and what makes it take turns with the
+  # host's own commands. Nothing is written until every check has passed, so a
+  # refusal leaves no trace.
+  defp record_answer(
+         %Participant{game_session_id: session_id} = participant,
+         option_id,
+         connected
+       ) do
+    Repo.transaction(fn ->
+      lock_match(session_id)
+
+      with {:ok, session} <- ensure_running(Repo.get(GameSession, session_id)),
+           :ok <- ensure_taking_answers(session),
+           {:ok, playing} <- ensure_still_playing(participant),
+           {:ok, question_id, chosen_id} <- fetch_current_option(session, option_id) do
+        upsert_answer(session, question_id, playing, chosen_id, connected)
+      else
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+  end
+
+  # Taking answers is a question already advanced to, not yet closed and still
+  # inside its deadline (AD-37). The three refusals are told apart because a
+  # screen has a different thing to say for each one.
+  defp ensure_taking_answers(%GameSession{current_question_position: nil}),
+    do: {:error, :no_open_question}
+
+  defp ensure_taking_answers(%GameSession{current_question_closed_at: at}) when not is_nil(at),
+    do: {:error, :question_closed}
+
+  defp ensure_taking_answers(%GameSession{current_question_ends_at: ends_at}) do
+    # The deadline of the database is the only clock consulted (AD-39): the
+    # instant the client believes in never reaches here.
+    if DateTime.compare(now_usec(), ends_at) == :gt, do: {:error, :time_is_up}, else: :ok
+  end
+
+  # The participation is read back rather than trusted from the struct that
+  # arrived, so a screen left open since before the person walked out cannot
+  # answer on their behalf.
+  defp ensure_still_playing(%Participant{id: id}) do
+    Participant
+    |> where([p], p.id == ^id and is_nil(p.left_at) and is_nil(p.released_at))
+    |> Repo.one()
+    |> case do
+      nil -> {:error, :left_session}
+      %Participant{} = participant -> {:ok, participant}
+    end
+  end
+
+  # The option is matched against the current question of this very match, so
+  # the id of an option of another question — or of another room altogether —
+  # is refused instead of being written. The question comes back from the same
+  # query: there is no id worth trusting here.
+  defp fetch_current_option(%GameSession{} = session, option_id) do
+    query =
+      from o in GameSessionAnswerOption,
+        join: q in GameSessionQuestion,
+        on: q.id == o.game_session_question_id,
+        where: o.id == ^option_id,
+        where: q.game_session_id == ^session.id,
+        where: q.position == ^session.current_question_position,
+        select: {q.id, o.id}
+
+    case Repo.one(query) do
+      nil -> {:error, :option_not_found}
+      {question_id, chosen_id} -> {:ok, question_id, chosen_id}
+    end
+  end
+
+  # `inserted_at` is deliberately out of the replace list: it records when the
+  # person first answered this question, and rewriting it would hand phase 4 the
+  # instant of the last swap as if it were the first choice.
+  defp upsert_answer(session, question_id, participant, chosen_id, connected) do
+    answer =
+      %Answer{}
+      |> Answer.changeset(%{
+        game_session_id: session.id,
+        game_session_question_id: question_id,
+        participant_id: participant.id,
+        game_session_answer_option_id: chosen_id,
+        answered_at: now_usec()
+      })
+      |> Repo.insert!(
+        on_conflict: {:replace, [:game_session_answer_option_id, :answered_at, :updated_at]},
+        conflict_target: [:participant_id, :game_session_question_id],
+        returning: true
+      )
+
+    count = question_id |> current_answers() |> Repo.aggregate(:count, :id)
+    {session, closed?} = close_if_everybody_answered(session, count, connected)
+
+    %{answer: answer, session: session, closed?: closed?, count: count}
+  end
+
+  # With nobody connected there is nothing to complete, so the rule never fires
+  # and the question runs to its deadline or waits for the host. The count is
+  # the one taken inside the transaction, which is what makes "I was the last
+  # one missing" a fact instead of a guess.
+  defp close_if_everybody_answered(%GameSession{} = session, _count, 0), do: {session, false}
+
+  defp close_if_everybody_answered(%GameSession{} = session, count, connected)
+       when count >= connected do
+    case close_now(session) do
+      {:closed, closed} -> {closed, true}
+      {:already_closed, closed} -> {closed, false}
+    end
+  end
+
+  defp close_if_everybody_answered(%GameSession{} = session, _count, _connected),
+    do: {session, false}
+
+  defp current_answers(question_id) do
+    where(Answer, [a], a.game_session_question_id == ^question_id)
+  end
+
+  defp current_question_id(%GameSession{current_question_position: nil}), do: nil
+
+  defp current_question_id(%GameSession{id: id, current_question_position: position}) do
+    id
+    |> snapshot_questions()
+    |> where([q], q.position == ^position)
+    |> select([q], q.id)
+    |> Repo.one()
   end
 
   defp finish_and_announce(%GameSession{} = session) do

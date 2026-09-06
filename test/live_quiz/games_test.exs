@@ -10,6 +10,7 @@ defmodule LiveQuiz.GamesTest do
   alias LiveQuiz.Accounts
   alias LiveQuiz.Accounts.User
   alias LiveQuiz.Games
+  alias LiveQuiz.Games.Answer
   alias LiveQuiz.Games.GameSession
   alias LiveQuiz.Games.JoinCode
   alias LiveQuiz.Games.Participant
@@ -3530,6 +3531,515 @@ defmodule LiveQuiz.GamesTest do
       assert_receive {:question_closed, %GameSession{}}
       refute_receive {:question_closed, _repeated}, 50
     end
+  end
+
+  describe "answer_question/3" do
+    setup :open_match
+
+    test "grava a resposta do participante com o instante do servidor", %{
+      session: session,
+      questions: questions,
+      participant: participant
+    } do
+      option = option_at(questions, 1, 2)
+      before = now_usec()
+
+      assert {:ok, %{answer: answer, session: current, closed?: false}} =
+               Games.answer_question(participant, option.id, 3)
+
+      assert answer.participant_id == participant.id
+      assert answer.game_session_id == session.id
+      assert answer.game_session_question_id == option.game_session_question_id
+      assert answer.game_session_answer_option_id == option.id
+      assert DateTime.compare(answer.answered_at, before) != :lt
+      assert DateTime.compare(answer.answered_at, now_usec()) != :gt
+      assert GameSession.question_open?(current)
+
+      assert [%Answer{id: id}] = answers_of(participant)
+      assert id == answer.id
+    end
+
+    test "aceita a alternativa de qualquer uma das quatro posições", %{
+      session: session,
+      questions: questions
+    } do
+      for position <- 1..4 do
+        option = option_at(questions, 1, position)
+        participant = participant_fixture(session)
+        option_id = option.id
+
+        assert {:ok, %{answer: %Answer{game_session_answer_option_id: ^option_id}}} =
+                 Games.answer_question(participant, option_id, 25)
+      end
+    end
+
+    test "trocar de alternativa uma, duas e três vezes deixa sempre uma única linha", %{
+      questions: questions,
+      participant: participant
+    } do
+      for position <- [2, 4, 1, 3] do
+        option_id = option_at(questions, 1, position).id
+
+        assert {:ok, %{answer: %Answer{game_session_answer_option_id: ^option_id}}} =
+                 Games.answer_question(participant, option_id, 25)
+
+        assert [%Answer{game_session_answer_option_id: ^option_id}] = answers_of(participant)
+      end
+    end
+
+    test "a troca reescreve answered_at e preserva o instante da primeira resposta", %{
+      questions: questions,
+      participant: participant
+    } do
+      first = option_at(questions, 1, 1)
+      second = option_at(questions, 1, 3)
+
+      assert {:ok, %{answer: original}} = Games.answer_question(participant, first.id, 25)
+      assert {:ok, %{answer: replaced}} = Games.answer_question(participant, second.id, 25)
+
+      assert replaced.id == original.id
+      assert replaced.inserted_at == original.inserted_at
+      assert DateTime.compare(replaced.answered_at, original.answered_at) == :gt
+      assert [%Answer{}] = answers_of(participant)
+    end
+
+    test "responder de novo a mesma alternativa apenas atualiza answered_at", %{
+      questions: questions,
+      participant: participant
+    } do
+      option = option_at(questions, 1, 4)
+
+      assert {:ok, %{answer: first}} = Games.answer_question(participant, option.id, 25)
+      assert {:ok, %{answer: again}} = Games.answer_question(participant, option.id, 25)
+
+      assert again.id == first.id
+      assert again.game_session_answer_option_id == option.id
+      assert DateTime.compare(again.answered_at, first.answered_at) == :gt
+      assert [%Answer{}] = answers_of(participant)
+    end
+
+    test "a resposta que chega com milissegundos de sobra é aceita", %{
+      session: session,
+      questions: questions,
+      participant: participant
+    } do
+      _still_open = ending_in(session, 300)
+
+      assert {:ok, %{answer: %Answer{}}} =
+               Games.answer_question(participant, option_at(questions, 1, 1).id, 25)
+    end
+
+    test "a resposta que chega um milissegundo depois do prazo é recusada", %{
+      session: session,
+      questions: questions,
+      participant: participant
+    } do
+      _late = ending_in(session, -1)
+
+      assert Games.answer_question(participant, option_at(questions, 1, 1).id, 25) ==
+               {:error, :time_is_up}
+
+      assert answers_of(participant) == []
+    end
+
+    test "a pergunta encerrada não recebe mais respostas", %{
+      scope: scope,
+      session: session,
+      questions: questions,
+      participant: participant
+    } do
+      assert {:ok, _closed} = Games.close_question(scope, session)
+
+      assert Games.answer_question(participant, option_at(questions, 1, 1).id, 25) ==
+               {:error, :question_closed}
+
+      assert answers_of(participant) == []
+    end
+
+    test "antes do primeiro avanço não há pergunta para responder" do
+      %{session: session, questions: questions} = match_of(3)
+      participant = participant_fixture(session)
+
+      assert Games.answer_question(participant, option_at(questions, 1, 1).id, 25) ==
+               {:error, :no_open_question}
+
+      assert answers_of(participant) == []
+    end
+
+    test "só uma partida em andamento recebe respostas" do
+      for status <- [:waiting, :finished, :cancelled, :expired] do
+        %{session: session, questions: questions} = match_of(1, %{status: status})
+        open = on_question(session, 1, started_at: now_usec())
+        participant = participant_fixture(open)
+
+        assert Games.answer_question(participant, option_at(questions, 1, 1).id, 25) ==
+                 {:error, :invalid_status}
+
+        assert answers_of(participant) == []
+      end
+    end
+
+    test "a alternativa de outra pergunta da mesma partida é recusada", %{
+      questions: questions,
+      participant: participant
+    } do
+      assert Games.answer_question(participant, option_at(questions, 2, 1).id, 25) ==
+               {:error, :option_not_found}
+
+      assert answers_of(participant) == []
+    end
+
+    test "a alternativa de outra partida é recusada", %{participant: participant} do
+      %{questions: elsewhere} = match_of(1)
+
+      assert Games.answer_question(participant, option_at(elsewhere, 1, 1).id, 25) ==
+               {:error, :option_not_found}
+
+      assert answers_of(participant) == []
+    end
+
+    test "um id de alternativa que não existe é recusado", %{participant: participant} do
+      assert Games.answer_question(participant, 0, 25) == {:error, :option_not_found}
+      assert answers_of(participant) == []
+    end
+
+    test "quem saiu da sala não responde, nem com a participação que tinha em mãos", %{
+      questions: questions,
+      participant: participant
+    } do
+      option = option_at(questions, 1, 1)
+      assert {:ok, gone} = Games.leave_game_session(participant)
+
+      assert Games.answer_question(gone, option.id, 25) == {:error, :left_session}
+      assert Games.answer_question(participant, option.id, 25) == {:error, :left_session}
+      assert answers_of(participant) == []
+    end
+
+    test "o participante de outra partida não responde nesta", %{questions: questions} do
+      %{scope: scope, session: session} = match_of(1)
+      assert {:ok, open} = Games.advance_question(scope, session, nil)
+      stranger = participant_fixture(open)
+
+      assert Games.answer_question(stranger, option_at(questions, 1, 1).id, 25) ==
+               {:error, :option_not_found}
+
+      assert answers_of(stranger) == []
+    end
+
+    test "as respostas das perguntas anteriores continuam existindo quando a partida avança", %{
+      scope: scope,
+      session: session,
+      questions: questions,
+      participant: participant
+    } do
+      assert {:ok, _first} = Games.answer_question(participant, option_at(questions, 1, 1).id, 25)
+      assert {:ok, second} = Games.advance_question(scope, session, 1)
+      assert {:ok, _also} = Games.answer_question(participant, option_at(questions, 2, 2).id, 25)
+      assert {:ok, _third} = Games.advance_question(scope, second, 2)
+
+      assert [first, second] = answers_of(participant)
+      assert first.game_session_question_id == option_at(questions, 1, 1).game_session_question_id
+
+      assert second.game_session_question_id ==
+               option_at(questions, 2, 2).game_session_question_id
+    end
+  end
+
+  describe "answer_question/3 e o encerramento automático" do
+    test "a pergunta encerra quando o único conectado responde" do
+      %{session: session, questions: questions, participants: [only]} = open_match_with(1)
+      :ok = Games.subscribe(session.id)
+
+      assert {:ok, %{closed?: true, session: closed}} =
+               Games.answer_question(only, option_at(questions, 1, 1).id, 1)
+
+      assert closed.current_question_closed_at
+      refute GameSession.question_open?(Repo.get!(GameSession, session.id))
+
+      assert_receive {:question_closed, %GameSession{}}
+      refute_receive {:question_closed, _repeated}, 50
+    end
+
+    test "com três conectados só a terceira resposta encerra a pergunta" do
+      %{session: session, questions: questions, participants: [a, b, c]} = open_match_with(3)
+      option = option_at(questions, 1, 1)
+
+      assert {:ok, %{closed?: false}} = Games.answer_question(a, option.id, 3)
+      assert {:ok, %{closed?: false}} = Games.answer_question(b, option.id, 3)
+      assert GameSession.question_open?(Repo.get!(GameSession, session.id))
+
+      assert {:ok, %{closed?: true}} = Games.answer_question(c, option.id, 3)
+      refute GameSession.question_open?(Repo.get!(GameSession, session.id))
+    end
+
+    test "faltando alguém, a pergunta continua aberta" do
+      %{session: session, questions: questions, participants: [a, b, _c]} = open_match_with(3)
+      option = option_at(questions, 1, 1)
+
+      assert {:ok, %{closed?: false}} = Games.answer_question(a, option.id, 3)
+      assert {:ok, %{closed?: false}} = Games.answer_question(b, option.id, 3)
+
+      assert GameSession.question_open?(Repo.get!(GameSession, session.id))
+    end
+
+    test "quem está desconectado não segura a pergunta" do
+      %{session: session, questions: questions, participants: [a, b, _away]} = open_match_with(3)
+      option = option_at(questions, 1, 1)
+
+      assert {:ok, %{closed?: false}} = Games.answer_question(a, option.id, 2)
+      assert {:ok, %{closed?: true}} = Games.answer_question(b, option.id, 2)
+
+      refute GameSession.question_open?(Repo.get!(GameSession, session.id))
+    end
+
+    test "com ninguém conectado o encerramento automático não dispara" do
+      %{session: session, questions: questions, participants: [a, b]} = open_match_with(2)
+      option = option_at(questions, 1, 1)
+
+      assert {:ok, %{closed?: false}} = Games.answer_question(a, option.id, 0)
+      assert {:ok, %{closed?: false}} = Games.answer_question(b, option.id, 0)
+
+      assert GameSession.question_open?(Repo.get!(GameSession, session.id))
+    end
+
+    test "quem chega depois do encerramento automático recebe :question_closed" do
+      %{session: session, questions: questions, participants: [a, late]} = open_match_with(2)
+      option = option_at(questions, 1, 1)
+
+      assert {:ok, %{closed?: true}} = Games.answer_question(a, option.id, 1)
+      assert Games.answer_question(late, option.id, 1) == {:error, :question_closed}
+
+      assert answers_of(late) == []
+      assert Games.current_answers_count(Repo.get!(GameSession, session.id)) == 1
+    end
+  end
+
+  describe "answer_question/3 sob concorrência" do
+    test "vinte e cinco respostas simultâneas geram vinte e cinco linhas e um só encerramento" do
+      %{session: session, questions: questions, participants: participants} = open_match_with(25)
+      option = option_at(questions, 1, 1)
+      :ok = Games.subscribe(session.id)
+
+      results = in_parallel(participants, &Games.answer_question(&1, option.id, 25))
+
+      assert Enum.count(results, &match?({:ok, %{closed?: true}}, &1)) == 1
+      assert Enum.count(results, &match?({:ok, %{closed?: false}}, &1)) == 24
+
+      current = Repo.get!(GameSession, session.id)
+      assert Games.current_answers_count(current) == 25
+      assert current.current_question_closed_at
+
+      assert_receive {:question_closed, %GameSession{}}
+      refute_receive {:question_closed, _repeated}, 50
+    end
+
+    test "dois cliques simultâneos do mesmo participante geram uma única resposta" do
+      %{questions: questions, participants: [participant]} = open_match_with(1)
+      options = [option_at(questions, 1, 1), option_at(questions, 1, 3)]
+
+      results = in_parallel(options, &Games.answer_question(participant, &1.id, 25))
+
+      assert Enum.all?(results, &match?({:ok, %{answer: %Answer{}}}, &1))
+      assert [%Answer{game_session_answer_option_id: chosen}] = answers_of(participant)
+      assert chosen in Enum.map(options, & &1.id)
+    end
+
+    test "resposta e encerramento do host ao mesmo tempo nunca gravam depois do closed_at" do
+      %{scope: scope, session: session, questions: questions, participants: [participant]} =
+        open_match_with(1)
+
+      option = option_at(questions, 1, 1)
+
+      results =
+        in_parallel([:answer, :close], fn
+          :answer -> Games.answer_question(participant, option.id, 25)
+          :close -> Games.close_question(scope, session)
+        end)
+
+      assert Enum.any?(results, &match?({:ok, %GameSession{}}, &1))
+      closed = Repo.get!(GameSession, session.id)
+      assert closed.current_question_closed_at
+
+      case answers_of(participant) do
+        [] ->
+          assert {:error, :question_closed} in results
+
+        [answer] ->
+          assert DateTime.compare(answer.answered_at, closed.current_question_closed_at) != :gt
+      end
+    end
+  end
+
+  describe "leitura das respostas da pergunta corrente" do
+    setup :open_match
+
+    test "get_current_answer/2 devolve a escolha que ficou", %{
+      session: session,
+      questions: questions,
+      participant: participant
+    } do
+      assert is_nil(Games.get_current_answer(session, participant))
+
+      first = option_at(questions, 1, 1)
+      second = option_at(questions, 1, 4)
+
+      assert {:ok, _recorded} = Games.answer_question(participant, first.id, 25)
+
+      assert %Answer{game_session_answer_option_id: chosen} =
+               Games.get_current_answer(session, participant)
+
+      assert chosen == first.id
+
+      assert {:ok, _swapped} = Games.answer_question(participant, second.id, 25)
+
+      assert %Answer{game_session_answer_option_id: swapped} =
+               Games.get_current_answer(session, participant)
+
+      assert swapped == second.id
+    end
+
+    test "get_current_answer/2 é nil antes do primeiro avanço" do
+      %{session: session} = match_of(3)
+      participant = participant_fixture(session)
+
+      assert is_nil(Games.get_current_answer(session, participant))
+    end
+
+    test "get_current_answer/2 ignora a resposta da pergunta anterior", %{
+      scope: scope,
+      session: session,
+      questions: questions,
+      participant: participant
+    } do
+      assert {:ok, _first} = Games.answer_question(participant, option_at(questions, 1, 1).id, 25)
+      assert {:ok, second} = Games.advance_question(scope, session, 1)
+
+      assert is_nil(Games.get_current_answer(second, participant))
+    end
+
+    test "current_answers_count/1 conta zero, um e vinte e cinco" do
+      %{session: session} = match_of(3)
+      assert Games.current_answers_count(session) == 0
+
+      %{session: open, questions: questions, participants: participants} = open_match_with(25)
+      assert Games.current_answers_count(open) == 0
+
+      option = option_at(questions, 1, 1)
+      [first | rest] = participants
+
+      assert {:ok, _one} = Games.answer_question(first, option.id, 0)
+      assert Games.current_answers_count(open) == 1
+
+      for participant <- rest do
+        assert {:ok, _more} = Games.answer_question(participant, option.id, 0)
+      end
+
+      assert Games.current_answers_count(open) == 25
+    end
+
+    test "answered_participant_ids/1 ignora as respostas das perguntas anteriores" do
+      %{scope: scope, session: session, questions: questions, participants: [a, b]} =
+        open_match_with(2)
+
+      assert Games.answered_participant_ids(session) == MapSet.new()
+
+      assert {:ok, _first} = Games.answer_question(a, option_at(questions, 1, 1).id, 0)
+      assert Games.answered_participant_ids(session) == MapSet.new([a.id])
+
+      assert {:ok, second} = Games.advance_question(scope, session, 1)
+      assert Games.answered_participant_ids(second) == MapSet.new()
+
+      assert {:ok, _also} = Games.answer_question(b, option_at(questions, 2, 3).id, 0)
+      assert Games.answered_participant_ids(second) == MapSet.new([b.id])
+    end
+
+    test "answered_participant_ids/1 é vazio antes do primeiro avanço" do
+      %{session: session} = match_of(3)
+
+      assert Games.answered_participant_ids(session) == MapSet.new()
+    end
+  end
+
+  describe "eventos da resposta" do
+    test "cada resposta publica answer_submitted com a contagem da pergunta" do
+      %{session: session, questions: questions, participants: [a, b]} = open_match_with(2)
+      session_id = session.id
+      option = option_at(questions, 1, 1)
+      :ok = Games.subscribe(session_id)
+
+      assert {:ok, _first} = Games.answer_question(a, option.id, 0)
+      assert_receive {:answer_submitted, ^session_id, 1}
+
+      assert {:ok, _second} = Games.answer_question(b, option.id, 0)
+      assert_receive {:answer_submitted, ^session_id, 2}
+    end
+
+    test "a troca publica o evento de novo, sem mudar a contagem" do
+      %{session: session, questions: questions, participants: [participant]} = open_match_with(1)
+      session_id = session.id
+      :ok = Games.subscribe(session_id)
+
+      assert {:ok, _first} = Games.answer_question(participant, option_at(questions, 1, 1).id, 0)
+      assert_receive {:answer_submitted, ^session_id, 1}
+
+      assert {:ok, _swap} = Games.answer_question(participant, option_at(questions, 1, 2).id, 0)
+      assert_receive {:answer_submitted, ^session_id, 1}
+    end
+
+    test "uma resposta recusada não publica nada" do
+      %{scope: scope, session: session, questions: questions, participants: [participant]} =
+        open_match_with(1)
+
+      :ok = Games.subscribe(session.id)
+
+      assert Games.answer_question(participant, option_at(questions, 2, 1).id, 0) ==
+               {:error, :option_not_found}
+
+      assert {:ok, closed} = Games.close_question(scope, session)
+      assert_receive {:question_closed, %GameSession{}}
+
+      assert Games.answer_question(participant, option_at(questions, 1, 1).id, 0) ==
+               {:error, :question_closed}
+
+      refute_receive {:answer_submitted, _id, _count}, 50
+      refute_receive {:question_closed, _repeated}, 50
+      assert is_nil(Games.get_current_answer(closed, participant))
+    end
+  end
+
+  # A match sitting on its first question, open, with `count` people signed up —
+  # the state every answer starts from.
+  defp open_match_with(count) do
+    %{scope: scope, session: session, questions: questions} = match_of(3)
+    {:ok, open} = Games.advance_question(scope, session, nil)
+
+    %{
+      scope: scope,
+      session: open,
+      questions: questions,
+      participants: Enum.map(1..count//1, fn _seat -> participant_fixture(open) end)
+    }
+  end
+
+  defp open_match(_context) do
+    context = open_match_with(1)
+    Map.put(context, :participant, hd(context.participants))
+  end
+
+  # The deadline is written by the context out of the duration of the room, so a
+  # test that needs one about to run out — or just gone — places the start far
+  # enough back for `ends_at` to land exactly where it wants it.
+  defp ending_in(session, milliseconds) do
+    started_at =
+      now_usec()
+      |> DateTime.add(milliseconds, :millisecond)
+      |> DateTime.add(-session.question_duration_seconds, :second)
+
+    on_question(session, session.current_question_position, started_at: started_at)
+  end
+
+  defp answers_of(%Participant{id: id}) do
+    Answer |> where([a], a.participant_id == ^id) |> order_by([a], asc: a.id) |> Repo.all()
   end
 
   defp start_session(session) do
