@@ -1434,15 +1434,80 @@ defmodule LiveQuiz.Games do
       when is_integer(quiz_id) do
     query =
       from s in GameSession,
-        join: q in assoc(s, :quiz),
+        left_join: q in assoc(s, :quiz),
         where: s.host_id == ^scope.user.id and s.quiz_id == ^quiz_id and s.status == :finished,
         left_join: r in assoc(s, :game_results),
         group_by: [s.id, q.id],
-        select: %{session: s, quiz_title: s.quiz_title, participants_count: count(r.id)}
+        select: %{
+          session: s,
+          quiz_title: s.quiz_title,
+          participants_count: count(r.id),
+          winner_nickname:
+            fragment("(array_agg(? ORDER BY ? ASC))[1]", r.nickname, r.final_position),
+          winner_score: fragment("(array_agg(? ORDER BY ? ASC))[1]", r.score, r.final_position)
+        }
 
     query
     |> session_result_filters(filters)
+    |> maybe_filter_session_quiz(filters)
     |> paginate_sessions(pagination)
+  end
+
+  @doc "Lists every finished match hosted by quizzes owned by the user."
+  @spec list_host_game_history(Scope.t(), map() | keyword(), map() | keyword()) :: map()
+  def list_host_game_history(%Scope{} = scope, filters, pagination) do
+    query =
+      from s in GameSession,
+        left_join: q in assoc(s, :quiz),
+        where: s.host_id == ^scope.user.id and s.status == :finished,
+        left_join: r in assoc(s, :game_results),
+        group_by: [s.id, q.id],
+        select: %{
+          session: s,
+          quiz_title: s.quiz_title,
+          participants_count: count(r.id),
+          winner_nickname:
+            fragment("(array_agg(? ORDER BY ? ASC))[1]", r.nickname, r.final_position),
+          winner_score: fragment("(array_agg(? ORDER BY ? ASC))[1]", r.score, r.final_position)
+        }
+
+    query
+    |> session_result_filters(filters)
+    |> maybe_filter_session_quiz(filters)
+    |> paginate_sessions(pagination)
+  end
+
+  @doc "Fetches a finished match and its complete host-visible ranking."
+  @spec get_host_game_history(Scope.t(), integer() | String.t()) ::
+          {:ok, GameSession.t()} | {:error, :not_found}
+  def get_host_game_history(%Scope{} = scope, id) do
+    results_query = from r in GameResult, order_by: [asc: r.final_position]
+
+    query =
+      from s in GameSession,
+        where: s.id == ^id and s.host_id == ^scope.user.id and s.status == :finished,
+        preload: [game_results: ^results_query]
+
+    case Repo.one(query) do
+      %GameSession{} = session -> {:ok, session}
+      nil -> {:error, :not_found}
+    end
+  end
+
+  @doc "Fetches one immutable participant result for the host of its match."
+  @spec get_host_game_result(Scope.t(), integer() | String.t()) ::
+          {:ok, GameResult.t()} | {:error, :not_found}
+  def get_host_game_result(%Scope{} = scope, id) do
+    query =
+      from r in GameResult,
+        join: s in assoc(r, :game_session),
+        where: r.id == ^id and s.host_id == ^scope.user.id and s.status == :finished,
+        preload: [:game_session, :participant]
+
+    case Repo.one(query) do
+      %GameResult{} = result -> {:ok, result}
+      nil -> {:error, :not_found}
+    end
   end
 
   @doc """
@@ -2761,6 +2826,17 @@ defmodule LiveQuiz.Games do
     |> maybe_filter_session_date(Map.get(filters, :to) || Map.get(filters, "to"), :<=)
   end
 
+  defp maybe_filter_session_quiz(query, filters) do
+    filters = Map.new(filters)
+    quiz_id = Map.get(filters, :quiz_id) || Map.get(filters, "quiz_id")
+
+    case quiz_id do
+      nil -> query
+      "" -> query
+      value -> where(query, [s, _q, _r], s.quiz_id == ^value)
+    end
+  end
+
   defp maybe_filter_quiz(query, nil), do: query
   defp maybe_filter_quiz(query, quiz_id), do: where(query, [r, _s], r.quiz_id == ^quiz_id)
 
@@ -2785,8 +2861,11 @@ defmodule LiveQuiz.Games do
     case parse_filter_date(value) do
       {:ok, datetime} ->
         case operator do
-          :>= -> where(query, [s, _q, _r], s.finished_at >= ^datetime)
-          :<= -> where(query, [s, _q, _r], s.finished_at <= ^datetime)
+          :>= ->
+            where(query, [s, _q, r], coalesce(s.finished_at, r.inserted_at) >= ^datetime)
+
+          :<= ->
+            where(query, [s, _q, r], coalesce(s.finished_at, r.inserted_at) <= ^datetime)
         end
 
       :error ->

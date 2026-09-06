@@ -139,6 +139,9 @@ defmodule LiveQuizWeb.Router do
       live "/game-sessions/:code/host", GameSessionLive.Host, :show
       live "/game-results", GameResultLive.Index, :index
       live "/game-results/:id", GameResultLive.Show, :show
+      live "/game-history", GameHistoryLive.Index, :index
+      live "/game-history/:id", GameHistoryLive.Show, :show
+      live "/game-history/:id/participants/:result_id", GameHistoryLive.Participant, :show
       live "/users/settings", UserLive.Settings, :edit
       live "/users/settings/confirm-email/:token", UserLive.Settings, :confirm_email
     end
