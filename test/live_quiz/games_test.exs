@@ -2927,8 +2927,709 @@ defmodule LiveQuiz.GamesTest do
     end
   end
 
+  describe "advance_question/3" do
+    setup :running_match
+
+    test "o primeiro avanço abre a pergunta 1 com o prazo do servidor", %{
+      scope: scope,
+      session: session
+    } do
+      assert {:ok, advanced} = Games.advance_question(scope, session, nil)
+
+      assert advanced.current_question_position == 1
+      assert advanced.current_question_started_at
+      assert is_nil(advanced.current_question_closed_at)
+      assert GameSession.question_open?(advanced)
+
+      assert DateTime.diff(
+               advanced.current_question_ends_at,
+               advanced.current_question_started_at
+             ) == 30
+    end
+
+    test "caminha de uma posição para a seguinte até a última", %{
+      scope: scope,
+      session: session
+    } do
+      assert {:ok, first} = Games.advance_question(scope, session, nil)
+      assert first.current_question_position == 1
+
+      assert {:ok, second} = Games.advance_question(scope, first, 1)
+      assert second.current_question_position == 2
+
+      assert {:ok, third} = Games.advance_question(scope, second, 2)
+      assert third.current_question_position == 3
+      assert GameSession.question_open?(third)
+    end
+
+    test "avançar com a pergunta aberta encerra a anterior na mesma transação", %{
+      scope: scope,
+      session: session
+    } do
+      assert {:ok, first} = Games.advance_question(scope, session, nil)
+
+      {result, queries} = capture_queries(fn -> Games.advance_question(scope, first, 1) end)
+
+      assert {:ok, second} = result
+      assert second.current_question_position == 2
+      assert is_nil(second.current_question_closed_at)
+      assert Enum.any?(queries, &closes_previous_question?/1)
+    end
+
+    test "nada é encerrado quando o avanço parte de uma pergunta já encerrada", %{
+      scope: scope,
+      session: session
+    } do
+      assert {:ok, first} = Games.advance_question(scope, session, nil)
+      assert {:ok, closed} = Games.close_question(scope, first)
+
+      {result, queries} = capture_queries(fn -> Games.advance_question(scope, closed, 1) end)
+
+      assert {:ok, %GameSession{current_question_position: 2}} = result
+      refute Enum.any?(queries, &closes_previous_question?/1)
+    end
+
+    test "a partida de uma única pergunta abre e não passa dela" do
+      %{scope: scope, session: session} = match_of(1)
+
+      assert {:ok, first} = Games.advance_question(scope, session, nil)
+      assert first.current_question_position == 1
+
+      assert {:ok, closed} = Games.close_question(scope, first)
+      assert Games.advance_question(scope, closed, 1) == {:error, :no_more_questions}
+
+      current = Repo.get!(GameSession, session.id)
+      assert current.status == :in_progress
+      assert current.current_question_position == 1
+    end
+
+    test "avançar além da última pergunta não muda a partida", %{
+      scope: scope,
+      session: session
+    } do
+      assert {:ok, third} = advance_to(scope, session, 3)
+
+      assert Games.advance_question(scope, third, 3) == {:error, :no_more_questions}
+
+      current = Repo.get!(GameSession, session.id)
+      assert current.status == :in_progress
+      assert current.current_question_position == 3
+      assert current.current_question_started_at == third.current_question_started_at
+    end
+
+    test "o prazo sai da duração escolhida para a sala" do
+      for duration <- GameSession.question_durations() do
+        %{scope: scope, session: session} = match_of(1, %{question_duration_seconds: duration})
+
+        assert {:ok, advanced} = Games.advance_question(scope, session, nil)
+
+        assert DateTime.diff(
+                 advanced.current_question_ends_at,
+                 advanced.current_question_started_at
+               ) == duration
+      end
+    end
+
+    test "uma posição divergente é recusada sem mudar nada", %{scope: scope, session: session} do
+      assert {:ok, first} = Games.advance_question(scope, session, nil)
+
+      assert Games.advance_question(scope, first, nil) == {:error, :stale}
+      assert Games.advance_question(scope, first, 2) == {:error, :stale}
+
+      current = Repo.get!(GameSession, session.id)
+      assert current.current_question_position == 1
+      assert current.current_question_started_at == first.current_question_started_at
+    end
+
+    test "quem não apresenta a sala não avança", %{session: session} do
+      assert Games.advance_question(user_scope_fixture(), session, nil) == {:error, :unauthorized}
+
+      assert is_nil(Repo.get!(GameSession, session.id).current_question_position)
+    end
+
+    test "o participante autenticado não avança", %{session: session} do
+      player = user_scope_fixture()
+      participant_fixture(session, %{user: player.user})
+
+      assert Games.advance_question(player, session, nil) == {:error, :unauthorized}
+
+      assert is_nil(Repo.get!(GameSession, session.id).current_question_position)
+    end
+
+    test "só uma partida em andamento avança" do
+      for status <- [:waiting, :finished, :cancelled, :expired] do
+        %{scope: scope, session: session} = match_of(3, %{status: status})
+
+        assert Games.advance_question(scope, session, nil) == {:error, :invalid_status}
+        assert is_nil(Repo.get!(GameSession, session.id).current_question_position)
+      end
+    end
+  end
+
+  describe "close_question/2" do
+    setup :running_match
+
+    test "encerra a pergunta aberta", %{scope: scope, session: session} do
+      assert {:ok, open} = Games.advance_question(scope, session, nil)
+
+      assert {:ok, closed} = Games.close_question(scope, open)
+
+      assert closed.current_question_position == 1
+      assert closed.current_question_closed_at
+      refute GameSession.question_open?(closed)
+      assert GameSession.question_closed?(closed)
+    end
+
+    test "encerrar de novo não mexe no instante registrado", %{scope: scope, session: session} do
+      assert {:ok, open} = Games.advance_question(scope, session, nil)
+      assert {:ok, closed} = Games.close_question(scope, open)
+
+      assert {:ok, again} = Games.close_question(scope, closed)
+
+      assert again.current_question_closed_at == closed.current_question_closed_at
+    end
+
+    test "sem nenhuma pergunta corrente não há o que encerrar", %{
+      scope: scope,
+      session: session
+    } do
+      assert Games.close_question(scope, session) == {:error, :no_open_question}
+
+      assert is_nil(Repo.get!(GameSession, session.id).current_question_closed_at)
+    end
+
+    test "encerrar a última pergunta não finaliza a partida", %{scope: scope, session: session} do
+      assert {:ok, last} = advance_to(scope, session, 3)
+
+      assert {:ok, closed} = Games.close_question(scope, last)
+
+      assert closed.status == :in_progress
+      assert Repo.get!(GameSession, session.id).status == :in_progress
+    end
+
+    test "quem não apresenta a sala não encerra", %{scope: scope, session: session} do
+      assert {:ok, open} = Games.advance_question(scope, session, nil)
+
+      assert Games.close_question(user_scope_fixture(), open) == {:error, :unauthorized}
+
+      assert is_nil(Repo.get!(GameSession, session.id).current_question_closed_at)
+    end
+
+    test "só uma partida em andamento encerra" do
+      for status <- [:waiting, :finished, :cancelled, :expired] do
+        %{scope: scope, session: session} =
+          match_of(3, %{status: status, current_question_position: 1})
+
+        assert Games.close_question(scope, session) == {:error, :invalid_status}
+        assert is_nil(Repo.get!(GameSession, session.id).current_question_closed_at)
+      end
+    end
+  end
+
+  describe "finish_game_session/2" do
+    setup :running_match
+
+    test "finaliza a partida da última pergunta encerrada e libera todo mundo", %{
+      scope: scope,
+      session: session,
+      participant: participant
+    } do
+      assert {:ok, last} = advance_to(scope, session, 3)
+      assert {:ok, closed} = Games.close_question(scope, last)
+
+      assert {:ok, finished} = Games.finish_game_session(scope, closed)
+
+      assert finished.status == :finished
+      assert finished.finished_at
+      assert is_nil(finished.expires_at)
+      assert Repo.get!(Participant, participant.id).released_at
+    end
+
+    test "finalizar no meio mantém a posição corrente", %{scope: scope, session: session} do
+      assert {:ok, second} = advance_to(scope, session, 2)
+
+      assert {:ok, finished} = Games.finish_game_session(scope, second)
+
+      assert finished.status == :finished
+      assert finished.current_question_position == 2
+      assert finished.current_question_started_at == second.current_question_started_at
+    end
+
+    test "finaliza uma partida que nunca avançou", %{scope: scope, session: session} do
+      assert {:ok, finished} = Games.finish_game_session(scope, session)
+
+      assert finished.status == :finished
+      assert is_nil(finished.current_question_position)
+    end
+
+    test "finalizar de novo devolve a mesma partida", %{scope: scope, session: session} do
+      assert {:ok, finished} = Games.finish_game_session(scope, session)
+
+      assert {:ok, again} = Games.finish_game_session(scope, finished)
+
+      assert again.status == :finished
+      assert again.finished_at == finished.finished_at
+    end
+
+    test "libera inclusive quem já tinha saído da sala", %{scope: scope, session: session} do
+      gone = participant_fixture(session, %{left_at: now(), released_at: now()})
+      staying = participant_fixture(session)
+
+      assert {:ok, _finished} = Games.finish_game_session(scope, session)
+
+      assert Repo.get!(Participant, gone.id).released_at == gone.released_at
+      assert Repo.get!(Participant, staying.id).released_at
+    end
+
+    test "quem não apresenta a sala não finaliza", %{session: session} do
+      assert Games.finish_game_session(user_scope_fixture(), session) == {:error, :unauthorized}
+
+      assert Repo.get!(GameSession, session.id).status == :in_progress
+    end
+
+    test "o participante autenticado não finaliza", %{session: session} do
+      player = user_scope_fixture()
+      participant_fixture(session, %{user: player.user})
+
+      assert Games.finish_game_session(player, session) == {:error, :unauthorized}
+
+      assert Repo.get!(GameSession, session.id).status == :in_progress
+    end
+
+    test "só uma partida em andamento finaliza" do
+      for status <- [:waiting, :cancelled, :expired] do
+        %{scope: scope, session: session} = match_of(3, %{status: status})
+
+        assert Games.finish_game_session(scope, session) == {:error, :invalid_status}
+        assert Repo.get!(GameSession, session.id).status == status
+      end
+    end
+
+    test "cancelar continua encerrando uma partida com pergunta aberta", %{
+      scope: scope,
+      session: session,
+      participant: participant
+    } do
+      assert {:ok, open} = Games.advance_question(scope, session, nil)
+
+      assert {:ok, cancelled} = Games.cancel_game_session(scope, open)
+
+      assert cancelled.status == :cancelled
+      assert cancelled.current_question_position == 1
+      assert Repo.get!(Participant, participant.id).released_at
+    end
+  end
+
+  describe "game_state/2" do
+    setup :running_match
+
+    test "antes do primeiro avanço a partida está pendente", %{
+      scope: scope,
+      session: session,
+      participant: participant
+    } do
+      assert {:ok, state} = Games.game_state(session, scope)
+
+      assert state.status == :in_progress
+      assert is_nil(state.question_number)
+      assert state.question_count == 3
+      assert state.question_state == :pending
+      assert is_nil(state.question_text)
+      assert is_nil(state.ends_at)
+      assert is_nil(state.seconds_left)
+      refute state.last_question?
+      assert state.options == []
+
+      assert {:ok, playing} = Games.game_state(session, participant)
+
+      assert playing.question_state == :pending
+      assert playing.options == []
+      assert is_nil(playing.my_answer_option_id)
+    end
+
+    test "a visão do host traz o gabarito com a pergunta aberta", %{
+      scope: scope,
+      session: session
+    } do
+      assert {:ok, open} = Games.advance_question(scope, session, nil)
+
+      assert {:ok, state} = Games.game_state(open, scope)
+
+      assert state.question_number == 1
+      assert state.question_state == :open
+      assert state.question_text == "Pergunta 1 da partida"
+      assert state.ends_at == open.current_question_ends_at
+      assert state.seconds_left > 0 and state.seconds_left <= 30
+      assert Enum.map(state.options, & &1.correct) == [true, false, false, false]
+      assert Enum.map(state.options, & &1.position) == [1, 2, 3, 4]
+      assert Enum.map(state.options, & &1.text) |> hd() == "Brasília"
+      refute Map.has_key?(state, :my_answer_option_id)
+    end
+
+    test "a visão de quem joga não vaza o gabarito com a pergunta aberta", %{
+      scope: scope,
+      session: session,
+      participant: participant
+    } do
+      assert {:ok, open} = Games.advance_question(scope, session, nil)
+
+      assert {:ok, state} = Games.game_state(open, participant)
+
+      assert state.question_state == :open
+      assert Enum.all?(state.options, &is_nil(&1.correct))
+      assert is_nil(state.my_answer_option_id)
+    end
+
+    test "a alternativa correta aparece para quem joga depois do encerramento", %{
+      scope: scope,
+      session: session,
+      participant: participant
+    } do
+      assert {:ok, open} = Games.advance_question(scope, session, nil)
+      assert {:ok, closed} = Games.close_question(scope, open)
+
+      assert {:ok, state} = Games.game_state(closed, participant)
+
+      assert state.question_state == :closed
+      assert Enum.map(state.options, & &1.correct) == [true, false, false, false]
+      assert state.seconds_left == 0
+    end
+
+    test "o host vê o gabarito também com a pergunta encerrada", %{
+      scope: scope,
+      session: session
+    } do
+      assert {:ok, open} = Games.advance_question(scope, session, nil)
+      assert {:ok, closed} = Games.close_question(scope, open)
+
+      assert {:ok, state} = Games.game_state(closed, scope)
+
+      assert state.question_state == :closed
+      assert Enum.map(state.options, & &1.correct) == [true, false, false, false]
+    end
+
+    test "traz a alternativa que a pessoa escolheu", %{
+      scope: scope,
+      session: session,
+      participant: participant,
+      questions: questions
+    } do
+      assert {:ok, open} = Games.advance_question(scope, session, nil)
+      option = option_at(questions, 1, 2)
+      answer_fixture(participant, option)
+
+      assert {:ok, state} = Games.game_state(open, participant)
+
+      assert state.my_answer_option_id == option.id
+    end
+
+    test "o participante autenticado lê pelo próprio escopo sem ver o gabarito", %{
+      scope: scope,
+      session: session,
+      questions: questions
+    } do
+      player = user_scope_fixture()
+      playing = participant_fixture(session, %{user: player.user})
+      assert {:ok, open} = Games.advance_question(scope, session, nil)
+      option = option_at(questions, 1, 3)
+      answer_fixture(playing, option)
+
+      assert {:ok, state} = Games.game_state(open, player)
+
+      assert Enum.all?(state.options, &is_nil(&1.correct))
+      assert state.my_answer_option_id == option.id
+    end
+
+    test "o tempo restante nunca fica negativo", %{scope: scope, session: session} do
+      overdue = on_question(session, 1, started_at: minutes_ago_usec(2))
+
+      assert {:ok, state} = Games.game_state(overdue, scope)
+
+      assert state.question_state == :open
+      assert state.seconds_left == 0
+    end
+
+    test "last_question? só vale na última posição", %{scope: scope, session: session} do
+      assert {:ok, first} = Games.advance_question(scope, session, nil)
+      assert {:ok, first_state} = Games.game_state(first, scope)
+      refute first_state.last_question?
+
+      assert {:ok, last} = advance_to(scope, first, 3)
+      assert {:ok, last_state} = Games.game_state(last, scope)
+      assert last_state.last_question?
+    end
+
+    test "quem jogou continua lendo o estado depois do fim", %{
+      scope: scope,
+      session: session,
+      participant: participant
+    } do
+      assert {:ok, second} = advance_to(scope, session, 2)
+      assert {:ok, finished} = Games.finish_game_session(scope, second)
+
+      assert {:ok, state} = Games.game_state(finished, participant)
+
+      assert state.status == :finished
+      assert state.question_number == 2
+      assert state.question_state == :closed
+    end
+
+    test "uma posição sem pergunta congelada não quebra a leitura" do
+      scope = user_scope_fixture()
+
+      session =
+        game_session_fixture(%{
+          host: scope.user,
+          status: :in_progress,
+          current_question_position: 1
+        })
+
+      participant = participant_fixture(session)
+
+      assert {:ok, state} = Games.game_state(session, participant)
+
+      assert state.question_state == :open
+      assert state.question_count == 0
+      assert is_nil(state.question_text)
+      assert is_nil(state.ends_at)
+      assert is_nil(state.seconds_left)
+      assert state.options == []
+      assert is_nil(state.my_answer_option_id)
+    end
+
+    test "quem não é da sala não lê o estado", %{session: session} do
+      outsider = participant_fixture(game_session_fixture(%{status: :in_progress}))
+
+      assert Games.game_state(session, user_scope_fixture()) == {:error, :unauthorized}
+      assert Games.game_state(session, outsider) == {:error, :unauthorized}
+      assert Games.game_state(session, nil) == {:error, :unauthorized}
+    end
+  end
+
+  describe "eventos da partida" do
+    setup :running_match
+
+    test "cada comando publica o próprio evento uma única vez", %{
+      scope: scope,
+      session: session
+    } do
+      :ok = Games.subscribe(session.id)
+
+      assert {:ok, open} = Games.advance_question(scope, session, nil)
+      assert_receive {:question_advanced, %GameSession{current_question_position: 1}}
+      refute_receive {:question_advanced, _repeated}, 50
+
+      assert {:ok, closed} = Games.close_question(scope, open)
+      assert_receive {:question_closed, %GameSession{}}
+      assert {:ok, _again} = Games.close_question(scope, closed)
+      refute_receive {:question_closed, _repeated}, 50
+
+      assert {:ok, finished} = Games.finish_game_session(scope, closed)
+      assert_receive {:game_finished, %GameSession{status: :finished}}
+      assert {:ok, _idempotent} = Games.finish_game_session(scope, finished)
+      refute_receive {:game_finished, _repeated}, 50
+    end
+
+    test "o evento chega com a partida já gravada", %{scope: scope, session: session} do
+      :ok = Games.subscribe(session.id)
+
+      assert {:ok, _open} = Games.advance_question(scope, session, nil)
+
+      assert_receive {:question_advanced, %GameSession{} = published}
+      current = Repo.get!(GameSession, session.id)
+      assert current.current_question_position == published.current_question_position
+      assert current.current_question_started_at == published.current_question_started_at
+    end
+
+    test "um comando recusado não publica nada", %{scope: scope, session: session} do
+      :ok = Games.subscribe(session.id)
+
+      assert Games.advance_question(user_scope_fixture(), session, nil) == {:error, :unauthorized}
+      assert Games.close_question(scope, session) == {:error, :no_open_question}
+      assert Games.finish_game_session(user_scope_fixture(), session) == {:error, :unauthorized}
+
+      assert {:ok, open} = Games.advance_question(scope, session, nil)
+      assert_receive {:question_advanced, %GameSession{}}
+
+      assert Games.advance_question(scope, open, nil) == {:error, :stale}
+
+      refute_receive {:question_advanced, _repeated}, 50
+      refute_receive {:question_closed, _none}, 50
+      refute_receive {:game_finished, _none}, 50
+    end
+  end
+
+  describe "comandos da partida sob concorrência" do
+    test "dois avanços com a mesma posição andam uma pergunta só" do
+      %{scope: scope, session: session} = match_of(3)
+      assert {:ok, open} = Games.advance_question(scope, session, nil)
+      :ok = Games.subscribe(session.id)
+
+      results = in_parallel([1, 2], fn _attempt -> Games.advance_question(scope, open, 1) end)
+
+      assert Enum.count(results, &match?({:ok, %GameSession{current_question_position: 2}}, &1)) ==
+               1
+
+      assert Enum.count(results, &(&1 == {:error, :stale})) == 1
+      assert Repo.get!(GameSession, session.id).current_question_position == 2
+
+      assert_receive {:question_advanced, %GameSession{current_question_position: 2}}
+      refute_receive {:question_advanced, _repeated}, 50
+    end
+
+    test "avanço e encerramento simultâneos não deixam a partida inconsistente" do
+      %{scope: scope, session: session} = match_of(3)
+      assert {:ok, open} = Games.advance_question(scope, session, nil)
+
+      in_parallel([:advance, :close], fn
+        :advance -> Games.advance_question(scope, open, 1)
+        :close -> Games.close_question(scope, open)
+      end)
+
+      current = Repo.get!(GameSession, session.id)
+      assert current.status == :in_progress
+      assert current.current_question_position in [1, 2]
+
+      assert DateTime.diff(
+               current.current_question_ends_at,
+               current.current_question_started_at
+             ) == current.question_duration_seconds
+
+      assert is_nil(current.current_question_closed_at) or
+               DateTime.compare(
+                 current.current_question_closed_at,
+                 current.current_question_started_at
+               ) != :lt
+    end
+
+    test "duas finalizações simultâneas encerram a partida uma vez só" do
+      %{scope: scope, session: session} = match_of(3)
+      participant = participant_fixture(session)
+      :ok = Games.subscribe(session.id)
+
+      results = in_parallel([1, 2], fn _attempt -> Games.finish_game_session(scope, session) end)
+
+      assert Enum.all?(results, &match?({:ok, %GameSession{status: :finished}}, &1))
+      assert Repo.get!(GameSession, session.id).status == :finished
+      assert Repo.get!(Participant, participant.id).released_at
+
+      assert_receive {:game_finished, %GameSession{}}
+      refute_receive {:game_finished, _repeated}, 50
+    end
+
+    test "dois encerramentos simultâneos registram um único instante" do
+      %{scope: scope, session: session} = match_of(3)
+      assert {:ok, open} = Games.advance_question(scope, session, nil)
+      :ok = Games.subscribe(session.id)
+
+      results = in_parallel([1, 2], fn _attempt -> Games.close_question(scope, open) end)
+
+      assert [{:ok, %GameSession{} = first}, {:ok, %GameSession{} = second}] = results
+      assert first.current_question_closed_at == second.current_question_closed_at
+
+      assert_receive {:question_closed, %GameSession{}}
+      refute_receive {:question_closed, _repeated}, 50
+    end
+  end
+
   defp start_session(session) do
     session |> GameSession.status_changeset(:in_progress) |> Repo.update!()
+  end
+
+  # A running match of three frozen questions with somebody playing it — the
+  # shape every command of the execution starts from.
+  defp running_match(_context) do
+    %{scope: scope, session: session, questions: questions} = match_of(3)
+
+    %{
+      scope: scope,
+      session: session,
+      questions: questions,
+      participant: participant_fixture(session)
+    }
+  end
+
+  defp match_of(count, attrs \\ %{}) do
+    scope = user_scope_fixture()
+
+    session =
+      attrs
+      |> Map.merge(%{host: scope.user})
+      |> Map.put_new(:status, :in_progress)
+      |> game_session_fixture()
+
+    %{scope: scope, session: session, questions: snapshot_fixture(session, count: count)}
+  end
+
+  defp advance_to(scope, session, position) do
+    Enum.reduce((session.current_question_position || 0)..(position - 1)//1, {:ok, session}, fn
+      expected, {:ok, current} ->
+        Games.advance_question(scope, current, if(expected == 0, do: nil, else: expected))
+    end)
+  end
+
+  # The match columns have no changeset on purpose — moving from one question to
+  # the next is the context's job — so a test that needs a match already sitting
+  # on a given deadline writes them.
+  defp on_question(session, position, opts) do
+    started_at = Keyword.fetch!(opts, :started_at)
+
+    session
+    |> Ecto.Changeset.change(%{
+      current_question_position: position,
+      current_question_started_at: started_at,
+      current_question_ends_at:
+        DateTime.add(started_at, session.question_duration_seconds, :second),
+      current_question_closed_at: Keyword.get(opts, :closed_at)
+    })
+    |> Repo.update!()
+  end
+
+  defp option_at(questions, question_position, option_position) do
+    questions
+    |> Enum.find(&(&1.position == question_position))
+    |> Map.fetch!(:answer_options)
+    |> Enum.find(&(&1.position == option_position))
+  end
+
+  defp minutes_ago_usec(minutes), do: DateTime.add(now_usec(), -minutes * 60, :second)
+
+  # The match keeps one question at a time, so the closing of the question left
+  # behind by an advance only exists inside that transaction: the statement is
+  # what the test can watch. The advance itself also writes
+  # `current_question_closed_at`, and it is told apart by the position it sets.
+  defp closes_previous_question?(query) do
+    String.contains?(query, ~s(UPDATE "game_sessions")) and
+      String.contains?(query, ~s("current_question_closed_at" = )) and
+      not String.contains?(query, ~s("current_question_position" = ))
+  end
+
+  defp capture_queries(fun) do
+    handler_id = "match-queries-#{System.unique_integer([:positive])}"
+    caller = self()
+
+    :telemetry.attach(
+      handler_id,
+      [:live_quiz, :repo, :query],
+      fn _event, _measurements, metadata, _config ->
+        if self() == caller, do: send(caller, {:match_query, metadata.query})
+      end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    result = fun.()
+
+    {result, collected_match_queries()}
+  end
+
+  defp collected_match_queries(acc \\ []) do
+    receive do
+      {:match_query, query} -> collected_match_queries([query | acc])
+    after
+      0 -> Enum.reverse(acc)
+    end
   end
 
   defp close_session(session, status) do

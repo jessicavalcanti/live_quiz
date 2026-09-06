@@ -28,8 +28,8 @@ defmodule LiveQuiz.Games do
   by `join_game_session/4` and stored only as a digest.
 
   A room ends in one of three ways, and all of them are ordinary state
-  transitions rather than deletions: the host starts it and phase 3 will carry
-  it to `finished`, the host cancels it, or it expires because the host stayed
+  transitions rather than deletions: the host starts it, plays it through and
+  finishes it, the host cancels it, or it expires because the host stayed
   away. `cancelled` and `expired` are kept apart so the lobby can say which one
   happened. Every transition is a single `UPDATE` guarded by the status it is
   allowed to come from, checked by the number of rows it touched — never a read
@@ -43,6 +43,18 @@ defmodule LiveQuiz.Games do
   self-contained — every read of what is being played goes to
   `list_snapshot_questions/1` and its neighbours, never to `LiveQuiz.Quizzes` —
   so editing or deleting the quiz afterwards cannot rewrite history.
+
+  From there the match only goes forward. `advance_question/3` opens the next
+  question — never a chosen one, never a previous one (AD-44) —
+  `close_question/2` reveals the answer key, and `finish_game_session/2` ends
+  the match when the host says so, not when the questions run out. Which
+  question is being played and whether it is still taking answers are derived
+  from columns of the room rather than from an enum of their own (AD-37), and
+  the deadline is absolute and written by the server (AD-39), so a screen that
+  reconnects rebuilds everything from one `game_state/2` and no state ever
+  lives only in memory. Each of the three commands takes an advisory lock on
+  the room, which is what makes a double click a `:stale` answer instead of a
+  skipped question.
 
   The expiration deadline is persisted in `expires_at` (AD-23) instead of living
   in a timer, so it survives a restart without being forgotten or renewed.
@@ -78,6 +90,7 @@ defmodule LiveQuiz.Games do
   alias Ecto.Changeset
   alias LiveQuiz.Accounts.Scope
   alias LiveQuiz.Accounts.User
+  alias LiveQuiz.Games.Answer
   alias LiveQuiz.Games.GameSession
   alias LiveQuiz.Games.GameSessionAnswerOption
   alias LiveQuiz.Games.GameSessionQuestion
@@ -99,6 +112,11 @@ defmodule LiveQuiz.Games do
   # `count(*) < 25` a decision instead of a guess, and it never blocks a join
   # into a different room.
   @seats_lock_class 2
+  # Class `3` means "the progress of one match". Only the commands that move a
+  # match from one question to the next take it, and they take nothing else, so
+  # they serialize against each other without ever waiting on a join or on
+  # another room.
+  @match_lock_class 3
 
   @topic_prefix "game_session:"
 
@@ -674,6 +692,148 @@ defmodule LiveQuiz.Games do
   @spec snapshot_question_count(GameSession.t()) :: non_neg_integer()
   def snapshot_question_count(%GameSession{id: id}) do
     id |> snapshot_questions() |> Repo.aggregate(:count, :id)
+  end
+
+  @doc """
+  Advances the match to the next question and opens it for answers.
+
+  Advancing is the only thing that moves a match forward, and it only ever
+  produces `position + 1` (AD-44): there is no destination to ask for, so there
+  is no way to go back, to skip or to reopen. Opening is not a command of its
+  own — a question just advanced to is already taking answers, which is what
+  the refinement decided so the host has one button instead of two.
+
+  `expected_position` is the position the caller believes is current, and `nil`
+  only before the very first question. It is compared inside the transaction
+  and answers `:stale` when it does not match: that is what stops two clicks —
+  or one on the web and another on the API — from skipping a question between
+  them.
+
+  A question still open is closed in the same transaction before the next one
+  opens, so a match never leaves a question behind with no ending.
+
+  The deadline is absolute and computed by the server (AD-39):
+  `current_question_started_at` is now and `current_question_ends_at` is that
+  instant plus the duration the room was opened with.
+
+  Only the host commands a match, and only while it is running: anybody else is
+  `:unauthorized`, and a room in the lobby or already over is `:invalid_status`.
+  """
+  @spec advance_question(Scope.t(), GameSession.t(), pos_integer() | nil) ::
+          {:ok, GameSession.t()}
+          | {:error, :unauthorized | :invalid_status | :no_more_questions | :stale}
+  def advance_question(%Scope{} = scope, %GameSession{} = session, expected_position)
+      when is_nil(expected_position) or
+             (is_integer(expected_position) and expected_position > 0) do
+    with {:ok, hosted} <- fetch_hosted_session(scope, session),
+         {:ok, advanced} <- open_next_question(hosted, expected_position) do
+      broadcast(advanced.id, {:question_advanced, advanced})
+      {:ok, advanced}
+    end
+  end
+
+  @doc """
+  Closes the question that is open, by the host's own decision.
+
+  Closing is what reveals the answer key; the question stays on screen, closed,
+  until the host advances. It never ends the match — even the last question
+  waits for `finish_game_session/2`, because finishing is a decision of the
+  host and not a consequence of running out of questions.
+
+  Idempotent: asking again for a question already closed gives the match back
+  with the instant it was closed at untouched and without a second
+  `{:question_closed, session}`, so a repeated click does not replay the
+  reveal. A match that has not advanced to any question has nothing to close
+  and answers `:no_open_question`.
+  """
+  @spec close_question(Scope.t(), GameSession.t()) ::
+          {:ok, GameSession.t()} | {:error, :unauthorized | :invalid_status | :no_open_question}
+  def close_question(%Scope{} = scope, %GameSession{} = session) do
+    with {:ok, hosted} <- fetch_hosted_session(scope, session),
+         {:ok, outcome} <- close_current_question(hosted) do
+      case outcome do
+        {:closed, closed} ->
+          broadcast(closed.id, {:question_closed, closed})
+          {:ok, closed}
+
+        {:already_closed, closed} ->
+          {:ok, closed}
+      end
+    end
+  end
+
+  @doc """
+  Ends the match by the host's own decision.
+
+  Allowed at any point of a running match — with a question open, with one
+  closed, or before the first advance — because finishing is the host's call
+  and never a consequence of the questions running out.
+
+  The match becomes `finished` with `finished_at` stamped and everybody
+  released for another room in a single statement, the very ending phase 2
+  gives a cancelled room (AD-22). `current_question_position` is left where it
+  was: it is the record of the last question actually played.
+
+  Idempotent for the host: a match already finished is given back without a
+  second `{:game_finished, session}`. A room still in the lobby, cancelled or
+  expired answers `:invalid_status` — there is nothing running to end.
+  """
+  @spec finish_game_session(Scope.t(), GameSession.t()) ::
+          {:ok, GameSession.t()} | {:error, :unauthorized | :invalid_status}
+  def finish_game_session(%Scope{} = scope, %GameSession{} = session) do
+    case fetch_hosted_session(scope, session) do
+      {:ok, %GameSession{status: :finished} = finished} -> {:ok, finished}
+      {:ok, %GameSession{} = current} -> finish_and_announce(current)
+      {:error, :unauthorized} = error -> error
+    end
+  end
+
+  @doc """
+  The state of the match as the viewer is allowed to see it.
+
+  One read rebuilds a whole screen — where the match is, what the current
+  question says, when it ends and what was chosen — so a connection that comes
+  back asks for this and nothing else. It always reads the database, never a
+  cached struct: the match state has a single source of truth.
+
+  `viewer` decides the shape, and the choice is made here rather than in the
+  presentation layer so that the web and the API cannot drift apart. The host
+  always gets the answer key. Everybody else gets `correct: nil` while the
+  question is open and the real key once it closes (AD-46), plus
+  `my_answer_option_id` with their own choice.
+
+  Only the host and the people who took part may look; anybody else gets
+  `:unauthorized`. Being released — which finishing the match does to
+  everybody — does not take the ending screen away from whoever played.
+
+  `seconds_left` is a courtesy for a single reading and ages the instant it is
+  sent; a countdown on screen must be drawn from `ends_at`, the server's
+  absolute deadline (AD-39).
+
+      %{
+        status: :in_progress,
+        question_number: 2,
+        question_count: 10,
+        question_state: :open,
+        question_text: "Qual é a capital do Brasil?",
+        ends_at: ~U[2026-09-05 18:04:30.000000Z],
+        seconds_left: 22,
+        last_question?: false,
+        options: [%{id: 41, position: 1, text: "São Paulo", correct: nil}],
+        my_answer_option_id: 42
+      }
+
+  """
+  @spec game_state(GameSession.t(), Scope.t() | Participant.t()) ::
+          {:ok, map()} | {:error, :unauthorized}
+  def game_state(%GameSession{} = session, viewer) do
+    current = reload_session(session)
+
+    if allowed_to_watch?(current, viewer) do
+      {:ok, build_game_state(current, viewer)}
+    else
+      {:error, :unauthorized}
+    end
   end
 
   @doc """
@@ -1461,6 +1621,311 @@ defmodule LiveQuiz.Games do
     where(GameSessionQuestion, [q], q.game_session_id == ^session_id)
   end
 
+  # Every command that moves a match takes the advisory lock on the room first,
+  # so two clicks of the same host take turns while every other room carries on
+  # untouched. The lock lasts the transaction; the `WHERE` of each `UPDATE` is
+  # still what decides, so a command that lost the race changes no row and is
+  # told why instead of overwriting the winner.
+  defp open_next_question(%GameSession{id: id}, expected_position) do
+    Repo.transaction(fn ->
+      lock_match(id)
+
+      with {:ok, running} <- ensure_running(Repo.get(GameSession, id)),
+           :ok <- ensure_current_position(running, expected_position),
+           {:ok, position} <- next_position(running),
+           :ok <- close_open_question(running),
+           {:ok, advanced} <- open_question(running, position) do
+        advanced
+      else
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+  end
+
+  defp close_current_question(%GameSession{id: id}) do
+    Repo.transaction(fn ->
+      lock_match(id)
+
+      case ensure_running(Repo.get(GameSession, id)) do
+        {:ok, %GameSession{current_question_position: nil}} ->
+          Repo.rollback(:no_open_question)
+
+        {:ok, %GameSession{current_question_closed_at: at} = closed} when not is_nil(at) ->
+          {:already_closed, closed}
+
+        {:ok, %GameSession{} = open} ->
+          close_now(open)
+
+        {:error, reason} ->
+          Repo.rollback(reason)
+      end
+    end)
+  end
+
+  defp close_now(%GameSession{} = session) do
+    case stamp_question_closed(session) do
+      {1, [closed]} -> {:closed, closed}
+      {0, _unchanged} -> {:already_closed, reload_session(session)}
+    end
+  end
+
+  defp finish_and_announce(%GameSession{} = session) do
+    case finish_match(session) do
+      {:ok, {:finished, finished}} ->
+        broadcast(finished.id, {:game_finished, finished})
+        {:ok, finished}
+
+      # Another finish committed while this one waited for the lock. The match
+      # is over and was announced once; saying so twice would replay the ending.
+      {:ok, {:already_finished, finished}} ->
+        {:ok, finished}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  # The ending phase 2 already writes for a cancelled room, with one difference:
+  # only a running match may be finished, so a room still in the lobby is
+  # refused instead of being closed as if it had been played. Losing the race to
+  # another finish is not a failure — the match is over either way.
+  defp finish_match(%GameSession{id: id}) do
+    at = now()
+
+    query = from s in GameSession, where: s.id == ^id and s.status == :in_progress, select: s
+
+    Repo.transaction(fn ->
+      lock_match(id)
+
+      case Repo.update_all(query,
+             set: [status: :finished, finished_at: at, expires_at: nil, updated_at: at]
+           ) do
+        {1, [finished]} ->
+          release_participants(id, at)
+          {:finished, finished}
+
+        {0, _unchanged} ->
+          rollback_unless_finished(id)
+      end
+    end)
+  end
+
+  defp rollback_unless_finished(id) do
+    case Repo.get(GameSession, id) do
+      %GameSession{status: :finished} = finished -> {:already_finished, finished}
+      _lobby_or_closed -> Repo.rollback(:invalid_status)
+    end
+  end
+
+  defp ensure_running(%GameSession{status: :in_progress} = session), do: {:ok, session}
+  defp ensure_running(_over_or_gone), do: {:error, :invalid_status}
+
+  # Comparing the position the caller believes is current is the whole
+  # protection against a double command (AD-44): a flag would be reset by the
+  # winner and let the loser through, while a position that already moved never
+  # matches again.
+  defp ensure_current_position(%GameSession{current_question_position: position}, position),
+    do: :ok
+
+  defp ensure_current_position(%GameSession{}, _expected_position), do: {:error, :stale}
+
+  defp next_position(%GameSession{current_question_position: current} = session) do
+    position = (current || 0) + 1
+
+    if position <= snapshot_question_count(session) do
+      {:ok, position}
+    else
+      {:error, :no_more_questions}
+    end
+  end
+
+  # The question being left behind is closed inside the transaction that opens
+  # the next one: leaving it out would record a question that started and never
+  # ended, and phase 4 reads that ending.
+  defp close_open_question(%GameSession{} = session) do
+    if GameSession.question_open?(session), do: stamp_question_closed(session)
+
+    :ok
+  end
+
+  defp stamp_question_closed(%GameSession{id: id}) do
+    at = now_usec()
+
+    query =
+      from s in GameSession,
+        where: s.id == ^id,
+        where: s.status == :in_progress,
+        where: not is_nil(s.current_question_position),
+        where: is_nil(s.current_question_closed_at),
+        select: s
+
+    Repo.update_all(query,
+      set: [current_question_closed_at: at, updated_at: DateTime.truncate(at, :second)]
+    )
+  end
+
+  # The position the match is leaving is repeated in the `WHERE`, so the second
+  # of two simultaneous advances updates nothing and is answered `:stale`
+  # instead of pushing the match one question further than the host asked for.
+  defp open_question(%GameSession{} = session, position) do
+    at = now_usec()
+    ends_at = DateTime.add(at, session.question_duration_seconds, :second)
+
+    query =
+      from s in GameSession,
+        where: s.id == ^session.id and s.status == :in_progress,
+        select: s
+
+    query = where_current_position(query, session.current_question_position)
+
+    case Repo.update_all(query,
+           set: [
+             current_question_position: position,
+             current_question_started_at: at,
+             current_question_ends_at: ends_at,
+             current_question_closed_at: nil,
+             updated_at: DateTime.truncate(at, :second)
+           ]
+         ) do
+      {1, [advanced]} -> {:ok, advanced}
+      {0, _unchanged} -> {:error, :stale}
+    end
+  end
+
+  defp where_current_position(query, nil) do
+    where(query, [s], is_nil(s.current_question_position))
+  end
+
+  defp where_current_position(query, position) do
+    where(query, [s], s.current_question_position == ^position)
+  end
+
+  defp build_game_state(%GameSession{} = session, viewer) do
+    state = question_state(session)
+    count = snapshot_question_count(session)
+    question = current_snapshot_question(session, state)
+    host? = host_view?(session, viewer)
+
+    base = %{
+      status: session.status,
+      question_number: session.current_question_position,
+      question_count: count,
+      question_state: state,
+      question_text: question && question.question_text,
+      ends_at: session.current_question_ends_at,
+      seconds_left: seconds_left(session, state),
+      last_question?: last_question?(session, count),
+      options: state_options(question, state, host?)
+    }
+
+    if host? do
+      base
+    else
+      Map.put(base, :my_answer_option_id, own_answer_option_id(session, question, viewer))
+    end
+  end
+
+  defp question_state(%GameSession{current_question_position: nil}), do: :pending
+
+  defp question_state(%GameSession{} = session) do
+    if GameSession.question_open?(session), do: :open, else: :closed
+  end
+
+  defp current_snapshot_question(%GameSession{}, :pending), do: nil
+
+  defp current_snapshot_question(%GameSession{} = session, _state) do
+    case get_snapshot_question(session, session.current_question_position) do
+      {:ok, %GameSessionQuestion{} = question} -> question
+      {:error, :not_found} -> nil
+    end
+  end
+
+  defp state_options(nil, _state, _host?), do: []
+
+  defp state_options(%GameSessionQuestion{} = question, state, host?) do
+    Enum.map(question.answer_options, fn option ->
+      %{
+        id: option.id,
+        position: option.position,
+        text: option.text,
+        correct: visible_answer_key(option, state, host?)
+      }
+    end)
+  end
+
+  # The answer key is the one thing a running question must not leak (AD-46):
+  # while it is open, whoever is playing sees `nil` rather than a field that is
+  # simply absent, so a client cannot tell "no key yet" from "wrong".
+  defp visible_answer_key(%GameSessionAnswerOption{is_correct: correct}, _state, true),
+    do: correct
+
+  defp visible_answer_key(%GameSessionAnswerOption{}, :open, false), do: nil
+
+  defp visible_answer_key(%GameSessionAnswerOption{is_correct: correct}, _state, false),
+    do: correct
+
+  defp seconds_left(%GameSession{}, :pending), do: nil
+  defp seconds_left(%GameSession{current_question_ends_at: nil}, _state), do: nil
+  defp seconds_left(%GameSession{}, :closed), do: 0
+
+  defp seconds_left(%GameSession{current_question_ends_at: ends_at}, :open) do
+    max(DateTime.diff(ends_at, DateTime.utc_now()), 0)
+  end
+
+  defp last_question?(%GameSession{current_question_position: nil}, _count), do: false
+
+  defp last_question?(%GameSession{current_question_position: position}, count),
+    do: position >= count
+
+  defp host_view?(%GameSession{host_id: host_id}, %Scope{user: %User{id: host_id}}), do: true
+  defp host_view?(%GameSession{}, _viewer), do: false
+
+  defp own_answer_option_id(%GameSession{} = session, question, viewer) do
+    with %GameSessionQuestion{} <- question,
+         %Participant{} = participant <- viewer_participant(session, viewer) do
+      chosen_option_id(participant, question)
+    else
+      _nothing_played_yet -> nil
+    end
+  end
+
+  defp viewer_participant(%GameSession{}, %Participant{} = participant), do: participant
+
+  defp viewer_participant(%GameSession{id: session_id}, %Scope{} = scope) do
+    Participant
+    |> where([p], p.game_session_id == ^session_id and p.user_id == ^scope.user.id)
+    |> order_by([p], desc: p.id)
+    |> limit(1)
+    |> Repo.one()
+  end
+
+  defp chosen_option_id(%Participant{id: participant_id}, %GameSessionQuestion{id: question_id}) do
+    Answer
+    |> where([a], a.participant_id == ^participant_id)
+    |> where([a], a.game_session_question_id == ^question_id)
+    |> select([a], a.game_session_answer_option_id)
+    |> Repo.one()
+  end
+
+  # Wider than `allowed_to_list?/2` on purpose: finishing a match releases
+  # everybody, and the ending screen belongs to exactly the people who were
+  # just released. Whose room it is never changes, so only somebody from
+  # another room is turned away.
+  defp allowed_to_watch?(%GameSession{} = session, %Scope{} = scope) do
+    session.host_id == scope.user.id or took_part?(session, scope)
+  end
+
+  defp allowed_to_watch?(%GameSession{id: session_id}, %Participant{game_session_id: session_id}),
+    do: true
+
+  defp allowed_to_watch?(_session, _viewer), do: false
+
+  defp took_part?(%GameSession{id: session_id}, %Scope{} = scope) do
+    Participant
+    |> where([p], p.game_session_id == ^session_id and p.user_id == ^scope.user.id)
+    |> Repo.exists?()
+  end
+
   # Both ways of closing a room share the transition and differ only in the
   # event they announce, which is what tells a lobby whether to say "cancelled"
   # or "expired". The broadcast is outside the transaction on purpose (AD-31).
@@ -1570,6 +2035,12 @@ defmodule LiveQuiz.Games do
     Repo.query!("SELECT pg_advisory_xact_lock($1, $2)", [@seats_lock_class, session_id])
   end
 
+  # Serializes the commands of one match. It is the only lock they take, so
+  # there is no order to keep and no way for two of them to deadlock.
+  defp lock_match(session_id) do
+    Repo.query!("SELECT pg_advisory_xact_lock($1, $2)", [@match_lock_class, session_id])
+  end
+
   defp hosted_sessions(%Scope{} = scope) do
     from s in GameSession, where: s.host_id == ^scope.user.id
   end
@@ -1579,4 +2050,8 @@ defmodule LiveQuiz.Games do
   end
 
   defp now, do: DateTime.truncate(DateTime.utc_now(), :second)
+
+  # The execution columns keep the fraction of a second the phase 4 speed bonus
+  # measures, so they are never truncated the way the phase 2 columns are.
+  defp now_usec, do: DateTime.utc_now()
 end
