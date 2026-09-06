@@ -33,6 +33,7 @@ defmodule LiveQuiz.Games.GameSessionQuestion do
   schema "game_session_questions" do
     field :position, :integer
     field :question_text, :string
+    field :scored_at, :utc_datetime_usec
 
     belongs_to :game_session, GameSession
     belongs_to :question, Question
