@@ -203,6 +203,10 @@ defmodule LiveQuizWeb.Api.V1.GameSessionController do
     description: """
     Só o host, só a partir de `waiting` e só com alguém conectado. Quem conta os
     conectados é o servidor: um `connected_count` enviado no corpo é ignorado.
+
+    Iniciar congela as perguntas e as alternativas do quiz dentro da partida.
+    Chamar de novo em uma partida já iniciada devolve `200` com a mesma partida,
+    sem congelar nada outra vez.
     """,
     parameters: [code: @code_parameter],
     responses: [
@@ -210,8 +214,8 @@ defmodule LiveQuizWeb.Api.V1.GameSessionController do
       unauthorized: {"Não autenticado", "application/json", ErrorResponse},
       not_found: {"Sala inexistente ou de outro host", "application/json", ErrorResponse},
       conflict:
-        {"Sala já iniciada ou encerrada, ou sem participante conectado", "application/json",
-         ErrorResponse}
+        {"Sala encerrada, sem participante conectado ou com o quiz indisponível",
+         "application/json", ErrorResponse}
     ]
 
   def start(conn, %{"code" => code}) do

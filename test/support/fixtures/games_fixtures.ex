@@ -65,6 +65,10 @@ defmodule LiveQuiz.GamesFixtures do
   Besides the schema fields, `attrs` accepts `:host` (a `%User{}`) and `:quiz`
   (a `%Quiz{}` or `nil`, for a room whose quiz was deleted).
 
+  The quiz it makes up when none is given comes with one complete question, so
+  the room is startable the way a real one is: `start_game_session/3` freezes
+  the quiz into the match and refuses one with nothing to play (F3-02).
+
   The `current_question_*` columns are written straight through, without a
   changeset: no changeset casts them on purpose, since moving the match from one
   question to the next belongs to the context (F3-03).
@@ -73,7 +77,7 @@ defmodule LiveQuiz.GamesFixtures do
   def game_session_fixture(attrs \\ %{}) do
     attrs = Map.new(attrs)
     host = Map.get_lazy(attrs, :host, &user_fixture/0)
-    quiz = Map.get_lazy(attrs, :quiz, fn -> quiz_fixture(Scope.for_user(host)) end)
+    quiz = Map.get_lazy(attrs, :quiz, fn -> playable_quiz(host) end)
 
     question_state = Map.take(attrs, @question_state_fields)
 
@@ -276,6 +280,14 @@ defmodule LiveQuiz.GamesFixtures do
       )
 
     (position || 0) + 1
+  end
+
+  defp playable_quiz(host) do
+    scope = Scope.for_user(host)
+    quiz = quiz_fixture(scope)
+    question_fixture(scope, quiz)
+
+    quiz
   end
 
   defp quiz_title(%Quiz{title: title}), do: title

@@ -229,6 +229,75 @@ defmodule LiveQuiz.Games.GameSessionTest do
     end
   end
 
+  describe "duration_changeset/2" do
+    test "accepts every duration of the list while the room waits" do
+      for duration <- GameSession.question_durations() do
+        session = game_session_fixture(%{status: :waiting})
+
+        changeset =
+          GameSession.duration_changeset(session, %{question_duration_seconds: duration})
+
+        assert changeset.valid?
+        assert {:ok, updated} = Repo.update(changeset)
+        assert updated.question_duration_seconds == duration
+      end
+    end
+
+    test "refuses a duration outside the list, in pt-BR" do
+      session = game_session_fixture(%{status: :waiting})
+
+      changeset = GameSession.duration_changeset(session, %{question_duration_seconds: 45})
+
+      refute changeset.valid?
+
+      assert errors_on(changeset).question_duration_seconds == [
+               "escolha uma das durações disponíveis"
+             ]
+    end
+
+    test "refuses changing the duration of a match already running" do
+      session = game_session_fixture(%{status: :in_progress, question_duration_seconds: 30})
+
+      changeset = GameSession.duration_changeset(session, %{question_duration_seconds: 60})
+
+      refute changeset.valid?
+
+      assert errors_on(changeset).question_duration_seconds == [
+               "não pode ser alterada depois que a partida começa"
+             ]
+
+      assert Repo.get!(GameSession, session.id).question_duration_seconds == 30
+    end
+
+    test "refuses changing the duration of a room that is over" do
+      for status <- GameSession.closed_statuses() do
+        session = game_session_fixture(%{status: status, question_duration_seconds: 20})
+
+        changeset = GameSession.duration_changeset(session, %{question_duration_seconds: 10})
+
+        refute changeset.valid?
+      end
+    end
+
+    test "resubmitting the very same duration is not a change" do
+      session = game_session_fixture(%{status: :in_progress, question_duration_seconds: 30})
+
+      changeset = GameSession.duration_changeset(session, %{question_duration_seconds: 30})
+
+      assert changeset.valid?
+      assert changeset.changes == %{}
+    end
+
+    test "refuses a blank duration" do
+      session = game_session_fixture(%{status: :waiting})
+
+      changeset = GameSession.duration_changeset(session, %{question_duration_seconds: nil})
+
+      refute changeset.valid?
+      assert "can't be blank" in errors_on(changeset).question_duration_seconds
+    end
+  end
+
   describe "question_open?/1 and question_closed?/1" do
     test "are both false before the first advance" do
       session = %GameSession{status: :in_progress}

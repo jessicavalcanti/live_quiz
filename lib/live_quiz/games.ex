@@ -37,6 +37,13 @@ defmodule LiveQuiz.Games do
   runs out ends with one winner and one status. Closing is terminal: there is no
   reopening, and playing again means a new room with a new code.
 
+  Starting a room is also the instant its content stops being a moving target:
+  the questions, the options and the answer key are copied into the match and
+  the status flips in a single transaction (AD-36). From there on the match is
+  self-contained — every read of what is being played goes to
+  `list_snapshot_questions/1` and its neighbours, never to `LiveQuiz.Quizzes` —
+  so editing or deleting the quiz afterwards cannot rewrite history.
+
   The expiration deadline is persisted in `expires_at` (AD-23) instead of living
   in a timer, so it survives a restart without being forgotten or renewed.
   `LiveQuiz.Games` only supplies the transitions; noticing that the host dropped
@@ -72,6 +79,8 @@ defmodule LiveQuiz.Games do
   alias LiveQuiz.Accounts.Scope
   alias LiveQuiz.Accounts.User
   alias LiveQuiz.Games.GameSession
+  alias LiveQuiz.Games.GameSessionAnswerOption
+  alias LiveQuiz.Games.GameSessionQuestion
   alias LiveQuiz.Games.JoinCode
   alias LiveQuiz.Games.Participant
   alias LiveQuiz.Games.ParticipantToken
@@ -116,17 +125,24 @@ defmodule LiveQuiz.Games do
   The quiz must belong to the scope and have at least one question. The user
   must neither host another live room nor be taking part in one.
 
+  `attrs` accepts `question_duration_seconds` — 10, 20, 30 or 60, defaulting to
+  30. It is chosen here rather than at the start (AD-38) so the lobby can already
+  announce the pace to whoever walks in, and it stops being changeable once the
+  match begins.
+
   Raises `Ecto.NoResultsError` when the quiz does not exist or belongs to
   somebody else, which the callers turn into a 404.
   """
-  @spec create_game_session(Scope.t(), integer() | String.t()) ::
+  @spec create_game_session(Scope.t(), integer() | String.t(), map()) ::
           {:ok, GameSession.t()}
           | {:error, :quiz_not_playable}
           | {:error, :host_already_in_session}
           | {:error, :already_participating}
           | {:error, :code_generation_failed}
           | {:error, Changeset.t()}
-  def create_game_session(%Scope{} = scope, quiz_id) do
+  def create_game_session(scope, quiz_id, attrs \\ %{})
+
+  def create_game_session(%Scope{} = scope, quiz_id, attrs) when is_map(attrs) do
     Repo.transaction(fn ->
       lock_identity(scope.user.id)
       quiz = Quizzes.get_quiz!(scope, quiz_id)
@@ -139,7 +155,8 @@ defmodule LiveQuiz.Games do
       with :ok <- ensure_playable(quiz),
            :ok <- ensure_not_hosting(scope),
            :ok <- ensure_not_participating(scope),
-           {:ok, session} <- insert_with_join_code(scope, quiz, JoinCode.max_attempts()) do
+           {:ok, session} <-
+             insert_with_join_code(scope, quiz, attrs, JoinCode.max_attempts()) do
         session
       else
         {:error, reason} -> Repo.rollback(reason)
@@ -570,7 +587,8 @@ defmodule LiveQuiz.Games do
   end
 
   @doc """
-  Puts the room live, which is the only way out of the lobby.
+  Puts the room live, freezing the quiz into it, which is the only way out of
+  the lobby.
 
   Only the host may start it, only from `waiting`, and only with at least one
   participant **connected** — `connected_count` is informed by whoever watches
@@ -578,24 +596,84 @@ defmodule LiveQuiz.Games do
   stays out of it (AD-23). Somebody merely signed up, disconnected or gone does
   not count.
 
-  The transition is one guarded `UPDATE`, so two connections starting the same
-  room at the same instant produce a single `started_at` and the loser is told
-  `:invalid_transition`. From here on new sign-ups are refused, while whoever
-  was already in may still come back.
+  Starting copies every question of the quiz, with its options and its answer
+  key, into the match, and flips the status in the **same transaction** (AD-36):
+  a room that is `in_progress` without a snapshot could neither be advanced nor
+  played, so either the whole content is frozen or nothing happens at all. From
+  that instant the match no longer reads the quiz — see
+  `list_snapshot_questions/1` — and editing or deleting the quiz afterwards
+  cannot rewrite what was played.
+
+  The quiz is checked again here, and not only when the room was opened: the
+  lobby may have lasted any amount of time. A quiz that lost its questions
+  answers `:quiz_not_playable`, and one that is gone answers `:quiz_unavailable`.
+
+  Idempotent for the host: asking again for a match that is already running
+  gives that match back, with the snapshot it already has and without a second
+  `{:game_started, session}`. That courtesy is the host's alone — anybody else
+  is `:unauthorized`, and a room that is over never reopens.
   """
   @spec start_game_session(Scope.t(), GameSession.t(), non_neg_integer()) ::
           {:ok, GameSession.t()}
           | {:error, :unauthorized}
           | {:error, :invalid_transition}
           | {:error, :no_connected_participants}
+          | {:error, :quiz_not_playable}
+          | {:error, :quiz_unavailable}
   def start_game_session(%Scope{} = scope, %GameSession{} = session, connected_count)
       when is_integer(connected_count) and connected_count >= 0 do
-    with {:ok, session} <- fetch_hosted_session(scope, session),
-         :ok <- ensure_startable(session, connected_count),
-         {:ok, session} <- go_live(session) do
-      broadcast(session.id, {:game_started, session})
-      {:ok, session}
+    case fetch_hosted_session(scope, session) do
+      {:ok, %GameSession{status: :in_progress} = running} -> {:ok, running}
+      {:ok, %GameSession{} = current} -> start_and_announce(scope, current, connected_count)
+      {:error, :unauthorized} = error -> error
     end
+  end
+
+  @doc """
+  The frozen questions of a match, in order, with their options preloaded.
+
+  This is the only content an ongoing match ever reads: it touches
+  `game_session_questions` and `game_session_answer_options` and never the quiz
+  tables (AD-36), so it answers just the same after the quiz has been deleted.
+  """
+  @spec list_snapshot_questions(GameSession.t()) :: [GameSessionQuestion.t()]
+  def list_snapshot_questions(%GameSession{id: id}) do
+    id
+    |> snapshot_questions()
+    |> order_by([q], asc: q.position)
+    |> preload(:answer_options)
+    |> Repo.all()
+  end
+
+  @doc """
+  The frozen question at a position of a match, with its options preloaded.
+
+  Positions run from 1 to `snapshot_question_count/1` with no gaps, whatever
+  the quiz they were copied from looked like.
+  """
+  @spec get_snapshot_question(GameSession.t(), pos_integer()) ::
+          {:ok, GameSessionQuestion.t()} | {:error, :not_found}
+  def get_snapshot_question(%GameSession{id: id}, position) when is_integer(position) do
+    id
+    |> snapshot_questions()
+    |> where([q], q.position == ^position)
+    |> preload(:answer_options)
+    |> Repo.one()
+    |> case do
+      nil -> {:error, :not_found}
+      %GameSessionQuestion{} = question -> {:ok, question}
+    end
+  end
+
+  @doc """
+  How many questions were frozen into the match.
+
+  Zero for a room still in the lobby: the snapshot only exists from the start
+  onwards.
+  """
+  @spec snapshot_question_count(GameSession.t()) :: non_neg_integer()
+  def snapshot_question_count(%GameSession{id: id}) do
+    id |> snapshot_questions() |> Repo.aggregate(:count, :id)
   end
 
   @doc """
@@ -937,11 +1015,11 @@ defmodule LiveQuiz.Games do
     |> Repo.exists?()
   end
 
-  defp insert_with_join_code(_scope, _quiz, 0), do: {:error, :code_generation_failed}
+  defp insert_with_join_code(_scope, _quiz, _attrs, 0), do: {:error, :code_generation_failed}
 
-  defp insert_with_join_code(%Scope{} = scope, %Quiz{} = quiz, attempts_left) do
+  defp insert_with_join_code(%Scope{} = scope, %Quiz{} = quiz, attrs, attempts_left) do
     %GameSession{host_id: scope.user.id, quiz_id: quiz.id}
-    |> GameSession.create_changeset(%{quiz_title: quiz.title, join_code: generate_join_code()})
+    |> GameSession.create_changeset(create_attrs(quiz, attrs))
     # A rejected insert would poison the surrounding transaction and take the
     # retry down with it, so each attempt gets its own savepoint to roll back to.
     |> Repo.insert(mode: :savepoint)
@@ -950,11 +1028,22 @@ defmodule LiveQuiz.Games do
         {:ok, session}
 
       {:error, %Changeset{} = changeset} ->
-        handle_insert_error(scope, quiz, changeset, attempts_left)
+        handle_insert_error(scope, quiz, attrs, changeset, attempts_left)
     end
   end
 
-  defp handle_insert_error(scope, quiz, changeset, attempts_left) do
+  # The title and the code are the room's own business and never come from the
+  # caller; the duration is the only thing the host chooses, so it is the only
+  # key read out of `attrs`. String and atom keys are both accepted because the
+  # value reaches here either from a form or from a controller.
+  defp create_attrs(%Quiz{} = quiz, attrs) do
+    attrs
+    |> Map.new(fn {key, value} -> {to_string(key), value} end)
+    |> Map.take(["question_duration_seconds"])
+    |> Map.merge(%{"quiz_title" => quiz.title, "join_code" => generate_join_code()})
+  end
+
+  defp handle_insert_error(scope, quiz, attrs, changeset, attempts_left) do
     cond do
       taken?(changeset, :join_code) ->
         # Astronomically unlikely with 32⁶ codes, so a collision is worth a
@@ -964,7 +1053,7 @@ defmodule LiveQuiz.Games do
             "#{attempts_left - 1} attempt(s) left"
         )
 
-        insert_with_join_code(scope, quiz, attempts_left - 1)
+        insert_with_join_code(scope, quiz, attrs, attempts_left - 1)
 
       # The advisory lock already serializes the same person, so this only
       # fires if the lock is bypassed; answering with the same reason as the
@@ -1220,11 +1309,135 @@ defmodule LiveQuiz.Games do
     end
   end
 
+  defp start_and_announce(%Scope{} = scope, %GameSession{} = session, connected_count) do
+    with :ok <- ensure_startable(session, connected_count),
+         {:ok, outcome} <- freeze_and_go_live(scope, session) do
+      case outcome do
+        # Somebody else's start committed while this one waited for the row:
+        # the match is running and has its single snapshot, and announcing it
+        # again would replay the beginning for everyone listening.
+        {:already_started, running} -> {:ok, running}
+        {:started, started} -> announce_start(started)
+      end
+    end
+  end
+
+  defp announce_start(%GameSession{} = session) do
+    broadcast(session.id, {:game_started, session})
+    {:ok, session}
+  end
+
   defp ensure_startable(%GameSession{status: :waiting}, connected_count) do
     if connected_count > 0, do: :ok, else: {:error, :no_connected_participants}
   end
 
   defp ensure_startable(%GameSession{}, _connected_count), do: {:error, :invalid_transition}
+
+  # The snapshot and the transition share one transaction (AD-36), opened by
+  # locking the room's own row: whoever comes second waits there and finds the
+  # match already running instead of writing a second snapshot over the unique
+  # index of `(game_session_id, position)`.
+  defp freeze_and_go_live(%Scope{} = scope, %GameSession{id: id}) do
+    Repo.transaction(fn ->
+      case lock_session(id) do
+        %GameSession{status: :waiting} = session ->
+          freeze_quiz_into(scope, session)
+
+        %GameSession{status: :in_progress} = session ->
+          {:already_started, session}
+
+        _over_or_gone ->
+          Repo.rollback(:invalid_transition)
+      end
+    end)
+  end
+
+  defp freeze_quiz_into(%Scope{} = scope, %GameSession{} = session) do
+    with {:ok, quiz} <- fetch_quiz_to_freeze(scope, session),
+         :ok <- ensure_playable(quiz),
+         :ok <- write_snapshot(session, quiz.questions),
+         {:ok, started} <- go_live(session) do
+      {:started, started}
+    else
+      {:error, reason} -> Repo.rollback(reason)
+    end
+  end
+
+  # The quiz is nullified out of the room when it is deleted, so a room with no
+  # `quiz_id` is one whose quiz is already gone and needs no query to know it.
+  defp fetch_quiz_to_freeze(%Scope{}, %GameSession{quiz_id: nil}), do: {:error, :quiz_unavailable}
+
+  defp fetch_quiz_to_freeze(%Scope{} = scope, %GameSession{quiz_id: quiz_id}) do
+    case Quizzes.fetch_quiz_with_questions(scope, quiz_id) do
+      {:ok, %Quiz{} = quiz} -> {:ok, quiz}
+      :error -> {:error, :quiz_unavailable}
+    end
+  end
+
+  # Two `insert_all/3` rather than a row at a time: a full quiz is a hundred
+  # options, and a hundred round trips would hold the room's row locked for no
+  # reason. The options need the ids the database just handed out, so the
+  # questions come back with `position` as well — the order rows are returned in
+  # is not guaranteed, and the position is what correlates them.
+  defp write_snapshot(%GameSession{id: session_id}, questions) do
+    at = now()
+    questions = Enum.sort_by(questions, & &1.position)
+
+    {_inserted, snapshot_questions} =
+      Repo.insert_all(GameSessionQuestion, snapshot_question_rows(session_id, questions, at),
+        returning: [:id, :position]
+      )
+
+    ids_by_position = Map.new(snapshot_questions, &{&1.position, &1.id})
+
+    Repo.insert_all(
+      GameSessionAnswerOption,
+      snapshot_option_rows(questions, ids_by_position, at)
+    )
+
+    :ok
+  end
+
+  # Positions are handed out from 1 with no gaps, whatever the quiz looked like:
+  # a quiz whose question 2 was deleted freezes as 1 and 2, and the execution
+  # can walk the match by counting instead of hunting for the next position.
+  defp snapshot_question_rows(session_id, questions, at) do
+    questions
+    |> Enum.with_index(1)
+    |> Enum.map(fn {question, position} ->
+      %{
+        game_session_id: session_id,
+        question_id: question.id,
+        position: position,
+        question_text: question.text,
+        inserted_at: at,
+        updated_at: at
+      }
+    end)
+  end
+
+  defp snapshot_option_rows(questions, ids_by_position, at) do
+    questions
+    |> Enum.with_index(1)
+    |> Enum.flat_map(fn {question, position} ->
+      snapshot_question_id = Map.fetch!(ids_by_position, position)
+
+      question.answer_options
+      |> Enum.sort_by(& &1.position)
+      |> Enum.with_index(1)
+      |> Enum.map(fn {option, option_position} ->
+        %{
+          game_session_question_id: snapshot_question_id,
+          original_answer_option_id: option.id,
+          text: option.text,
+          position: option_position,
+          is_correct: option.is_correct,
+          inserted_at: at,
+          updated_at: at
+        }
+      end)
+    end)
+  end
 
   # The status in the `WHERE` is the actual guard, not the check above it: the
   # room only goes live if the database still sees it waiting, so a second
@@ -1238,6 +1451,14 @@ defmodule LiveQuiz.Games do
       {1, [session]} -> {:ok, session}
       {0, _unchanged} -> {:error, :invalid_transition}
     end
+  end
+
+  defp lock_session(id) do
+    GameSession |> where([s], s.id == ^id) |> lock("FOR UPDATE") |> Repo.one()
+  end
+
+  defp snapshot_questions(session_id) do
+    where(GameSessionQuestion, [q], q.game_session_id == ^session_id)
   end
 
   # Both ways of closing a room share the transition and differ only in the

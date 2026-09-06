@@ -54,6 +54,10 @@ defmodule LiveQuizWeb.Api.FallbackController do
     error(conn, :unprocessable_entity, "O quiz precisa ter ao menos uma pergunta")
   end
 
+  def call(conn, {:error, :quiz_unavailable}) do
+    error(conn, :conflict, "O quiz desta sala não existe mais")
+  end
+
   def call(conn, {:error, :host_already_in_session}) do
     error(conn, :conflict, "Você já possui uma sala ativa")
   end

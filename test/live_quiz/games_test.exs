@@ -15,6 +15,8 @@ defmodule LiveQuiz.GamesTest do
   alias LiveQuiz.Games.Participant
   alias LiveQuiz.Games.ParticipantToken
   alias LiveQuiz.Quizzes
+  alias LiveQuiz.Quizzes.AnswerOption
+  alias LiveQuiz.Quizzes.Question
 
   describe "create_game_session/2" do
     setup :host_with_playable_quiz
@@ -1845,18 +1847,43 @@ defmodule LiveQuiz.GamesTest do
 
       assert {:error, :unauthorized} = Games.start_game_session(participant_scope, session, 1)
       assert Repo.get!(GameSession, session.id).status == :waiting
+      assert Games.snapshot_question_count(session) == 0
     end
 
     test "recusa que um terceiro autenticado inicie a sala", %{session: session} do
       assert {:error, :unauthorized} = Games.start_game_session(user_scope_fixture(), session, 1)
       assert Repo.get!(GameSession, session.id).status == :waiting
+      assert Games.snapshot_question_count(session) == 0
     end
 
-    test "recusa iniciar uma sala já iniciada", %{scope: scope, session: session} do
-      started = start_session(session)
+    test "recusa reabrir uma sala finalizada", %{scope: scope, session: session} do
+      finished = close_session(session, :finished)
 
-      assert {:error, :invalid_transition} = Games.start_game_session(scope, started, 1)
+      assert {:error, :invalid_transition} = Games.start_game_session(scope, finished, 1)
+      assert Repo.get!(GameSession, session.id).status == :finished
+      assert Games.snapshot_question_count(session) == 0
+    end
+
+    test "devolve a partida quando o host inicia de novo", %{scope: scope, session: session} do
+      participant_fixture(session)
+      assert {:ok, started} = Games.start_game_session(scope, session, 1)
+
+      assert {:ok, again} = Games.start_game_session(scope, started, 1)
+
+      assert again.id == started.id
+      assert again.started_at == started.started_at
       assert Repo.get!(GameSession, session.id).started_at == started.started_at
+    end
+
+    test "recusa que um terceiro inicie uma sala já iniciada", %{
+      scope: scope,
+      session: session
+    } do
+      participant_fixture(session)
+      assert {:ok, started} = Games.start_game_session(scope, session, 1)
+
+      assert {:error, :unauthorized} =
+               Games.start_game_session(user_scope_fixture(), started, 1)
     end
 
     test "recusa reabrir uma sala cancelada", %{scope: scope, session: session} do
@@ -1892,6 +1919,369 @@ defmodule LiveQuiz.GamesTest do
 
       assert {:ok, back} = Games.rejoin_game_session(token)
       assert back.id == participant.id
+    end
+  end
+
+  describe "start_game_session/3 e o congelamento do quiz" do
+    test "congela perguntas, alternativas e gabarito na ordem do quiz" do
+      %{scope: scope, quiz: quiz, session: session} = room_with_questions(3)
+
+      assert {:ok, started} = Games.start_game_session(scope, session, 1)
+
+      assert started.status == :in_progress
+      assert started.started_at
+
+      questions = Games.list_snapshot_questions(started)
+
+      assert Enum.map(questions, & &1.position) == [1, 2, 3]
+
+      assert Enum.map(questions, & &1.question_text) == [
+               "Pergunta 1 do quiz",
+               "Pergunta 2 do quiz",
+               "Pergunta 3 do quiz"
+             ]
+
+      assert Enum.map(questions, & &1.question_id) == question_ids(quiz)
+      assert length(Enum.flat_map(questions, & &1.answer_options)) == 12
+
+      for question <- questions do
+        assert Enum.map(question.answer_options, & &1.position) == [1, 2, 3, 4]
+
+        assert Enum.map(question.answer_options, & &1.text) == [
+                 "Brasília",
+                 "Rio de Janeiro",
+                 "São Paulo",
+                 "Salvador"
+               ]
+
+        assert Enum.map(question.answer_options, & &1.is_correct) == [true, false, false, false]
+        assert Enum.all?(question.answer_options, & &1.original_answer_option_id)
+      end
+    end
+
+    test "congela um quiz de uma única pergunta" do
+      %{scope: scope, session: session} = room_with_questions(1)
+
+      assert {:ok, started} = Games.start_game_session(scope, session, 1)
+
+      assert Games.snapshot_question_count(started) == 1
+      assert [%{position: 1, answer_options: options}] = Games.list_snapshot_questions(started)
+      assert length(options) == 4
+    end
+
+    test "congela um quiz de vinte perguntas" do
+      %{scope: scope, session: session} = room_with_questions(20)
+
+      assert {:ok, started} = Games.start_game_session(scope, session, 1)
+
+      questions = Games.list_snapshot_questions(started)
+
+      assert Enum.map(questions, & &1.position) == Enum.to_list(1..20)
+      assert length(Enum.flat_map(questions, & &1.answer_options)) == 80
+    end
+
+    test "renumera as posições de 1 a n quando o quiz tem buracos" do
+      scope = user_scope_fixture()
+      quiz = quiz_fixture(scope)
+      first = question_fixture(scope, quiz, %{text: "Pergunta que ficou"})
+      second = question_fixture(scope, quiz, %{text: "Pergunta que saiu"})
+      third = question_fixture(scope, quiz, %{text: "Pergunta do fim"})
+      Repo.delete!(second)
+
+      session = room_for(scope, quiz)
+
+      assert {:ok, started} = Games.start_game_session(scope, session, 1)
+
+      assert Enum.map(Games.list_snapshot_questions(started), &{&1.position, &1.question_id}) ==
+               [{1, first.id}, {2, third.id}]
+    end
+
+    test "preserva o gabarito quando a correta é a última alternativa" do
+      scope = user_scope_fixture()
+      quiz = quiz_fixture(scope)
+
+      question_fixture(scope, quiz, %{
+        answer_options: [
+          %{text: "Rio de Janeiro", position: 1, is_correct: false},
+          %{text: "São Paulo", position: 2, is_correct: false},
+          %{text: "Salvador", position: 3, is_correct: false},
+          %{text: "Brasília", position: 4, is_correct: true}
+        ]
+      })
+
+      session = room_for(scope, quiz)
+
+      assert {:ok, started} = Games.start_game_session(scope, session, 1)
+
+      assert [%{answer_options: options}] = Games.list_snapshot_questions(started)
+      assert Enum.map(options, & &1.is_correct) == [false, false, false, true]
+      assert List.last(Enum.map(options, & &1.text)) == "Brasília"
+    end
+
+    test "o snapshot não muda quando o quiz é editado depois" do
+      %{scope: scope, quiz: quiz, session: session} = room_with_questions(2)
+
+      assert {:ok, started} = Games.start_game_session(scope, session, 1)
+
+      [first_id | _rest] = question_ids(quiz)
+
+      Repo.update_all(from(q in Question, where: q.id == ^first_id),
+        set: [text: "Enunciado trocado depois do início"]
+      )
+
+      Repo.update_all(from(o in AnswerOption, where: o.question_id == ^first_id),
+        set: [text: "Alternativa trocada"]
+      )
+
+      assert {:ok, frozen} = Games.get_snapshot_question(started, 1)
+      assert frozen.question_text == "Pergunta 1 do quiz"
+      assert List.first(Enum.map(frozen.answer_options, & &1.text)) == "Brasília"
+    end
+
+    test "a falha ao gravar as alternativas não deixa partida iniciada nem snapshot" do
+      %{scope: scope, session: session} = room_with_questions(2)
+
+      # A `CHECK (false)` posta no meio do congelamento é a forma de reproduzir
+      # o que a aplicação nunca provoca sozinha: a segunda inserção falhando
+      # depois de a primeira ter escrito. Ela desaparece com a transação do
+      # sandbox no fim do teste.
+      Repo.query!(
+        "ALTER TABLE game_session_answer_options ADD CONSTRAINT falha_forcada CHECK (false) NOT VALID"
+      )
+
+      assert_raise Postgrex.Error, fn -> Games.start_game_session(scope, session, 1) end
+
+      current = Repo.get!(GameSession, session.id)
+      assert current.status == :waiting
+      assert is_nil(current.started_at)
+      assert Games.snapshot_question_count(current) == 0
+    end
+
+    test "iniciar de novo não duplica o snapshot" do
+      %{scope: scope, session: session} = room_with_questions(3)
+
+      assert {:ok, started} = Games.start_game_session(scope, session, 1)
+      assert {:ok, again} = Games.start_game_session(scope, started, 1)
+
+      assert again.started_at == started.started_at
+      assert Games.snapshot_question_count(again) == 3
+
+      assert length(Enum.flat_map(Games.list_snapshot_questions(again), & &1.answer_options)) ==
+               12
+    end
+
+    test "recusa iniciar quando o quiz foi removido do banco" do
+      %{scope: scope, quiz: quiz, session: session} = room_with_questions(2)
+
+      Repo.delete!(quiz)
+
+      assert {:error, :quiz_unavailable} = Games.start_game_session(scope, session, 1)
+
+      current = Repo.get!(GameSession, session.id)
+      assert current.status == :waiting
+      assert is_nil(current.started_at)
+      assert Games.snapshot_question_count(current) == 0
+    end
+
+    test "recusa congelar um quiz que não é do host" do
+      scope = user_scope_fixture()
+      other_scope = user_scope_fixture()
+      quiz = playable_quiz(other_scope)
+      session = game_session_fixture(%{host: scope.user, quiz: quiz, status: :waiting})
+      participant_fixture(session)
+
+      assert {:error, :quiz_unavailable} = Games.start_game_session(scope, session, 1)
+
+      assert Repo.get!(GameSession, session.id).status == :waiting
+      assert Games.snapshot_question_count(session) == 0
+    end
+
+    test "recusa iniciar quando o quiz perdeu todas as perguntas" do
+      %{scope: scope, quiz: quiz, session: session} = room_with_questions(2)
+
+      Repo.delete_all(from q in Question, where: q.quiz_id == ^quiz.id)
+
+      assert {:error, :quiz_not_playable} = Games.start_game_session(scope, session, 1)
+
+      assert Repo.get!(GameSession, session.id).status == :waiting
+      assert Games.snapshot_question_count(session) == 0
+    end
+
+    test "o começo é publicado uma única vez, com o snapshot já gravado" do
+      %{scope: scope, session: session} = room_with_questions(3)
+      :ok = Games.subscribe(session.id)
+
+      assert {:ok, started} = Games.start_game_session(scope, session, 1)
+
+      assert_receive {:game_started, %GameSession{id: id} = published}
+      assert id == started.id
+      assert Games.snapshot_question_count(published) == 3
+
+      assert {:ok, _again} = Games.start_game_session(scope, started, 1)
+      refute_receive {:game_started, _session}, 50
+    end
+  end
+
+  describe "leitura do snapshot" do
+    setup do
+      %{scope: scope, quiz: quiz, session: session} = room_with_questions(3)
+      assert {:ok, started} = Games.start_game_session(scope, session, 1)
+
+      %{scope: scope, quiz: quiz, session: started}
+    end
+
+    test "list_snapshot_questions/1 devolve tudo em ordem com as alternativas", %{
+      session: session
+    } do
+      questions = Games.list_snapshot_questions(session)
+
+      assert Enum.map(questions, & &1.position) == [1, 2, 3]
+
+      for question <- questions do
+        assert Enum.map(question.answer_options, & &1.position) == [1, 2, 3, 4]
+      end
+    end
+
+    test "list_snapshot_questions/1 devolve lista vazia para uma sala no lobby" do
+      %{session: waiting} = room_with_questions(2)
+
+      assert Games.list_snapshot_questions(waiting) == []
+      assert Games.snapshot_question_count(waiting) == 0
+    end
+
+    test "get_snapshot_question/2 encontra a pergunta da posição", %{session: session} do
+      assert {:ok, question} = Games.get_snapshot_question(session, 2)
+
+      assert question.position == 2
+      assert question.question_text == "Pergunta 2 do quiz"
+      assert length(question.answer_options) == 4
+    end
+
+    test "get_snapshot_question/2 recusa uma posição inexistente", %{session: session} do
+      assert {:error, :not_found} = Games.get_snapshot_question(session, 0)
+      assert {:error, :not_found} = Games.get_snapshot_question(session, 4)
+      assert {:error, :not_found} = Games.get_snapshot_question(session, 99)
+    end
+
+    test "get_snapshot_question/2 não enxerga a pergunta de outra partida", %{session: session} do
+      %{scope: other_scope, session: other} = room_with_questions(3)
+      assert {:ok, other_started} = Games.start_game_session(other_scope, other, 1)
+
+      assert {:ok, mine} = Games.get_snapshot_question(session, 1)
+      assert {:ok, theirs} = Games.get_snapshot_question(other_started, 1)
+
+      refute mine.id == theirs.id
+    end
+
+    test "snapshot_question_count/1 conta as perguntas congeladas", %{session: session} do
+      assert Games.snapshot_question_count(session) == 3
+    end
+
+    test "a leitura continua inteira depois que o quiz é excluído", %{
+      quiz: quiz,
+      session: session
+    } do
+      Repo.delete!(quiz)
+
+      questions = Games.list_snapshot_questions(session)
+
+      assert Enum.map(questions, & &1.position) == [1, 2, 3]
+      assert List.first(Enum.map(questions, & &1.question_text)) == "Pergunta 1 do quiz"
+      assert Enum.all?(questions, &is_nil(&1.question_id))
+      assert length(Enum.flat_map(questions, & &1.answer_options)) == 12
+      assert {:ok, %{position: 1}} = Games.get_snapshot_question(session, 1)
+      assert Games.snapshot_question_count(session) == 3
+    end
+
+    test "nenhuma leitura do snapshot consulta as tabelas de quizzes", %{session: session} do
+      refute_quiz_tables_queried(fn ->
+        Games.list_snapshot_questions(session)
+        Games.get_snapshot_question(session, 1)
+        Games.snapshot_question_count(session)
+      end)
+    end
+  end
+
+  describe "create_game_session/3 e a duração das perguntas" do
+    test "usa trinta segundos quando a duração não é informada" do
+      scope = user_scope_fixture()
+      quiz = playable_quiz(scope)
+
+      assert {:ok, session} = Games.create_game_session(scope, quiz.id)
+
+      assert session.question_duration_seconds == 30
+      assert Repo.get!(GameSession, session.id).question_duration_seconds == 30
+    end
+
+    test "aceita cada uma das durações disponíveis" do
+      for duration <- GameSession.question_durations() do
+        scope = user_scope_fixture()
+        quiz = playable_quiz(scope)
+
+        assert {:ok, session} =
+                 Games.create_game_session(scope, quiz.id, %{
+                   question_duration_seconds: duration
+                 })
+
+        assert session.question_duration_seconds == duration
+        assert Repo.get!(GameSession, session.id).question_duration_seconds == duration
+      end
+    end
+
+    test "aceita a duração vinda de um formulário, com chave em texto" do
+      scope = user_scope_fixture()
+      quiz = playable_quiz(scope)
+
+      assert {:ok, session} =
+               Games.create_game_session(scope, quiz.id, %{
+                 "question_duration_seconds" => "60"
+               })
+
+      assert session.question_duration_seconds == 60
+    end
+
+    test "recusa uma duração fora da lista e não abre a sala" do
+      for duration <- [45, 15, 0] do
+        scope = user_scope_fixture()
+        quiz = playable_quiz(scope)
+
+        assert {:error, changeset} =
+                 Games.create_game_session(scope, quiz.id, %{
+                   question_duration_seconds: duration
+                 })
+
+        assert errors_on(changeset).question_duration_seconds == [
+                 "escolha uma das durações disponíveis"
+               ]
+
+        refute hosted_any?(scope)
+      end
+    end
+
+    test "uma duração em branco cai no padrão" do
+      scope = user_scope_fixture()
+      quiz = playable_quiz(scope)
+
+      assert {:ok, session} =
+               Games.create_game_session(scope, quiz.id, %{"question_duration_seconds" => ""})
+
+      assert session.question_duration_seconds == 30
+    end
+
+    test "ignora qualquer outra chave enviada junto" do
+      scope = user_scope_fixture()
+      quiz = playable_quiz(scope)
+
+      assert {:ok, session} =
+               Games.create_game_session(scope, quiz.id, %{
+                 "quiz_title" => "Título inventado",
+                 "status" => "in_progress",
+                 "question_duration_seconds" => 20
+               })
+
+      assert session.quiz_title == quiz.title
+      assert session.status == :waiting
+      assert session.question_duration_seconds == 20
     end
   end
 
@@ -2177,7 +2567,7 @@ defmodule LiveQuiz.GamesTest do
       assert is_nil(current.expires_at)
     end
 
-    test "duas chamadas de início produzem um único started_at", %{
+    test "duas chamadas de início produzem um único started_at e um único snapshot", %{
       scope: scope,
       session: session
     } do
@@ -2186,18 +2576,26 @@ defmodule LiveQuiz.GamesTest do
       results =
         in_parallel([1, 2], fn _attempt -> Games.start_game_session(scope, session, 1) end)
 
-      started =
-        Enum.filter(results, fn
-          {:ok, %GameSession{}} -> true
-          _refused -> false
-        end)
-
-      assert [{:ok, %GameSession{} = single}] = started
-      assert Enum.count(results, &(&1 == {:error, :invalid_transition})) == 1
+      assert [{:ok, %GameSession{} = first}, {:ok, %GameSession{} = second}] = results
+      assert first.started_at == second.started_at
 
       current = Repo.get!(GameSession, session.id)
       assert current.status == :in_progress
-      assert current.started_at == single.started_at
+      assert current.started_at == first.started_at
+      assert Games.snapshot_question_count(current) == 1
+    end
+
+    test "dois inícios simultâneos publicam o começo uma única vez", %{
+      scope: scope,
+      session: session
+    } do
+      participant_fixture(session)
+      :ok = Games.subscribe(session.id)
+
+      in_parallel([1, 2], fn _attempt -> Games.start_game_session(scope, session, 1) end)
+
+      assert_receive {:game_started, %GameSession{}}
+      refute_receive {:game_started, _session}, 50
     end
   end
 
@@ -2603,6 +3001,68 @@ defmodule LiveQuiz.GamesTest do
     question_fixture(scope, quiz)
 
     quiz
+  end
+
+  # A host, a quiz of `count` complete questions and a room waiting on it with
+  # somebody signed up — the shape every freezing test starts from.
+  defp room_with_questions(count) do
+    scope = user_scope_fixture()
+    quiz = quiz_fixture(scope, %{title: "Quiz de #{count} pergunta(s)"})
+
+    for index <- 1..count//1 do
+      question_fixture(scope, quiz, %{text: "Pergunta #{index} do quiz"})
+    end
+
+    %{scope: scope, quiz: quiz, session: room_for(scope, quiz)}
+  end
+
+  defp room_for(scope, quiz) do
+    session = game_session_fixture(%{host: scope.user, quiz: quiz, status: :waiting})
+    participant_fixture(session)
+
+    session
+  end
+
+  defp question_ids(quiz) do
+    Repo.all(from q in Question, where: q.quiz_id == ^quiz.id, order_by: q.position, select: q.id)
+  end
+
+  # The quiz tables are named inside the snapshot ones — `game_session_questions`
+  # ends in `questions` — so the check is for the quoted table name, which only
+  # matches the real thing.
+  defp refute_quiz_tables_queried(fun) do
+    handler_id = "snapshot-queries-#{System.unique_integer([:positive])}"
+    caller = self()
+
+    :telemetry.attach(
+      handler_id,
+      [:live_quiz, :repo, :query],
+      fn _event, _measurements, metadata, _config ->
+        if self() == caller, do: send(caller, {:snapshot_query, metadata.query})
+      end,
+      nil
+    )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    fun.()
+
+    queries = collected_queries()
+    assert queries != []
+
+    for query <- queries do
+      refute String.contains?(query, ~s("questions")), "consultou questions: #{query}"
+      refute String.contains?(query, ~s("answer_options")), "consultou answer_options: #{query}"
+      refute String.contains?(query, ~s("quizzes")), "consultou quizzes: #{query}"
+    end
+  end
+
+  defp collected_queries(acc \\ []) do
+    receive do
+      {:snapshot_query, query} -> collected_queries([query | acc])
+    after
+      0 -> Enum.reverse(acc)
+    end
   end
 
   defp hosted_by(scope), do: from(s in GameSession, where: s.host_id == ^scope.user.id)
