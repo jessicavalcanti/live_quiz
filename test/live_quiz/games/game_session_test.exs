@@ -43,6 +43,10 @@ defmodule LiveQuiz.Games.GameSessionTest do
       end
     end
 
+    test "question_durations/0 lists the four durations of AD-38" do
+      assert GameSession.question_durations() == [10, 20, 30, 60]
+    end
+
     test "join_code_length/0 and join_code_alphabet/0 expose the AD-25 code shape" do
       assert GameSession.join_code_length() == 6
       assert GameSession.join_code_alphabet() == "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
@@ -158,6 +162,136 @@ defmodule LiveQuiz.Games.GameSessionTest do
 
       refute changeset.valid?
       assert "can't be blank" in errors_on(changeset).host_id
+    end
+
+    test "defaults the question duration to 30 seconds", %{host: host} do
+      session = apply_changes(GameSession.create_changeset(new_session(host), valid_attrs()))
+
+      assert session.question_duration_seconds == 30
+    end
+
+    test "accepts every duration of AD-38", %{host: host} do
+      for duration <- GameSession.question_durations() do
+        changeset =
+          GameSession.create_changeset(
+            new_session(host),
+            valid_attrs(%{question_duration_seconds: duration})
+          )
+
+        assert changeset.valid?, "expected #{duration} to be accepted"
+        assert get_field(changeset, :question_duration_seconds) == duration
+      end
+    end
+
+    test "rejects a duration outside the list", %{host: host} do
+      for duration <- [0, 45, 61, -30] do
+        changeset =
+          GameSession.create_changeset(
+            new_session(host),
+            valid_attrs(%{question_duration_seconds: duration})
+          )
+
+        refute changeset.valid?, "expected #{duration} to be rejected"
+
+        assert "escolha uma das durações disponíveis" in errors_on(changeset).question_duration_seconds
+      end
+    end
+
+    test "requires a duration", %{host: host} do
+      changeset =
+        GameSession.create_changeset(
+          new_session(host),
+          valid_attrs(%{question_duration_seconds: nil})
+        )
+
+      refute changeset.valid?
+      assert "can't be blank" in errors_on(changeset).question_duration_seconds
+    end
+  end
+
+  describe "question duration in the database" do
+    test "persists a duration from the list" do
+      session = game_session_fixture(%{question_duration_seconds: 10})
+
+      assert Repo.get!(GameSession, session.id).question_duration_seconds == 10
+    end
+
+    test "refuses a duration outside the list even without the changeset" do
+      session = game_session_fixture()
+
+      for duration <- [0, 45, 61, -30] do
+        assert_raise Ecto.ConstraintError, ~r/question_duration_allowed/, fn ->
+          session
+          |> Ecto.Changeset.change(question_duration_seconds: duration)
+          |> Repo.update()
+        end
+      end
+    end
+  end
+
+  describe "question_open?/1 and question_closed?/1" do
+    test "are both false before the first advance" do
+      session = %GameSession{status: :in_progress}
+
+      refute GameSession.question_open?(session)
+      refute GameSession.question_closed?(session)
+    end
+
+    test "report an open question while no closing instant is stamped" do
+      session = %GameSession{
+        status: :in_progress,
+        current_question_position: 2,
+        current_question_started_at: ~U[2026-09-06 12:00:00.000000Z],
+        current_question_ends_at: ~U[2026-09-06 12:00:30.000000Z]
+      }
+
+      assert GameSession.question_open?(session)
+      refute GameSession.question_closed?(session)
+    end
+
+    test "report a closed question once the closing instant is stamped" do
+      session = %GameSession{
+        status: :in_progress,
+        current_question_position: 2,
+        current_question_started_at: ~U[2026-09-06 12:00:00.000000Z],
+        current_question_ends_at: ~U[2026-09-06 12:00:30.000000Z],
+        current_question_closed_at: ~U[2026-09-06 12:00:18.500000Z]
+      }
+
+      refute GameSession.question_open?(session)
+      assert GameSession.question_closed?(session)
+    end
+
+    test "are both false once the match is over, whatever the columns say" do
+      for status <- GameSession.closed_statuses() do
+        session = %GameSession{
+          status: status,
+          current_question_position: 3,
+          current_question_closed_at: ~U[2026-09-06 12:00:18.500000Z]
+        }
+
+        refute GameSession.question_open?(session), "expected no open question in #{status}"
+        refute GameSession.question_closed?(session), "expected no closed question in #{status}"
+      end
+    end
+
+    test "are both false while the room still waits for people" do
+      session = %GameSession{status: :waiting}
+
+      refute GameSession.question_open?(session)
+      refute GameSession.question_closed?(session)
+    end
+
+    test "follow the columns persisted by the room" do
+      session =
+        game_session_fixture(%{
+          status: :in_progress,
+          current_question_position: 1,
+          current_question_started_at: ~U[2026-09-06 12:00:00.000000Z],
+          current_question_ends_at: ~U[2026-09-06 12:00:30.000000Z]
+        })
+
+      assert GameSession.question_open?(Repo.get!(GameSession, session.id))
     end
   end
 

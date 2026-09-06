@@ -22,6 +22,7 @@ defmodule LiveQuiz.Games.GameSession do
   import Ecto.Changeset
 
   alias LiveQuiz.Accounts.User
+  alias LiveQuiz.Games.GameSessionQuestion
   alias LiveQuiz.Games.Participant
   alias LiveQuiz.Quizzes.Quiz
 
@@ -30,6 +31,7 @@ defmodule LiveQuiz.Games.GameSession do
   @statuses [:waiting, :in_progress, :finished, :cancelled, :expired]
   @active_statuses [:waiting, :in_progress]
   @closed_statuses [:finished, :cancelled, :expired]
+  @question_durations [10, 20, 30, 60]
   @join_code_length 6
   @join_code_alphabet "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
   @join_code_regex ~r/^[23456789ABCDEFGHJKLMNPQRSTUVWXYZ]{6}$/
@@ -44,6 +46,18 @@ defmodule LiveQuiz.Games.GameSession do
     field :host_disconnected_at, :utc_datetime
     field :expires_at, :utc_datetime
 
+    # The state of the current question is derived from these columns instead of
+    # living in an enum of its own (AD-37): open is a position filled with no
+    # `current_question_closed_at`, closed is that instant stamped. They are
+    # `utc_datetime_usec` while the phase 2 columns above are second-precision —
+    # deliberate, not an oversight: the speed bonus of phase 4 needs the
+    # fraction, and rounding it would tie half the room.
+    field :question_duration_seconds, :integer, default: 30
+    field :current_question_position, :integer
+    field :current_question_started_at, :utc_datetime_usec
+    field :current_question_ends_at, :utc_datetime_usec
+    field :current_question_closed_at, :utc_datetime_usec
+
     # Filled in by the context (F2-03), never read from the database.
     field :participants_count, :integer, virtual: true
     field :connected_count, :integer, virtual: true
@@ -51,6 +65,7 @@ defmodule LiveQuiz.Games.GameSession do
     belongs_to :quiz, Quiz
     belongs_to :host, User
     has_many :participants, Participant
+    has_many :snapshot_questions, GameSessionQuestion, preload_order: [asc: :position]
 
     timestamps(type: :utc_datetime)
   end
@@ -79,9 +94,43 @@ defmodule LiveQuiz.Games.GameSession do
   @spec join_code_alphabet() :: String.t()
   def join_code_alphabet, do: @join_code_alphabet
 
+  @doc "The durations a question may be given, in seconds (AD-38)."
+  @spec question_durations() :: [pos_integer()]
+  def question_durations, do: @question_durations
+
   @doc "Whether the room is still live — waiting for people or already running."
   @spec active?(t()) :: boolean()
   def active?(%__MODULE__{status: status}), do: status in @active_statuses
+
+  @doc """
+  Whether the match has a question taking answers right now.
+
+  A question is open while the match is running, a position has been advanced to
+  and no closing instant was stamped. The status is part of the answer because a
+  match that ended — finished, cancelled or expired — has no open question, even
+  if it stopped with a position still set.
+  """
+  @spec question_open?(t()) :: boolean()
+  def question_open?(%__MODULE__{status: :in_progress} = session) do
+    not is_nil(session.current_question_position) and
+      is_nil(session.current_question_closed_at)
+  end
+
+  def question_open?(%__MODULE__{}), do: false
+
+  @doc """
+  Whether the match is showing a closed question and waiting for the host.
+
+  This is the state between the reveal and the next advance; it is not reached
+  by a match that is over, which shows its ending screen instead.
+  """
+  @spec question_closed?(t()) :: boolean()
+  def question_closed?(%__MODULE__{status: :in_progress} = session) do
+    not is_nil(session.current_question_position) and
+      not is_nil(session.current_question_closed_at)
+  end
+
+  def question_closed?(%__MODULE__{}), do: false
 
   @doc """
   Casts and validates the attributes given when a room is opened.
@@ -93,11 +142,18 @@ defmodule LiveQuiz.Games.GameSession do
   @spec create_changeset(t(), map()) :: Ecto.Changeset.t()
   def create_changeset(session, attrs) do
     session
-    |> cast(attrs, [:quiz_title, :join_code])
+    |> cast(attrs, [:quiz_title, :join_code, :question_duration_seconds])
     |> update_change(:quiz_title, &trim/1)
     |> update_change(:join_code, &upcase/1)
-    |> validate_required([:quiz_title, :join_code, :host_id])
+    |> validate_required([:quiz_title, :join_code, :host_id, :question_duration_seconds])
     |> validate_length(:quiz_title, min: 3, max: 120)
+    |> validate_inclusion(:question_duration_seconds, @question_durations,
+      message: "escolha uma das durações disponíveis"
+    )
+    |> check_constraint(:question_duration_seconds,
+      name: :question_duration_allowed,
+      message: "escolha uma das durações disponíveis"
+    )
     |> validate_length(:join_code, is: @join_code_length)
     |> validate_format(:join_code, @join_code_regex,
       message: "deve usar apenas os caracteres #{@join_code_alphabet}"
