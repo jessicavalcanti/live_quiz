@@ -624,7 +624,7 @@ defmodule LiveQuizWeb.QuizLive.IndexTest do
       %{scope: Scope.for_user(user)}
     end
 
-    test "o botão de um quiz pronto envia para a criação da sala", %{
+    test "o botão de um quiz pronto abre o formulário da sala", %{
       conn: conn,
       scope: scope
     } do
@@ -633,9 +633,14 @@ defmodule LiveQuizWeb.QuizLive.IndexTest do
 
       {:ok, lv, _html} = live(conn, ~p"/quizzes")
 
-      assert has_element?(lv, ~s{#start-game-#{quiz.id}[action="/game-sessions"]})
       refute has_element?(lv, "#start-game-button-#{quiz.id}[disabled]")
       refute has_element?(lv, "#quiz-hint-#{quiz.id}")
+      refute has_element?(lv, "#start-game")
+
+      lv |> element("#start-game-button-#{quiz.id}") |> render_click()
+
+      assert has_element?(lv, "#start-game-form")
+      assert lv |> element("#start-game-title") |> render() =~ "Geografia"
     end
 
     test "um quiz sem perguntas fica desabilitado, com o motivo ao lado", %{
@@ -656,6 +661,187 @@ defmodule LiveQuizWeb.QuizLive.IndexTest do
 
       assert lv |> element("#quiz-hint-#{quiz.id}") |> render() =~
                "Adicione ao menos uma pergunta"
+    end
+  end
+
+  describe "duração da pergunta ao abrir a sala" do
+    setup :register_and_log_in_user
+
+    setup %{user: user} do
+      scope = Scope.for_user(user)
+      quiz = quiz_fixture(scope, %{title: "Geografia"})
+      question_fixture(scope, quiz)
+
+      %{scope: scope, quiz: quiz}
+    end
+
+    test "oferece as quatro durações, com 30 segundos marcada", %{conn: conn, quiz: quiz} do
+      lv = open_start_modal(conn, quiz)
+
+      for duration <- [10, 20, 30, 60] do
+        assert has_element?(
+                 lv,
+                 ~s{#start-game-form input[type="radio"][value="#{duration}"]}
+               )
+
+        assert lv
+               |> element("label[for=game_session_question_duration_seconds_#{duration}]")
+               |> render() =~ "#{duration} segundos"
+      end
+
+      assert has_element?(
+               lv,
+               ~s{#game_session_question_duration_seconds_30[checked]}
+             )
+
+      for duration <- [10, 20, 60] do
+        refute has_element?(
+                 lv,
+                 ~s{#game_session_question_duration_seconds_#{duration}[checked]}
+               )
+      end
+    end
+
+    test "agrupa os rádios em fieldset com legenda", %{conn: conn, quiz: quiz} do
+      lv = open_start_modal(conn, quiz)
+
+      assert lv |> element("#start-game-form fieldset legend") |> render() =~
+               "Tempo por pergunta"
+    end
+
+    test "abre a sala com a duração escolhida", %{conn: conn, scope: scope, quiz: quiz} do
+      for duration <- [10, 20, 30, 60] do
+        lv = open_start_modal(conn, quiz)
+
+        {:error, {:live_redirect, %{to: path}}} =
+          lv
+          |> form("#start-game-form", game_session: %{question_duration_seconds: duration})
+          |> render_submit()
+
+        session = Games.get_active_session_for_host(scope)
+
+        assert session.question_duration_seconds == duration
+        assert path == ~p"/game-sessions/#{session.join_code}/host"
+
+        Games.cancel_game_session(scope, session)
+      end
+    end
+
+    test "recusa uma duração fora da lista e explica", %{conn: conn, scope: scope, quiz: quiz} do
+      lv = open_start_modal(conn, quiz)
+
+      html =
+        render_submit(lv, "create_session", %{
+          "game_session" => %{"question_duration_seconds" => "45"}
+        })
+
+      assert html =~ "escolha uma das durações disponíveis"
+      assert has_element?(lv, "#start-game-form")
+      assert Games.get_active_session_for_host(scope) == nil
+    end
+
+    test "recusa uma submissão sem duração", %{conn: conn, scope: scope, quiz: quiz} do
+      lv = open_start_modal(conn, quiz)
+
+      html =
+        render_submit(lv, "create_session", %{
+          "game_session" => %{"question_duration_seconds" => ""}
+        })
+
+      assert html =~ "não pode ficar em branco"
+      assert has_element?(lv, "#start-game-form")
+      assert Games.get_active_session_for_host(scope) == nil
+    end
+
+    test "fecha o formulário sem abrir sala nenhuma", %{conn: conn, scope: scope, quiz: quiz} do
+      lv = open_start_modal(conn, quiz)
+
+      render_click(lv, "cancel_start", %{})
+
+      refute has_element?(lv, "#start-game-form")
+      assert Games.get_active_session_for_host(scope) == nil
+    end
+
+    test "leva quem já tem sala aberta para a sala dela", %{
+      conn: conn,
+      user: user,
+      scope: scope,
+      quiz: quiz
+    } do
+      open = game_session_fixture(%{host: user, status: :waiting})
+
+      lv = open_start_modal(conn, quiz)
+
+      assert {:error, {:live_redirect, %{to: path}}} =
+               lv
+               |> form("#start-game-form", game_session: %{question_duration_seconds: 10})
+               |> render_submit()
+
+      assert path == ~p"/game-sessions/#{open.join_code}/host"
+      assert Games.get_active_session_for_host(scope).id == open.id
+    end
+
+    # O botão de um quiz sem pergunta vem desabilitado, mas o evento ainda pode
+    # ser empurrado à mão: a recusa continua sendo do contexto, e a mensagem é a
+    # mesma da fase 2.
+    test "um envio forçado de quiz sem pergunta continua recusado", %{
+      conn: conn,
+      scope: scope
+    } do
+      empty = quiz_fixture(scope, %{title: "Sem perguntas"})
+
+      {:ok, lv, _html} = live(conn, ~p"/quizzes")
+
+      render_click(lv, "start_game", %{"id" => empty.id})
+
+      html =
+        render_submit(lv, "create_session", %{
+          "game_session" => %{"question_duration_seconds" => "30"}
+        })
+
+      assert html =~ "Adicione ao menos uma pergunta"
+      refute has_element?(lv, "#start-game-form")
+      assert Games.get_active_session_for_host(scope) == nil
+    end
+
+    test "recusa quem está participando de outra sala", %{
+      conn: conn,
+      user: user,
+      scope: scope,
+      quiz: quiz
+    } do
+      other_room = game_session_fixture(%{status: :waiting})
+      participant_fixture(other_room, %{user: user})
+
+      lv = open_start_modal(conn, quiz)
+
+      html =
+        lv
+        |> form("#start-game-form", game_session: %{question_duration_seconds: 10})
+        |> render_submit()
+
+      assert html =~ "Saia da sala em que você está"
+      refute has_element?(lv, "#start-game-form")
+      assert Games.get_active_session_for_host(scope) == nil
+    end
+
+    test "responde 404 para o quiz de outra pessoa", %{conn: conn} do
+      foreign = quiz_fixture(user_scope_fixture())
+
+      {:ok, lv, _html} = live(conn, ~p"/quizzes")
+
+      Process.flag(:trap_exit, true)
+
+      assert {{%Ecto.NoResultsError{}, _stacktrace}, _call} =
+               catch_exit(render_click(lv, "start_game", %{"id" => foreign.id}))
+    end
+
+    defp open_start_modal(conn, quiz) do
+      {:ok, lv, _html} = live(conn, ~p"/quizzes")
+
+      lv |> element("#start-game-button-#{quiz.id}") |> render_click()
+
+      lv
     end
   end
 

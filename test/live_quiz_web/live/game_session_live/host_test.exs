@@ -244,6 +244,83 @@ defmodule LiveQuizWeb.GameSessionLive.HostTest do
     end
   end
 
+  describe "perguntas e duração no lobby" do
+    setup :register_and_log_in_user
+
+    test "anuncia quantas perguntas e quanto tempo cada uma dura", %{
+      conn: conn,
+      user: user,
+      scope: scope
+    } do
+      quiz = quiz_fixture(scope, %{title: "Geografia"})
+      for _ <- 1..10, do: question_fixture(scope, quiz)
+
+      session =
+        game_session_fixture(%{
+          host: user,
+          quiz: quiz,
+          status: :waiting,
+          question_duration_seconds: 20
+        })
+
+      {:ok, lv, _html} = live(conn, ~p"/game-sessions/#{session.join_code}/host")
+
+      assert lv |> element("#match-setup") |> render() =~
+               "10 perguntas · 20 segundos por pergunta"
+    end
+
+    test "usa o singular quando o quiz tem uma pergunta só", %{
+      conn: conn,
+      user: user,
+      scope: scope
+    } do
+      quiz = quiz_fixture(scope, %{title: "Geografia"})
+      question_fixture(scope, quiz)
+
+      session =
+        game_session_fixture(%{
+          host: user,
+          quiz: quiz,
+          status: :waiting,
+          question_duration_seconds: 60
+        })
+
+      {:ok, lv, _html} = live(conn, ~p"/game-sessions/#{session.join_code}/host")
+
+      assert lv |> element("#match-setup") |> render() =~
+               "1 pergunta · 60 segundos por pergunta"
+    end
+
+    test "conta as perguntas do snapshot depois que a partida começa", %{
+      conn: conn,
+      user: user,
+      scope: scope
+    } do
+      quiz = quiz_fixture(scope, %{title: "Geografia"})
+      for _ <- 1..3, do: question_fixture(scope, quiz)
+
+      session = game_session_fixture(%{host: user, quiz: quiz, status: :waiting})
+      :ok = Games.subscribe(session.id)
+      session |> participant_fixture() |> connect_participant()
+
+      {:ok, lv, _html} = live(conn, ~p"/game-sessions/#{session.join_code}/host")
+
+      lv |> element("#start-game") |> render_click()
+
+      assert Games.snapshot_question_count(session) == 3
+      assert lv |> element("#match-setup") |> render() =~ "3 perguntas"
+    end
+
+    test "não oferece nenhum controle para mudar a duração", %{conn: conn, user: user} do
+      session = game_session_fixture(%{host: user, status: :waiting})
+
+      {:ok, lv, _html} = live(conn, ~p"/game-sessions/#{session.join_code}/host")
+
+      refute has_element?(lv, ~s{[name*="question_duration_seconds"]})
+      refute has_element?(lv, ~s{[type="radio"]})
+    end
+  end
+
   describe "contadores" do
     setup [:register_and_log_in_user, :waiting_room]
 

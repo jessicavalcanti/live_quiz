@@ -40,6 +40,7 @@ defmodule LiveQuizWeb.GameSessionLive.Player do
   alias LiveQuiz.Games.JoinCode
   alias LiveQuiz.Games.Participant
   alias LiveQuiz.Games.Presence
+  alias LiveQuizWeb.Formatters
   alias Phoenix.Socket.Broadcast
 
   @impl true
@@ -61,6 +62,7 @@ defmodule LiveQuizWeb.GameSessionLive.Player do
       |> assign(:ended, nil)
       |> assign(:leaving?, false)
       |> assign(:participants_empty?, true)
+      |> assign(:question_count, 0)
       |> stream(:participants, [])
 
     cond do
@@ -122,6 +124,9 @@ defmodule LiveQuizWeb.GameSessionLive.Player do
     |> assign(:participant, participant)
     |> assign(:connection_id, connection_id)
     |> assign(:host_connected?, is_nil(session.host_disconnected_at))
+    # The same number and the same duration the host is looking at: whoever is
+    # already in the room is going to play exactly this (F3-07).
+    |> assign(:question_count, Games.question_count(session))
     |> load_lobby()
   end
 
@@ -300,6 +305,7 @@ defmodule LiveQuizWeb.GameSessionLive.Player do
               host_connected?={@host_connected?}
               leaving?={@leaving?}
               code={@code}
+              question_count={@question_count}
             />
           <% true -> %>
             <.connecting_screen code={@code} />
@@ -317,6 +323,7 @@ defmodule LiveQuizWeb.GameSessionLive.Player do
   attr :host_connected?, :boolean, required: true
   attr :leaving?, :boolean, required: true
   attr :code, :string, required: true
+  attr :question_count, :integer, required: true
 
   defp lobby(assigns) do
     ~H"""
@@ -326,6 +333,10 @@ defmodule LiveQuizWeb.GameSessionLive.Player do
         <span id="own-nickname">Você entrou como <strong>{@participant.nickname}</strong></span>
       </:subtitle>
     </.header>
+
+    <p id="match-setup" class="mt-2 text-base-content/70">
+      {Formatters.format_match_setup(@question_count, @session.question_duration_seconds)}
+    </p>
 
     <div id="notices" aria-live="polite" class="mt-6 space-y-4">
       <p

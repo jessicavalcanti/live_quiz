@@ -413,13 +413,30 @@ defmodule LiveQuiz.Games.QuestionTimerTest do
       option = option_at(questions, 1, 1)
       :ok = Games.subscribe(session.id)
 
-      assert [{:error, :not_due}, {:ok, %{closed?: true}}] =
+      assert [timer_result, {:ok, %{closed?: true}}] =
                in_parallel([:timer, :answer], fn
                  :timer -> Games.close_question_by_timeout(session.id)
                  :answer -> Games.answer_question(participant, option.id, 1)
                end)
 
-      refute is_nil(reload(session).current_question_closed_at)
+      # As duas ordens da mesma corrida são legítimas: o timer que chega com a
+      # pergunta ainda aberta recusa o prazo em curso, e o que chega depois da
+      # última resposta devolve a partida já encerrada, sem escrever nem
+      # publicar nada de novo.
+      assert match?({:error, :not_due}, timer_result) or
+               match?({:ok, %GameSession{}}, timer_result),
+             "resultado inesperado do timer: #{inspect(timer_result)}"
+
+      closed_at = reload(session).current_question_closed_at
+      refute is_nil(closed_at)
+
+      case timer_result do
+        {:error, :not_due} ->
+          :ok
+
+        {:ok, %GameSession{} = from_timer} ->
+          assert from_timer.current_question_closed_at == closed_at
+      end
 
       assert_receive {:question_closed, %GameSession{}}, 1_000
       refute_receive {:question_closed, _repeated}, 100

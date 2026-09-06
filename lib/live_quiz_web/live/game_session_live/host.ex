@@ -42,6 +42,10 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
       |> assign(:show_cancel_modal?, false)
       |> assign(:expires_at, session.expires_at)
       |> assign(:max_participants, Games.max_participants())
+      # How many questions the match has is settled the moment the room exists:
+      # a live room locks its quiz against edits (AD-32) and the snapshot copies
+      # it whole (AD-36), so the number read here survives the start.
+      |> assign(:question_count, Games.question_count(session))
       |> assign(:join_url, ShareSession.join_url(session.join_code))
 
     {:ok, socket |> take_over() |> load_lobby()}
@@ -219,6 +223,10 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
         {@session.quiz_title}
         <:subtitle>{subtitle(@session)}</:subtitle>
       </.header>
+
+      <p :if={active?(@session)} id="match-setup" class="mt-2 text-base-content/70">
+        {Formatters.format_match_setup(@question_count, @session.question_duration_seconds)}
+      </p>
 
       <p
         :if={@access_lost?}
