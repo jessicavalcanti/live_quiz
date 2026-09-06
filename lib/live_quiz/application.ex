@@ -19,6 +19,10 @@ defmodule LiveQuiz.Application do
       LiveQuiz.Games.Presence,
       LiveQuiz.Games.HostMonitor,
       LiveQuiz.Games.ExpirationSweeper,
+      # The deadline of the question that is open is kept by one process per
+      # match (AD-40), found through a registry so a match never has two.
+      {Registry, keys: :unique, name: LiveQuiz.Games.QuestionTimerRegistry},
+      LiveQuiz.Games.QuestionTimerSupervisor,
       # Start to serve requests, typically the last entry
       LiveQuizWeb.Endpoint
     ]
@@ -26,7 +30,24 @@ defmodule LiveQuiz.Application do
     # See https://elixir.hexdocs.pm/Supervisor.html
     # for other strategies and supported options
     opts = [strategy: :one_for_one, name: LiveQuiz.Supervisor]
-    Supervisor.start_link(children, opts)
+
+    with {:ok, pid} <- Supervisor.start_link(children, opts) do
+      recover_question_timers()
+      {:ok, pid}
+    end
+  end
+
+  # The questions whose deadline ran out while the application was down are
+  # settled before anything can connect, and the ones still running get a timer
+  # for what is left of their deadline — never for a full new duration (AD-39).
+  # It is switched off with the timers themselves, which is what keeps the test
+  # suite from sweeping a shared database on every boot.
+  defp recover_question_timers do
+    if LiveQuiz.Games.QuestionTimer.enabled?() do
+      LiveQuiz.Games.QuestionTimerSupervisor.recover()
+    end
+
+    :ok
   end
 
   # Tell Phoenix to update the endpoint configuration

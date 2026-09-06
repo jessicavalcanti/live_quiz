@@ -32,6 +32,11 @@ config :live_quiz, LiveQuiz.Accounts.Guardian,
 # `ExpirationSweeper.sweep_now/0` quando querem uma varredura.
 config :live_quiz, LiveQuiz.Games.ExpirationSweeper, enabled: false
 
+# Os timers de pergunta nao se agendam sozinhos na suite nem varrem o banco na
+# subida: quem quer o prazo vencido chama `QuestionTimer.fire_now/1`, e quem
+# quer um prazo de verdade sobe um timer proprio com `enabled: true`.
+config :live_quiz, LiveQuiz.Games.QuestionTimer, enabled: false
+
 # A carencia do monitor da aplicacao fica longa de proposito: quem testa
 # temporizacao sobe um monitor proprio, com janela curta, e nenhuma espera
 # solta sobra de um teste para o outro.

@@ -3127,6 +3127,112 @@ defmodule LiveQuiz.GamesTest do
     end
   end
 
+  describe "close_question_by_timeout/1" do
+    setup :running_match
+
+    test "encerra a pergunta cujo prazo venceu e publica o evento", %{
+      scope: scope,
+      session: session
+    } do
+      assert {:ok, open} = Games.advance_question(scope, session, nil)
+      ending_in(open, -1_000)
+      :ok = Games.subscribe(session.id)
+
+      assert {:ok, closed} = Games.close_question_by_timeout(session.id)
+
+      assert closed.current_question_position == 1
+      refute is_nil(closed.current_question_closed_at)
+      assert Repo.get!(GameSession, session.id).current_question_closed_at
+
+      assert_receive {:question_closed, %GameSession{current_question_position: 1}}
+      refute_receive {:question_closed, _repeated}, 50
+    end
+
+    test "não pede scope nenhum: quem chama é o sistema", %{scope: scope, session: session} do
+      assert {:ok, open} = Games.advance_question(scope, session, nil)
+      ending_in(open, -1_000)
+
+      assert {:ok, %GameSession{}} = Games.close_question_by_timeout(session.id)
+    end
+
+    test "a pergunta ainda no prazo devolve :not_due e continua aberta", %{
+      scope: scope,
+      session: session
+    } do
+      assert {:ok, open} = Games.advance_question(scope, session, nil)
+      ending_in(open, 5_000)
+      :ok = Games.subscribe(session.id)
+
+      assert Games.close_question_by_timeout(session.id) == {:error, :not_due}
+
+      assert is_nil(Repo.get!(GameSession, session.id).current_question_closed_at)
+      refute_receive {:question_closed, _nothing}, 50
+    end
+
+    test "a pergunta já encerrada volta com o mesmo instante e sem evento novo", %{
+      scope: scope,
+      session: session
+    } do
+      assert {:ok, open} = Games.advance_question(scope, session, nil)
+      assert {:ok, closed} = Games.close_question(scope, open)
+
+      ending_in(closed, -1_000)
+      |> Ecto.Changeset.change(%{
+        current_question_closed_at: closed.current_question_closed_at
+      })
+      |> Repo.update!()
+
+      :ok = Games.subscribe(session.id)
+
+      assert {:ok, again} = Games.close_question_by_timeout(session.id)
+
+      assert again.current_question_closed_at == closed.current_question_closed_at
+      refute_receive {:question_closed, _repeated}, 50
+    end
+
+    test "a partida que não avançou para pergunta nenhuma devolve :no_open_question", %{
+      session: session
+    } do
+      assert Games.close_question_by_timeout(session.id) == {:error, :no_open_question}
+    end
+
+    test "a sala ainda no lobby devolve :invalid_status" do
+      session = game_session_fixture(%{status: :waiting})
+
+      assert Games.close_question_by_timeout(session.id) == {:error, :invalid_status}
+    end
+
+    test "a partida já encerrada devolve :invalid_status", %{scope: scope, session: session} do
+      assert {:ok, open} = Games.advance_question(scope, session, nil)
+      ending_in(open, -1_000)
+      assert {:ok, _cancelled} = Games.cancel_game_session(scope, session)
+
+      assert Games.close_question_by_timeout(session.id) == {:error, :invalid_status}
+    end
+
+    test "a partida inexistente devolve :not_found" do
+      assert Games.close_question_by_timeout(-1) == {:error, :not_found}
+    end
+
+    test "o encerramento por tempo é indistinguível do encerramento pelo host", %{
+      scope: scope,
+      session: session
+    } do
+      assert {:ok, open} = Games.advance_question(scope, session, nil)
+      ending_in(open, -1_000)
+      assert {:ok, by_time} = Games.close_question_by_timeout(session.id)
+
+      %{scope: other_scope, session: other} = match_of(3)
+      assert {:ok, other_open} = Games.advance_question(other_scope, other, nil)
+      assert {:ok, by_host} = Games.close_question(other_scope, other_open)
+
+      assert by_time.status == by_host.status
+      assert by_time.current_question_position == by_host.current_question_position
+      refute is_nil(by_time.current_question_closed_at)
+      refute is_nil(by_host.current_question_closed_at)
+    end
+  end
+
   describe "finish_game_session/2" do
     setup :running_match
 

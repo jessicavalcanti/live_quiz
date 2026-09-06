@@ -65,6 +65,15 @@ defmodule LiveQuiz.Games do
   reach the number of people connected (AD-42), which is what keeps twenty-five
   simultaneous taps from closing it twice.
 
+  The deadline of a question is the one thing here nobody has to ask for. It is
+  written into `current_question_ends_at` when the question opens and enforced
+  by `close_question_by_timeout/1`, which takes no scope because the caller is
+  the system — `LiveQuiz.Games.QuestionTimer`, one process per match (AD-40),
+  supervised outside this module. Closing by the deadline, by the host and by
+  everybody having answered all end in the same columns and the same event, and
+  all three are idempotent, so they may happen at the same instant and still
+  reveal the answer once.
+
   The expiration deadline is persisted in `expires_at` (AD-23) instead of living
   in a timer, so it survives a restart without being forgotten or renewed.
   `LiveQuiz.Games` only supplies the transitions; noticing that the host dropped
@@ -107,6 +116,7 @@ defmodule LiveQuiz.Games do
   alias LiveQuiz.Games.Participant
   alias LiveQuiz.Games.ParticipantToken
   alias LiveQuiz.Games.Presence
+  alias LiveQuiz.Games.QuestionTimer
   alias LiveQuiz.Games.QuizLock
   alias LiveQuiz.Quizzes
   alias LiveQuiz.Quizzes.Quiz
@@ -736,6 +746,7 @@ defmodule LiveQuiz.Games do
              (is_integer(expected_position) and expected_position > 0) do
     with {:ok, hosted} <- fetch_hosted_session(scope, session),
          {:ok, advanced} <- open_next_question(hosted, expected_position) do
+      QuestionTimer.ensure_started(advanced)
       broadcast(advanced.id, {:question_advanced, advanced})
       {:ok, advanced}
     end
@@ -760,6 +771,8 @@ defmodule LiveQuiz.Games do
   def close_question(%Scope{} = scope, %GameSession{} = session) do
     with {:ok, hosted} <- fetch_hosted_session(scope, session),
          {:ok, outcome} <- close_current_question(hosted) do
+      QuestionTimer.stop(hosted.id)
+
       case outcome do
         {:closed, closed} ->
           broadcast(closed.id, {:question_closed, closed})
@@ -768,6 +781,78 @@ defmodule LiveQuiz.Games do
         {:already_closed, closed} ->
           {:ok, closed}
       end
+    end
+  end
+
+  @doc """
+  Closes the question that is open because its deadline ran out.
+
+  It takes no scope on purpose: the caller is the timer of F3-05, that is, the
+  system, exactly like `expire_game_session/1`. Nobody has to be host to let
+  time pass, and no screen has to be connected for it to run out — a match whose
+  host dropped keeps closing its questions on time, it simply does not advance
+  on its own.
+
+  The deadline is checked here, inside the transaction and against the database
+  (AD-39): a question with time still on the clock answers `:not_due` and stays
+  open, which is what makes a timer that fired early harmless. A question
+  already closed — by the host, by everybody having answered or by another
+  timer — gives the match back with its closing instant untouched and without a
+  second `{:question_closed, session}`, so the three ways a question can end
+  converge on a single reveal.
+
+  The result is indistinguishable from `close_question/2`: same columns, same
+  event. Only the origin differs.
+  """
+  @spec close_question_by_timeout(integer()) ::
+          {:ok, GameSession.t()}
+          | {:error, :not_found | :invalid_status | :no_open_question | :not_due}
+  def close_question_by_timeout(session_id) when is_integer(session_id) do
+    case close_due_question(session_id) do
+      {:ok, {:closed, closed}} ->
+        broadcast(closed.id, {:question_closed, closed})
+        {:ok, closed}
+
+      {:ok, {:already_closed, closed}} ->
+        {:ok, closed}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @doc """
+  Every running match sitting on a question that is still taking answers.
+
+  This is what the boot recovery of F3-05 reads. Matches that are over never
+  come back, whatever their columns say, so a cancelled room stopped mid
+  question is left exactly as it was. The order is the deadline itself, so the
+  most overdue question is the first one settled.
+  """
+  @spec list_sessions_with_open_question() :: [GameSession.t()]
+  def list_sessions_with_open_question do
+    GameSession
+    |> where([s], s.status == :in_progress)
+    |> where([s], not is_nil(s.current_question_position))
+    |> where([s], is_nil(s.current_question_closed_at))
+    |> order_by([s], asc: s.current_question_ends_at, asc: s.id)
+    |> Repo.all()
+  end
+
+  @doc """
+  The match a timer is keeping the deadline of, read without a scope.
+
+  There is no owner to filter by: the caller is the system, like
+  `close_question_by_timeout/1`. It exists so the timer can compare the position
+  it was armed for with the one the match is actually on before closing
+  anything — a message scheduled for question 1 and delivered after the host
+  advanced must recognize itself as late and do nothing.
+  """
+  @spec get_session_for_timeout(integer()) :: {:ok, GameSession.t()} | {:error, :not_found}
+  def get_session_for_timeout(session_id) when is_integer(session_id) do
+    case Repo.get(GameSession, session_id) do
+      nil -> {:error, :not_found}
+      %GameSession{} = session -> {:ok, session}
     end
   end
 
@@ -828,7 +913,12 @@ defmodule LiveQuiz.Games do
     case record_answer(participant, answer_option_id, connected_count) do
       {:ok, %{session: session, closed?: closed?, count: count} = recorded} ->
         broadcast(session.id, {:answer_submitted, session.id, count})
-        if closed?, do: broadcast(session.id, {:question_closed, session})
+
+        if closed? do
+          QuestionTimer.stop(session.id)
+          broadcast(session.id, {:question_closed, session})
+        end
+
         {:ok, Map.take(recorded, [:answer, :session, :closed?])}
 
       {:error, reason} ->
@@ -1797,6 +1887,43 @@ defmodule LiveQuiz.Games do
     end)
   end
 
+  # The same lock and the same statement the host's closing takes, so the two
+  # take turns and the loser writes nothing. The deadline is read inside the
+  # transaction rather than trusted from the caller: a timer only knows when it
+  # was armed, the row knows when the question actually ends.
+  defp close_due_question(session_id) do
+    Repo.transaction(fn ->
+      lock_match(session_id)
+
+      case Repo.get(GameSession, session_id) do
+        nil -> Repo.rollback(:not_found)
+        %GameSession{} = session -> close_if_due(session)
+      end
+    end)
+  end
+
+  defp close_if_due(%GameSession{} = session) do
+    case ensure_running(session) do
+      {:error, reason} ->
+        Repo.rollback(reason)
+
+      {:ok, %GameSession{current_question_position: nil}} ->
+        Repo.rollback(:no_open_question)
+
+      {:ok, %GameSession{current_question_closed_at: at} = closed} when not is_nil(at) ->
+        {:already_closed, closed}
+
+      {:ok, %GameSession{} = open} ->
+        if question_due?(open), do: close_now(open), else: Repo.rollback(:not_due)
+    end
+  end
+
+  defp question_due?(%GameSession{current_question_ends_at: nil}), do: false
+
+  defp question_due?(%GameSession{current_question_ends_at: ends_at}) do
+    DateTime.compare(DateTime.utc_now(), ends_at) != :lt
+  end
+
   defp close_now(%GameSession{} = session) do
     case stamp_question_closed(session) do
       {1, [closed]} -> {:closed, closed}
@@ -1935,12 +2062,14 @@ defmodule LiveQuiz.Games do
   defp finish_and_announce(%GameSession{} = session) do
     case finish_match(session) do
       {:ok, {:finished, finished}} ->
+        QuestionTimer.stop(finished.id)
         broadcast(finished.id, {:game_finished, finished})
         {:ok, finished}
 
       # Another finish committed while this one waited for the lock. The match
       # is over and was announced once; saying so twice would replay the ending.
       {:ok, {:already_finished, finished}} ->
+        QuestionTimer.stop(finished.id)
         {:ok, finished}
 
       {:error, reason} ->
@@ -2195,6 +2324,7 @@ defmodule LiveQuiz.Games do
   defp close_and_announce(%GameSession{} = session, status, event) do
     case close_session(session, status) do
       {:ok, session} ->
+        QuestionTimer.stop(session.id)
         broadcast(session.id, {event, session})
         {:ok, session}
 
