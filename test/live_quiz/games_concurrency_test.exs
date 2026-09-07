@@ -22,7 +22,7 @@ defmodule LiveQuiz.GamesConcurrencyTest do
 
   describe "the case itself" do
     test "competitors run on distinct PostgreSQL backends" do
-      assert_distinct_backends(4)
+      assert_distinct_backends(min(4, max_competitors()))
     end
 
     test "a competitor sees what another one committed" do
@@ -60,35 +60,39 @@ defmodule LiveQuiz.GamesConcurrencyTest do
 
       assert Games.available_slots(session) == 1
 
+      racing = min(5, max_competitors())
+
       results =
         compete(
-          for index <- 1..5 do
+          for index <- 1..racing do
             fn -> Games.join_game_session(nil, session.join_code, %{nickname: "P#{index}"}) end
           end
         )
 
       assert Enum.count(results, &match?({:ok, _participant, _token}, &1)) == 1
-      assert Enum.count(results, &match?({:error, :session_full}, &1)) == 4
+      assert Enum.count(results, &match?({:error, :session_full}, &1)) == racing - 1
       assert Games.available_slots(reload(session)) == 0
     end
 
     test "a room never goes over its seats when everyone arrives at once" do
       session = game_session_fixture(status: :waiting)
-      free = 5
+
+      # More competitors than free seats, and never more competitors than the
+      # pool can serve at once: what is under test is the seat cap under real
+      # contention, not how many tasks a machine happens to fit.
+      racing = max_competitors()
+      free = div(racing, 2)
       for _ <- 1..(Games.max_participants() - free), do: participant_fixture(session)
 
-      # More competitors than free seats, few enough to each hold a connection:
-      # what is under test is the seat cap under real contention, not how many
-      # tasks the pool can serve.
       results =
         compete(
-          for index <- 1..(free * 2) do
+          for index <- 1..racing do
             fn -> Games.join_game_session(nil, session.join_code, %{nickname: "P#{index}"}) end
           end
         )
 
       assert Enum.count(results, &match?({:ok, _participant, _token}, &1)) == free
-      assert Enum.count(results, &match?({:error, :session_full}, &1)) == free
+      assert Enum.count(results, &match?({:error, :session_full}, &1)) == racing - free
       assert Games.available_slots(reload(session)) == 0
     end
   end
