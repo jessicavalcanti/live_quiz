@@ -4,11 +4,15 @@ defmodule LiveQuizWeb.Endpoint do
   # The session will be stored in the cookie and signed,
   # this means its contents can be read but not tampered with.
   # Set :encryption_salt if you would also like to encrypt it.
+  # `Plug.Session` reads its options when the endpoint compiles, so this one is
+  # a compile time setting. The two cookies written from Elixir read the same
+  # key at runtime instead, where a test can reach it.
   @session_options [
     store: :cookie,
     key: "_live_quiz_key",
     signing_salt: "shQYKH+0",
-    same_site: "Lax"
+    same_site: "Lax",
+    secure: Application.compile_env(:live_quiz, :secure_cookies, false)
   ]
 
   # `:peer_data` carries the address the socket came from, which is what lets a

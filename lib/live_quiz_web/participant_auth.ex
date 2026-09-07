@@ -54,6 +54,20 @@ defmodule LiveQuizWeb.ParticipantAuth do
   @cookie "lq_participant"
   @max_age 60 * 60 * 24 * 30
   @cookie_options [sign: true, max_age: @max_age, same_site: "Lax", http_only: true]
+
+  @doc """
+  The options this cookie is written with.
+
+  `secure` is decided at runtime rather than baked in, because it is the one
+  option that depends on how the application is served: on over https, off over
+  the http that development and the suite speak, where a secure cookie is one
+  the browser never sends back.
+  """
+  @spec cookie_options() :: keyword()
+  def cookie_options do
+    Keyword.put(@cookie_options, :secure, LiveQuizWeb.secure_cookies?())
+  end
+
   @max_entries 20
   @session_key "participant_tokens"
 
@@ -202,7 +216,7 @@ defmodule LiveQuizWeb.ParticipantAuth do
       |> delete_session(@session_key)
     else
       conn
-      |> put_resp_cookie(@cookie, entries, @cookie_options)
+      |> put_resp_cookie(@cookie, entries, cookie_options())
       |> put_session(@session_key, entries)
     end
   end
