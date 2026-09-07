@@ -24,6 +24,13 @@ defmodule LiveQuizWeb.UserAuth do
     same_site: "Lax"
   ]
 
+  # It carries a session token for a fortnight, so it is written with `secure`
+  # wherever the application is served over https — decided at runtime, since
+  # over http a secure cookie is one the browser never sends back.
+  defp remember_me_options do
+    Keyword.put(@remember_me_options, :secure, LiveQuizWeb.secure_cookies?())
+  end
+
   # How old the session token should be before a new one is issued. When a request is made
   # with a session token older than this value, then a new session token will be created
   # and the session and remember-me cookies (if set) will be updated with the new token.
@@ -63,7 +70,7 @@ defmodule LiveQuizWeb.UserAuth do
 
     conn
     |> renew_session(nil)
-    |> delete_resp_cookie(@remember_me_cookie, @remember_me_options)
+    |> delete_resp_cookie(@remember_me_cookie, remember_me_options())
     |> redirect(to: ~p"/")
   end
 
@@ -167,7 +174,7 @@ defmodule LiveQuizWeb.UserAuth do
   defp write_remember_me_cookie(conn, token) do
     conn
     |> put_session(:user_remember_me, true)
-    |> put_resp_cookie(@remember_me_cookie, token, @remember_me_options)
+    |> put_resp_cookie(@remember_me_cookie, token, remember_me_options())
   end
 
   defp put_token_in_session(conn, token) do

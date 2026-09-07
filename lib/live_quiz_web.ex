@@ -19,6 +19,21 @@ defmodule LiveQuizWeb do
 
   def static_paths, do: ~w(assets fonts images favicon.ico robots.txt)
 
+  @doc """
+  Whether cookies are written with the `secure` flag.
+
+  Every cookie this application writes carries a credential — the session, a
+  guest's participation, the fortnight-long remember-me — so all three ask the
+  same question, and it is answered in one place.
+
+  On in production. Off wherever the application is served over http, which is
+  what development and the suite do: a secure cookie sent over http is one the
+  browser never sends back, so switching it on everywhere would not harden
+  anything, it would break logging in locally.
+  """
+  @spec secure_cookies?() :: boolean()
+  def secure_cookies?, do: Application.get_env(:live_quiz, :secure_cookies, false)
+
   def router do
     quote do
       use Phoenix.Router, helpers: false
