@@ -156,7 +156,7 @@ defmodule LiveQuiz.GamesFixtures do
       |> Map.drop([:question])
       |> Enum.into(%{
         position: next_snapshot_question_position(session),
-        question_text: "Qual é a capital do Brasil?"
+        text: "Qual é a capital do Brasil?"
       })
 
     %GameSessionQuestion{game_session_id: session.id, question_id: question && question.id}
@@ -208,7 +208,7 @@ defmodule LiveQuiz.GamesFixtures do
       question =
         game_session_question_fixture(session, %{
           position: position,
-          question_text: "Pergunta #{position} da partida"
+          text: "Pergunta #{position} da partida"
         })
 
       for {text, option_position} <- Enum.with_index(@snapshot_option_texts, 1) do

@@ -4,65 +4,35 @@ defmodule LiveQuizWeb.GameResultLive.Index do
   use LiveQuizWeb, :live_view
 
   alias LiveQuiz.Games
+  alias LiveQuiz.Games.ResultFilters
+  alias LiveQuizWeb.FilterForm
   alias LiveQuizWeb.Formatters
 
   @per_page 10
 
   @impl true
   def mount(_params, _session, socket) do
-    {:ok,
-     assign(socket, page_title: "Minhas partidas", filters: %{quiz_id: "", from: "", to: ""})}
+    {:ok, assign(socket, page_title: "Minhas partidas", filters: FilterForm.from_params(%{}))}
   end
 
   @impl true
   def handle_params(params, _uri, socket) do
-    filters =
-      params
-      |> Map.take(["quiz_id", "from", "to"])
-      |> clean_filters()
-
     page =
-      Games.list_game_results(socket.assigns.current_scope, context_filters(filters), %{
-        page: params["page"],
-        per_page: @per_page
-      })
+      Games.list_game_results(
+        socket.assigns.current_scope,
+        ResultFilters.normalize(params),
+        %{page: params["page"], per_page: @per_page}
+      )
 
-    {:noreply,
-     assign(socket,
-       page: page,
-       filters: Map.merge(%{"quiz_id" => "", "from" => "", "to" => ""}, filters)
-     )}
+    {:noreply, assign(socket, page: page, filters: FilterForm.from_params(params))}
   end
 
   @impl true
   def handle_event("filter", %{"filters" => filters}, socket) do
-    filters = for {key, value} <- filters, value != "", into: %{}, do: {key, value}
-    {:noreply, push_patch(socket, to: ~p"/game-results?#{query(filters)}")}
+    {:noreply, push_patch(socket, to: ~p"/game-results?#{FilterForm.query(filters, 1)}")}
   end
 
-  defp query(filters), do: Map.put(filters, "page", 1)
-
-  defp clean_filters(filters), do: Map.reject(filters, fn {_key, value} -> value == "" end)
-
-  defp context_filters(filters) do
-    filters
-    |> maybe_expand_date("from", "T00:00:00Z")
-    |> maybe_expand_date("to", "T23:59:59Z")
-  end
-
-  defp maybe_expand_date(filters, key, suffix) do
-    case Map.get(filters, key) do
-      <<year::binary-size(4), "-", month::binary-size(2), "-", day::binary-size(2)>> ->
-        Map.put(filters, key, year <> "-" <> month <> "-" <> day <> suffix)
-
-      _value ->
-        filters
-    end
-  end
-
-  defp pagination_path(params, page) do
-    ~p"/game-results?#{params |> clean_filters() |> Map.put("page", page)}"
-  end
+  defp pagination_path(filters, page), do: ~p"/game-results?#{FilterForm.query(filters, page)}"
 
   @impl true
   def render(assigns) do

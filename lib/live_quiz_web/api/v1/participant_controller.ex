@@ -35,6 +35,7 @@ defmodule LiveQuizWeb.Api.V1.ParticipantController do
   alias LiveQuizWeb.Api.V1.Schemas.ErrorResponse
   alias LiveQuizWeb.Api.V1.Schemas.ParticipantListResponse
   alias LiveQuizWeb.Api.V1.Schemas.ParticipantResponse
+  alias LiveQuizWeb.Api.Viewer
 
   action_fallback LiveQuizWeb.Api.FallbackController
 
@@ -72,7 +73,8 @@ defmodule LiveQuizWeb.Api.V1.ParticipantController do
 
   def index(conn, %{"code" => code}) do
     with {:ok, %GameSession{} = session} <- Games.get_game_session_by_code(code),
-         {:ok, participants} <- list_participants(session, conn) do
+         {:ok, participants} <-
+           Viewer.read(conn, &Games.list_participants_with_presence(session, &1)) do
       render(conn, :index, participants: participants)
     end
   end
@@ -180,20 +182,6 @@ defmodule LiveQuizWeb.Api.V1.ParticipantController do
       token when is_binary(token) -> {:ok, token}
       nil -> {:error, :unauthenticated}
     end
-  end
-
-  # A request may carry an account and a participation at once, and the two are
-  # allowed to read the lobby for different reasons. Both are offered to the
-  # context, which is the only place that decides.
-  defp list_participants(%GameSession{} = session, conn) do
-    [conn.assigns[:current_scope], conn.assigns[:current_participant]]
-    |> Enum.reject(&is_nil/1)
-    |> Enum.reduce_while({:error, :unauthorized}, fn viewer, refusal ->
-      case Games.list_participants_with_presence(session, viewer) do
-        {:ok, participants} -> {:halt, {:ok, participants}}
-        {:error, :unauthorized} -> {:cont, refusal}
-      end
-    end)
   end
 
   # A REST client is never itself connected to a room — there is no socket to

@@ -1,14 +1,15 @@
 defmodule LiveQuiz.Games.QuizLock do
   @moduledoc """
-  Consulta de bloqueio de quiz por sala ativa.
+  Whether a quiz is locked by a live room.
 
-  Existe como módulo próprio para que `LiveQuiz.Quizzes` possa aplicar a regra
-  sem depender do contexto `LiveQuiz.Games`, que por sua vez depende de
-  `Quizzes`. Só lê `game_sessions` e a linha do quiz — não escreve nada.
+  It is a module of its own so that `LiveQuiz.Quizzes` can apply the rule
+  without depending on the `LiveQuiz.Games` context, which depends on `Quizzes`
+  in turn. It only ever reads `game_sessions` and the quiz row — it writes
+  nothing.
 
-  A regra é derivada do estado, não de uma coluna: um quiz está bloqueado
-  enquanto existir ao menos uma sala em `waiting` ou `in_progress` apontando
-  para ele, e volta a ser editável assim que a última delas é encerrada.
+  The rule is derived from state rather than stored in a column: a quiz is
+  locked while at least one room in `waiting` or `in_progress` points at it, and
+  becomes editable again the moment the last of them ends.
   """
 
   import Ecto.Query
@@ -18,9 +19,10 @@ defmodule LiveQuiz.Games.QuizLock do
   alias LiveQuiz.Repo
 
   @doc """
-  Indica se o quiz possui alguma sala em `waiting` ou `in_progress`.
+  Whether the quiz has any room in `waiting` or `in_progress`.
 
-  Um id inexistente responde `false`: quem não tem sala não está bloqueado.
+  An id that does not exist answers `false`: something with no room is not
+  locked.
   """
   @spec locked?(integer() | String.t()) :: boolean()
   def locked?(quiz_id) do
@@ -31,31 +33,12 @@ defmodule LiveQuiz.Games.QuizLock do
   end
 
   @doc """
-  Conjunto dos ids bloqueados, para uma lista de quizzes.
+  Composable query that fills the virtual `locked?` field in the selection.
 
-  Resolve em uma consulta só, qualquer que seja o tamanho da lista. Ids sem
-  sala ativa simplesmente não aparecem no conjunto.
-  """
-  @spec locked_ids([integer()]) :: MapSet.t(integer())
-  def locked_ids([]), do: MapSet.new()
-
-  def locked_ids(quiz_ids) when is_list(quiz_ids) do
-    GameSession
-    |> where([s], s.quiz_id in ^quiz_ids)
-    |> active()
-    |> distinct(true)
-    |> select([s], s.quiz_id)
-    |> Repo.all()
-    |> MapSet.new()
-  end
-
-  @doc """
-  Query composável que marca o campo virtual `locked?` na seleção.
-
-  É um `EXISTS` correlacionado dentro do próprio `SELECT`, não uma consulta por
-  linha: a listagem paginada continua resolvendo no mesmo número de consultas
-  de antes. A query recebida precisa nomear a origem dos quizzes como `:quiz`,
-  que é a âncora do `parent_as/1`.
+  It is a correlated `EXISTS` inside the `SELECT` itself, not a query per row:
+  a paginated listing still resolves in the number of queries it did before.
+  The query it is given has to name the quiz source `:quiz`, which is the
+  anchor `parent_as/1` correlates against.
   """
   @spec with_lock_flag(Ecto.Query.t()) :: Ecto.Query.t()
   def with_lock_flag(query) do
@@ -63,15 +46,15 @@ defmodule LiveQuiz.Games.QuizLock do
   end
 
   @doc """
-  Trava a linha do quiz com `FOR UPDATE` e devolve o seu id.
+  Locks the quiz row with `FOR UPDATE` and answers with its id.
 
-  Tomada pelos dois lados da corrida — por `LiveQuiz.Quizzes` antes de gravar e
-  por `LiveQuiz.Games` antes de abrir a sala —, é ela que fecha a janela entre
-  verificar o bloqueio e gravar: sem a trava, a sala poderia nascer entre as
-  duas coisas e a edição passaria assim mesmo.
+  Taken by both sides of the race — by `LiveQuiz.Quizzes` before writing and by
+  `LiveQuiz.Games` before opening a room — it is what closes the window between
+  checking the lock and writing: without it the room could be born between the
+  two, and the edit would go through anyway.
 
-  Levanta `Ecto.NoResultsError` quando o quiz não existe. Só faz sentido dentro
-  de uma transação, já que a trava é liberada quando ela termina.
+  Raises `Ecto.NoResultsError` when the quiz does not exist. It only makes sense
+  inside a transaction, since the lock is released when that ends.
   """
   @spec lock_quiz!(integer() | String.t()) :: integer()
   def lock_quiz!(quiz_id) do

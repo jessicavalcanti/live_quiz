@@ -164,6 +164,11 @@ defmodule LiveQuizWeb.Router do
   scope "/", LiveQuizWeb do
     pipe_through [:browser]
 
+    # One session for everything a guest may open: the screens differ, but the
+    # two hooks that resolve who is asking — an account, a participation, or
+    # neither — are the same for all of them. They used to be declared twice,
+    # under two names with identical `on_mount`, which bought nothing and cost a
+    # full page load on any navigation between the two halves.
     live_session :current_user,
       on_mount: [
         {LiveQuizWeb.UserAuth, :mount_current_scope},
@@ -171,19 +176,12 @@ defmodule LiveQuizWeb.Router do
       ] do
       live "/", LandingLive, :index
       live "/join", GameSessionLive.Join, :new
+      live "/game-sessions/:code", GameSessionLive.Player, :show
       live "/users/register", UserLive.Registration, :new
       live "/users/log-in", UserLive.Login, :new
       live "/users/confirm/:token", UserLive.Confirmation, :new
       live "/users/reset-password", UserLive.ForgotPassword, :new
       live "/users/reset-password/:token", UserLive.ResetPassword, :edit
-    end
-
-    live_session :participant,
-      on_mount: [
-        {LiveQuizWeb.UserAuth, :mount_current_scope},
-        {LiveQuizWeb.ParticipantAuth, :mount_participant_tokens}
-      ] do
-      live "/game-sessions/:code", GameSessionLive.Player, :show
     end
 
     post "/game-sessions/join", GameSessionController, :join

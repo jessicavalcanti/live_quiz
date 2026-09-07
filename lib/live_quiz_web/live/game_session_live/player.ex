@@ -61,6 +61,7 @@ defmodule LiveQuizWeb.GameSessionLive.Player do
   alias LiveQuiz.Games.Presence
   alias LiveQuizWeb.Formatters
   alias LiveQuizWeb.GameOver
+  alias LiveQuizWeb.GameSessionLive.MatchAssigns
   alias LiveQuizWeb.QuestionResults
   alias LiveQuizWeb.Ranking
   alias Phoenix.Socket.Broadcast
@@ -258,59 +259,33 @@ defmodule LiveQuizWeb.GameSessionLive.Player do
     |> assign(:notice, nil)
   end
 
-  # The reveal is asked for only once the question is done with: while it is
-  # open the context refuses it (AD-46), which is also what happens in the few
-  # seconds between a deadline running out on screen and the timer actually
-  # closing the question. A refusal is "nothing to reveal yet", and the screen
-  # keeps saying "aguarde" instead of pretending it knows the answer key.
-  defp load_results(socket, %{question_state: :closed, question_number: position}) do
-    %{session: session, participant: participant} = socket.assigns
+  # Who this screen is watching as. It is the whole difference between the
+  # player and the host when it comes to reading the match, which is why
+  # everything else lives in `MatchAssigns`.
+  defp viewer(socket), do: socket.assigns.participant
 
-    case Games.question_results(session, position, participant) do
-      {:ok, results} -> assign(socket, :results, results)
-      {:error, _nothing_to_reveal} -> assign(socket, :results, nil)
-    end
-  end
+  defp load_results(socket, state), do: MatchAssigns.assign_results(socket, viewer(socket), state)
 
-  defp load_results(socket, _open_or_pending), do: assign(socket, :results, nil)
+  defp load_ranking(socket, state), do: MatchAssigns.assign_ranking(socket, viewer(socket), state)
 
-  defp load_ranking(socket, %{question_state: :closed}) do
-    %{session: session, participant: participant} = socket.assigns
+  defp load_summary(socket), do: MatchAssigns.assign_summary(socket, viewer(socket))
 
-    case Games.current_ranking(session, participant) do
-      {:ok, ranking} -> assign(socket, :ranking, ranking)
-      {:error, :unauthorized} -> assign(socket, :ranking, nil)
-    end
-  end
-
-  defp load_ranking(socket, _state), do: assign(socket, :ranking, nil)
-
+  # The ending screen adds the one reading that is nobody else's: what this
+  # participation itself scored.
   defp load_final_data(socket, %GameSession{status: :finished} = session) do
-    %{participant: participant} = socket.assigns
-
-    socket =
-      case Games.current_ranking(session, participant) do
-        {:ok, ranking} -> assign(socket, :ranking, ranking)
-        {:error, :unauthorized} -> assign(socket, :ranking, nil)
-      end
-
-    case Games.get_game_result(participant, session.id, participant.id) do
-      {:ok, result} -> assign(socket, :result, result)
-      {:error, :not_found} -> assign(socket, :result, nil)
-    end
+    socket
+    |> load_ranking(session)
+    |> load_own_result(session)
   end
 
   defp load_final_data(socket, _session), do: assign(socket, ranking: nil, result: nil)
 
-  # What the match added up to, read once, when the room is already over: it is
-  # the one number the ending screen shows, and no screen of this phase shows it
-  # while the match is running.
-  defp load_summary(socket) do
-    %{session: session, participant: participant} = socket.assigns
+  defp load_own_result(socket, %GameSession{id: session_id}) do
+    participant = viewer(socket)
 
-    case Games.game_summary(session, participant) do
-      {:ok, summary} -> assign(socket, :summary, summary)
-      {:error, :unauthorized} -> assign(socket, :summary, nil)
+    case Games.get_game_result(participant, session_id, participant.id) do
+      {:ok, result} -> assign(socket, :result, result)
+      {:error, :not_found} -> assign(socket, :result, nil)
     end
   end
 
@@ -502,8 +477,6 @@ defmodule LiveQuizWeb.GameSessionLive.Player do
 
   def handle_info({:ranking_updated, ranking}, socket),
     do: {:noreply, assign(socket, :ranking, ranking)}
-
-  def handle_info({:question_scored, _session, _ranking}, socket), do: {:noreply, socket}
 
   # The one event of the match this screen has nothing to do with: how many
   # people have answered is the host's number, and putting it here would tell
@@ -784,7 +757,7 @@ defmodule LiveQuizWeb.GameSessionLive.Player do
               aria-hidden="true"
               class="flex size-9 shrink-0 items-center justify-center rounded-lg bg-base-200 font-bold"
             >
-              {option_letter(option.position)}
+              {Formatters.option_letter(option.position)}
             </span>
 
             <span class="min-w-0 break-words">{option.text}</span>
@@ -809,7 +782,7 @@ defmodule LiveQuizWeb.GameSessionLive.Player do
     revelação só entra quando a apuração existe — entre o prazo vencer na tela e
     o timer encerrar de fato, o que há é a espera. --%>
     <section
-      :if={closed?(@game_state)}
+      :if={answers_closed?(@game_state)}
       id="question-waiting"
       class="mt-6 rounded-2xl border border-base-300 p-6 text-center sm:p-8"
     >
@@ -880,11 +853,14 @@ defmodule LiveQuizWeb.GameSessionLive.Player do
 
   defp open?(%{}), do: false
 
-  defp closed?(state), do: not pending?(state) and not open?(state)
+  # Not the same question the host screen asks with `revealed?/1`: this one is
+  # also true in the seconds between a deadline passing on screen and the timer
+  # actually closing the question, which is exactly when the alternatives must
+  # stop being tappable.
+  defp answers_closed?(state), do: not pending?(state) and not open?(state)
 
   # A question always freezes exactly four alternatives, so the letters never
   # run past the beginning of the alphabet.
-  defp option_letter(position), do: <<?A + position - 1>>
 
   attr :code, :string, required: true
   attr :leaving?, :boolean, required: true

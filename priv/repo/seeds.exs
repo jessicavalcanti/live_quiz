@@ -199,7 +199,7 @@ if Mix.env() == :dev do
           %GameSessionQuestion{game_session_id: session.id, question_id: question.id}
           |> GameSessionQuestion.changeset(%{
             position: question.position,
-            question_text: question.text
+            text: question.text
           })
           |> Repo.insert!()
 

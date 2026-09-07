@@ -55,4 +55,44 @@ defmodule LiveQuiz.DataCase do
       end)
     end)
   end
+
+  @doc """
+  Counts the queries the given function makes from this process.
+
+      assert count_queries(fn -> Quizzes.list_quizzes(scope) end) == 2
+
+  It is how the tests that care about a listing resolving in a fixed number of
+  statements — rather than one per row — say so out loud. Only queries issued by
+  the calling process are counted, so it is safe under `async: true`.
+  """
+  def count_queries(fun) do
+    parent = self()
+    ref = make_ref()
+    handler_id = {__MODULE__, ref}
+
+    :telemetry.attach(
+      handler_id,
+      [:live_quiz, :repo, :query],
+      fn _event, _measurements, _metadata, _config ->
+        if self() == parent, do: send(parent, {ref, :query})
+      end,
+      nil
+    )
+
+    try do
+      fun.()
+    after
+      :telemetry.detach(handler_id)
+    end
+
+    drain_queries(ref, 0)
+  end
+
+  defp drain_queries(ref, count) do
+    receive do
+      {^ref, :query} -> drain_queries(ref, count + 1)
+    after
+      0 -> count
+    end
+  end
 end

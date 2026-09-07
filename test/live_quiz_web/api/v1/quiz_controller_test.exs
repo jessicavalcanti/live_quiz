@@ -150,18 +150,40 @@ defmodule LiveQuizWeb.Api.V1.QuizControllerTest do
       assert json_response(at_the_ceiling, 200)["meta"]["per_page"] == 100
 
       past_the_ceiling = get(recycle(conn), ~p"/api/v1/quizzes?per_page=101")
-      assert json_response(past_the_ceiling, 200)["meta"]["per_page"] == 20
+
+      assert json_response(past_the_ceiling, 422) == %{
+               "errors" => %{
+                 "code" => "invalid_filter",
+                 "detail" => "Filtros e paginação inválidos"
+               }
+             }
     end
 
-    test "falls back to the defaults when the pagination is not a number", %{
+    test "refuses pagination that is not a page anybody could have", %{
       conn: conn,
       scope: scope
     } do
       quiz_fixture(scope)
 
-      conn = get(conn, ~p"/api/v1/quizzes?page=abc&per_page=-3")
+      for query <- [
+            %{"page" => "abc"},
+            %{"per_page" => "-3"},
+            %{"page" => "0"},
+            %{"per_page" => "abc"}
+          ] do
+        assert json_response(get(recycle(conn), ~p"/api/v1/quizzes?#{query}"), 422) == %{
+                 "errors" => %{
+                   "code" => "invalid_filter",
+                   "detail" => "Filtros e paginação inválidos"
+                 }
+               }
+      end
+    end
 
-      assert json_response(conn, 200)["meta"] == %{
+    test "omitted pagination still falls back to the defaults", %{conn: conn, scope: scope} do
+      quiz_fixture(scope)
+
+      assert json_response(get(conn, ~p"/api/v1/quizzes"), 200)["meta"] == %{
                "page" => 1,
                "per_page" => 20,
                "total_entries" => 1,

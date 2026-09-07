@@ -67,6 +67,50 @@ defmodule LiveQuizWeb.Api.V1.GameResultControllerTest do
     assert hd(history["data"])["id"] == session.id
   end
 
+  test "to=<day> includes the matches played on that day", %{conn: conn, session: session} do
+    today = session.inserted_at |> DateTime.to_date() |> Date.to_iso8601()
+
+    personal =
+      get(conn, ~p"/api/v1/users/me/game-results?from=#{today}&to=#{today}")
+      |> json_response(200)
+
+    assert personal["meta"]["total_entries"] == 1
+
+    history =
+      get(conn, ~p"/api/v1/quizzes/#{session.quiz_id}/game-history?from=#{today}&to=#{today}")
+      |> json_response(200)
+
+    assert history["meta"]["total_entries"] == 1
+    assert hd(history["data"])["id"] == session.id
+  end
+
+  test "ranking answers a participation even when the account is not entitled", %{conn: conn} do
+    # The room is somebody else's, and this participation was taken as a guest,
+    # so it carries no `user_id` — the account credential the request also holds
+    # buys nothing here and the participation is what has to be tried.
+    host = user_fixture()
+    session = game_session_fixture(%{host: host, status: :in_progress})
+    {_guest, token} = credentialed_participant_fixture(session, %{nickname: "Convidada"})
+    {:ok, finished} = Games.finish_game_session(Scope.for_user(host), session)
+
+    ranking =
+      conn
+      |> put_api_participant(token)
+      |> get(~p"/api/v1/game-sessions/#{finished.join_code}/ranking")
+      |> json_response(200)
+
+    assert [%{"nickname" => "Convidada"}] = ranking["data"]
+  end
+
+  test "ranking still refuses an account with no participation in the room", %{conn: conn} do
+    host = user_fixture()
+    session = game_session_fixture(%{host: host, status: :in_progress})
+    participant_fixture(session, %{nickname: "Alguem"})
+    {:ok, finished} = Games.finish_game_session(Scope.for_user(host), session)
+
+    assert json_response(get(conn, ~p"/api/v1/game-sessions/#{finished.join_code}/ranking"), 403)
+  end
+
   test "rejects invalid filters and protects results from another user", %{
     conn: conn,
     session: session

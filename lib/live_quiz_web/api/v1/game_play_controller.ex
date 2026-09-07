@@ -46,6 +46,7 @@ defmodule LiveQuizWeb.Api.V1.GamePlayController do
   alias LiveQuizWeb.Api.V1.Schemas.NextRequest
   alias LiveQuizWeb.Api.V1.Schemas.QuestionResultsResponse
   alias LiveQuizWeb.Api.V1.Schemas.SubmittedAnswerResponse
+  alias LiveQuizWeb.Api.Viewer
 
   action_fallback LiveQuizWeb.Api.FallbackController
 
@@ -294,7 +295,7 @@ defmodule LiveQuizWeb.Api.V1.GamePlayController do
 
   def state(conn, %{"code" => code}) do
     with {:ok, %GameSession{} = session} <- Games.get_match_by_code(code),
-         {:ok, state} <- as_viewer(conn, &Games.game_state(session, &1)) do
+         {:ok, state} <- Viewer.read(conn, &Games.game_state(session, &1)) do
       render(conn, :state, state: state)
     end
   end
@@ -333,25 +334,9 @@ defmodule LiveQuizWeb.Api.V1.GamePlayController do
   def results(conn, %{"code" => code, "position" => position}) do
     with {:ok, position} <- question_position(position),
          {:ok, %GameSession{} = session} <- Games.get_match_by_code(code),
-         {:ok, results} <- as_viewer(conn, &Games.question_results(session, position, &1)) do
+         {:ok, results} <- Viewer.read(conn, &Games.question_results(session, position, &1)) do
       render(conn, :results, results: results)
     end
-  end
-
-  # A request may carry an account and a participation at once, and reading a
-  # match is something either of them may be entitled to. Both are offered to
-  # the context, which is the only place that decides; a refusal that is not
-  # about identity — a question still open, say — ends the search at once, so
-  # the caller reads why instead of a blanket 403.
-  defp as_viewer(conn, read) do
-    [conn.assigns[:current_scope], conn.assigns[:current_participant]]
-    |> Enum.reject(&is_nil/1)
-    |> Enum.reduce_while({:error, :unauthorized}, fn viewer, refusal ->
-      case read.(viewer) do
-        {:error, :unauthorized} -> {:cont, refusal}
-        answer -> {:halt, answer}
-      end
-    end)
   end
 
   # Only a participation answers, and only its own match. A request with no

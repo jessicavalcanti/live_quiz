@@ -24,22 +24,23 @@ config :live_quiz, LiveQuizWeb.Endpoint,
   secret_key_base: "qYDwZYcRKTuPkH+vHHzYiVzKDqD/SsmyDKW+9gT3mfWtOVAwBOFM/+A+298LlXCY",
   server: false
 
-# Segredo dos JWTs da API na suíte de testes.
+# Secret for the API JWTs in the test suite.
 config :live_quiz, LiveQuiz.Accounts.Guardian,
   secret_key: "1fTLJh9jj4MBtLmE5jCO5ujxW7NT8DYsoplU0tivequcjlouqSKDMhmgE3Luw609"
 
-# O sweeper de expiracao nao roda sozinho na suite: os testes chamam
-# `ExpirationSweeper.sweep_now/0` quando querem uma varredura.
+# The expiration sweeper does not run on its own in the suite: a test that wants
+# a sweep calls `ExpirationSweeper.sweep_now/0`.
 config :live_quiz, LiveQuiz.Games.ExpirationSweeper, enabled: false
 
-# Os timers de pergunta nao se agendam sozinhos na suite nem varrem o banco na
-# subida: quem quer o prazo vencido chama `QuestionTimer.fire_now/1`, e quem
-# quer um prazo de verdade sobe um timer proprio com `enabled: true`.
+# Question timers neither schedule themselves in the suite nor sweep the database
+# on boot: a test that wants the deadline to have passed calls
+# `QuestionTimer.fire_now/1`, and one that wants a real deadline starts a timer of
+# its own with `enabled: true`.
 config :live_quiz, LiveQuiz.Games.QuestionTimer, enabled: false
 
-# A carencia do monitor da aplicacao fica longa de proposito: quem testa
-# temporizacao sobe um monitor proprio, com janela curta, e nenhuma espera
-# solta sobra de um teste para o outro.
+# The grace period of the application's monitor is long on purpose: a test that
+# cares about timing starts a monitor of its own with a short window, so no stray
+# wait leaks from one test into the next.
 config :live_quiz, LiveQuiz.Games.HostMonitor, grace_period: 60_000
 
 # In test we don't send emails
