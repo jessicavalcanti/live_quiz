@@ -188,6 +188,35 @@ defmodule LiveQuizWeb.UserAuth do
   defp user_session_topic(token), do: "users_sessions:#{Base.url_encode64(token)}"
 
   @doc """
+  Whether this account has proved its password recently enough to act.
+
+  The one place a controller or a LiveView event asks. Answering
+  `{:error, :sudo_required}` instead of raising is the point: a tab that
+  crossed the window between being opened and being submitted is an ordinary
+  thing, not an exception (R06).
+  """
+  @spec ensure_sudo(User.t() | nil) :: :ok | {:error, :sudo_required}
+  def ensure_sudo(user) do
+    if Accounts.sudo_mode?(user), do: :ok, else: {:error, :sudo_required}
+  end
+
+  @doc """
+  Sends somebody back to prove their password, remembering where they were.
+
+  Nothing they typed comes along: a form that crossed the sudo window is
+  re-entered after logging in, and carrying a password through a redirect to
+  save one retype is not a trade worth making.
+  """
+  @spec require_reauthentication(Plug.Conn.t(), String.t()) :: Plug.Conn.t()
+  def require_reauthentication(conn, return_to) do
+    conn
+    |> put_session(:user_return_to, return_to)
+    |> Phoenix.Controller.put_flash(:error, "Confirme sua senha para continuar.")
+    |> Phoenix.Controller.redirect(to: ~p"/users/log-in")
+    |> halt()
+  end
+
+  @doc """
   Handles mounting and authenticating the current_scope in LiveViews.
 
   ## `on_mount` arguments
@@ -241,7 +270,7 @@ defmodule LiveQuizWeb.UserAuth do
   def on_mount(:require_sudo_mode, _params, session, socket) do
     socket = mount_current_scope(socket, session)
 
-    if Accounts.sudo_mode?(socket.assigns.current_scope.user, -10) do
+    if Accounts.sudo_mode?(socket.assigns.current_scope.user) do
       {:cont, socket}
     else
       socket =

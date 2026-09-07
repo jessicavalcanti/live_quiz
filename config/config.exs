@@ -92,6 +92,20 @@ config :logger, :default_formatter,
 # Use Jason for JSON parsing in Phoenix
 config :phoenix, :json_library, Jason
 
+# Every name a credential travels under in this application, listed rather than
+# inherited: the Phoenix default covers `password` and nothing else, while a
+# login, a refresh, a participation and a reset each send something worth
+# keeping out of the log (R04). Matching is by substring, so `refresh_token` and
+# `access_token` are both covered by `token`.
+config :phoenix, :filter_parameters, [
+  "password",
+  "password_confirmation",
+  "token",
+  "secret",
+  "authorization",
+  "access_token_hash"
+]
+
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.
 import_config "#{config_env()}.exs"

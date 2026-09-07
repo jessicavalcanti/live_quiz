@@ -202,10 +202,17 @@ defmodule LiveQuiz.AccountsTest do
   describe "sudo_mode?/2" do
     test "validates the authenticated_at time" do
       now = DateTime.utc_now()
+      window = Accounts.sudo_window_minutes()
 
       assert Accounts.sudo_mode?(%User{authenticated_at: DateTime.utc_now()})
-      assert Accounts.sudo_mode?(%User{authenticated_at: DateTime.add(now, -19, :minute)})
-      refute Accounts.sudo_mode?(%User{authenticated_at: DateTime.add(now, -21, :minute)})
+
+      assert Accounts.sudo_mode?(%User{
+               authenticated_at: DateTime.add(now, -(window - 1), :minute)
+             })
+
+      refute Accounts.sudo_mode?(%User{
+               authenticated_at: DateTime.add(now, -(window + 1), :minute)
+             })
 
       # minute override
       refute Accounts.sudo_mode?(
@@ -215,6 +222,22 @@ defmodule LiveQuiz.AccountsTest do
 
       # not authenticated
       refute Accounts.sudo_mode?(%User{})
+    end
+
+    test "a janela é uma só, e é a que o mount e os eventos usam" do
+      # Duas janelas eram uma validade que ninguém conseguia prever: a tela de
+      # configurações era montada sob dez minutos e seus eventos conferidos
+      # contra vinte, então uma aba podia ser recusada na entrada e ainda assim
+      # conseguir agir (R06).
+      assert Accounts.sudo_window_minutes() == 10
+
+      borderline = %User{
+        authenticated_at:
+          DateTime.add(DateTime.utc_now(), -(Accounts.sudo_window_minutes() - 1), :minute)
+      }
+
+      assert Accounts.sudo_mode?(borderline)
+      assert Accounts.sudo_mode?(borderline, -Accounts.sudo_window_minutes())
     end
   end
 

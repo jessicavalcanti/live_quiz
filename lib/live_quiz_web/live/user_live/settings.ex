@@ -4,6 +4,7 @@ defmodule LiveQuizWeb.UserLive.Settings do
   on_mount {LiveQuizWeb.UserAuth, :require_sudo_mode}
 
   alias LiveQuiz.Accounts
+  alias LiveQuizWeb.UserAuth
 
   @impl true
   def render(assigns) do
@@ -111,11 +112,42 @@ defmodule LiveQuizWeb.UserLive.Settings do
     {:noreply, assign(socket, email_form: email_form)}
   end
 
-  def handle_event("update_email", params, socket) do
-    %{"user" => user_params} = params
+  def handle_event("update_email", %{"user" => user_params}, socket) when is_map(user_params) do
     user = socket.assigns.current_scope.user
-    true = Accounts.sudo_mode?(user)
 
+    case UserAuth.ensure_sudo(user) do
+      :ok -> change_email(socket, user, user_params)
+      {:error, :sudo_required} -> {:noreply, reauthenticate(socket)}
+    end
+  end
+
+  def handle_event("update_email", _params, socket), do: {:noreply, socket}
+
+  def handle_event("validate_password", params, socket) do
+    %{"user" => user_params} = params
+
+    password_form =
+      socket.assigns.current_scope.user
+      |> Accounts.change_user_password(user_params, hash_password: false)
+      |> Map.put(:action, :validate)
+      |> to_form()
+
+    {:noreply, assign(socket, password_form: password_form)}
+  end
+
+  def handle_event("update_password", %{"user" => user_params}, socket)
+      when is_map(user_params) do
+    user = socket.assigns.current_scope.user
+
+    case UserAuth.ensure_sudo(user) do
+      :ok -> change_password(socket, user, user_params)
+      {:error, :sudo_required} -> {:noreply, reauthenticate(socket)}
+    end
+  end
+
+  def handle_event("update_password", _params, socket), do: {:noreply, socket}
+
+  defp change_email(socket, user, user_params) do
     case Accounts.change_user_email(user, user_params) do
       %{valid?: true} = changeset ->
         Accounts.deliver_user_update_email_instructions(
@@ -132,23 +164,7 @@ defmodule LiveQuizWeb.UserLive.Settings do
     end
   end
 
-  def handle_event("validate_password", params, socket) do
-    %{"user" => user_params} = params
-
-    password_form =
-      socket.assigns.current_scope.user
-      |> Accounts.change_user_password(user_params, hash_password: false)
-      |> Map.put(:action, :validate)
-      |> to_form()
-
-    {:noreply, assign(socket, password_form: password_form)}
-  end
-
-  def handle_event("update_password", params, socket) do
-    %{"user" => user_params} = params
-    user = socket.assigns.current_scope.user
-    true = Accounts.sudo_mode?(user)
-
+  defp change_password(socket, user, user_params) do
     case Accounts.change_user_password(user, user_params) do
       %{valid?: true} = changeset ->
         {:noreply, assign(socket, trigger_submit: true, password_form: to_form(changeset))}
@@ -156,5 +172,15 @@ defmodule LiveQuizWeb.UserLive.Settings do
       changeset ->
         {:noreply, assign(socket, password_form: to_form(changeset, action: :insert))}
     end
+  end
+
+  # The window closed between this page being opened and this event arriving,
+  # which is an ordinary thing for a tab to do. Nothing typed comes along to the
+  # login: a password carried through a redirect to save one retype is not a
+  # trade worth making (R06).
+  defp reauthenticate(socket) do
+    socket
+    |> put_flash(:error, "Confirme sua senha para continuar.")
+    |> redirect(to: ~p"/users/log-in")
   end
 end
