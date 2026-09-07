@@ -254,7 +254,11 @@ defmodule LiveQuizWeb.Api.V1.GamePlayController do
          {:ok, %GameSession{} = session} <- Games.get_match_by_code(code),
          {:ok, %Participant{} = participant} <- playing_participant(conn, session),
          {:ok, recorded} <-
-           Games.answer_question(participant, option_id, Presence.connected_count(session.id)) do
+           Games.answer_question(
+             participant,
+             option_id,
+             Presence.connected_participant_ids(session.id)
+           ) do
       conn
       |> put_status(:created)
       |> render(:answer, answer: recorded.answer, closed?: recorded.closed?)

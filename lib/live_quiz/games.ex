@@ -265,7 +265,7 @@ defmodule LiveQuiz.Games do
   defdelegate close_question_by_timeout(session_id), to: Match
   defdelegate list_sessions_with_open_question(), to: Match
   defdelegate get_session_for_timeout(session_id), to: Match
-  defdelegate answer_question(participant, answer_option_id, connected_count), to: Match
+  defdelegate answer_question(participant, answer_option_id, connected_ids), to: Match
   defdelegate current_answers_count(session), to: Match
   defdelegate finish_game_session(scope, session), to: Match
   defdelegate game_state(session, viewer), to: Match

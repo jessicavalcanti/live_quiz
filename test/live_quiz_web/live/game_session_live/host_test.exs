@@ -624,10 +624,10 @@ defmodule LiveQuizWeb.GameSessionLive.HostTest do
 
       assert answers_counter(lv) == "Respostas: 0 / 3"
 
-      {:ok, _answer} = Games.answer_question(one, option.id, 3)
+      {:ok, _answer} = Games.answer_question(one, option.id, [])
       assert answers_counter(lv) == "Respostas: 1 / 3"
 
-      {:ok, _answer} = Games.answer_question(two, option.id, 3)
+      {:ok, _answer} = Games.answer_question(two, option.id, [])
       assert answers_counter(lv) == "Respostas: 2 / 3"
     end
 
@@ -951,8 +951,10 @@ defmodule LiveQuizWeb.GameSessionLive.HostTest do
 
       {:ok, lv, _html} = live(conn, ~p"/game-sessions/#{session.join_code}/host")
 
+      connected = Enum.map(participants, & &1.id)
+
       for participant <- participants do
-        {:ok, _answer} = Games.answer_question(participant, option.id, 3)
+        {:ok, _answer} = Games.answer_question(participant, option.id, connected)
       end
 
       assert has_element?(lv, "#question-closed-badge")
