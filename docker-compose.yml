@@ -5,7 +5,10 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: live_quiz_dev
-    ports: ["5432:5432"]
+    # Só o loopback. O banco de desenvolvimento tem credenciais conhecidas, e
+    # publicá-lo em todas as interfaces oferece essas credenciais a qualquer um
+    # na mesma rede — um café, um coworking, uma conferência (R51).
+    ports: ["127.0.0.1:${DB_PORT:-5432}:5432"]
     volumes: ["pgdata:/var/lib/postgresql/data"]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
@@ -15,7 +18,11 @@ services:
 
   mailpit:
     image: axllent/mailpit
-    ports: ["${SMTP_PORT:-1025}:1025", "${MAILPIT_UI_PORT:-8025}:8025"]
+    # A caixa de entrada de desenvolvimento contém links de confirmação e de
+    # redefinição de senha. Ela é local pelo mesmo motivo.
+    ports:
+      - "127.0.0.1:${SMTP_PORT:-1025}:1025"
+      - "127.0.0.1:${MAILPIT_UI_PORT:-8025}:8025"
 
   app:
     build:

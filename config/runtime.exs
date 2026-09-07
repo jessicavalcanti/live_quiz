@@ -76,6 +76,18 @@ if config_env() == :prod do
 
   host = System.get_env("PHX_HOST") || "example.com"
 
+  # O endereço que a aplicação usa para montar links absolutos — o link de
+  # entrada e o QR code que ele vira. Produção fala https na 443 e não precisa
+  # dizer nada; uma demonstração local fala http numa porta alta, e sem poder
+  # dizê-lo o QR apontava para `https://localhost:443` (R51).
+  url_scheme = System.get_env("PHX_SCHEME") || "https"
+
+  url_port =
+    case System.get_env("PHX_URL_PORT") do
+      nil -> if url_scheme == "https", do: 443, else: 80
+      port -> String.to_integer(port)
+    end
+
   # O segredo dos JWTs da API é independente do `secret_key_base` do Phoenix:
   # comprometer um não deve comprometer o outro.
   guardian_secret_key =
@@ -90,7 +102,7 @@ if config_env() == :prod do
   config :live_quiz, :dns_cluster_query, System.get_env("DNS_CLUSTER_QUERY")
 
   config :live_quiz, LiveQuizWeb.Endpoint,
-    url: [host: host, port: 443, scheme: "https"],
+    url: [host: host, port: url_port, scheme: url_scheme],
     http: [
       # Enable IPv6 and bind on all interfaces.
       # Set it to  {0, 0, 0, 0, 0, 0, 0, 1} for local network only access.

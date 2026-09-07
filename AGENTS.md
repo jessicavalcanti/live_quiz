@@ -243,6 +243,43 @@ gh pr create --base main --head develop \
 > O PR para a `main` **só é aceito a partir da `develop`** — há um job de CI que reprova qualquer
 > outra origem.
 
+### Migrações e janela de manutenção
+
+**O modelo de implantação deste projeto é janela de manutenção**, e as migrações
+são escritas para ele. Isso é uma escolha, não um descuido, e precisa estar dito
+porque as duas coisas se parecem quando ninguém escreveu qual é.
+
+O que a escolha significa na prática:
+
+- Uma migração pode **renomear uma coluna** ou **transformar JSON em lote**. As
+  duas exigem que código antigo e novo não estejam no ar ao mesmo tempo, e é
+  exatamente isso que a janela garante.
+- O procedimento é: parar a aplicação, migrar, subir a versão nova. Não é rolling
+  update, e uma migração que assuma coexistência de versões não seria segura aqui.
+
+Se zero downtime virar requisito, o modelo muda inteiro: *expand/contract*,
+compatibilidade temporária entre as duas versões e backfill em lotes. Não é uma
+adaptação de uma migração existente — é outra maneira de escrevê-las.
+
+#### O que `down` recupera, e o que não
+
+Uma migração reversível devolve o **esquema**, não necessariamente o **dado**.
+Onde a informação foi descartada de propósito, `down` recria a coluna vazia:
+
+| Migração | `down` devolve | Não devolve |
+|---|---|---|
+| `drop_options_from_question_results` | a chave `options` no JSON | o conteúdo dela, descartado na #118 |
+| `rename_question_text_on_snapshot` | o nome anterior da coluna | — |
+| `add_question_clock_to_snapshot` | o esquema sem as colunas | os instantes já registrados |
+| `add_question_totals_to_game_results` | o esquema sem os contadores | — |
+| `add_public_id_to_game_sessions` | o esquema sem o identificador | os identificadores emitidos, que eram os endereços duráveis |
+| `enforce_result_invariants_in_the_database` | as constraints anteriores | — |
+
+Antes de qualquer migração que transforme dado: **backup, dry run em cópia da
+base, e contagem antes e depois**. Uma migração irreversível deve dizer que é
+irreversível, em vez de oferecer um `down` que dá a impressão de recuperar o que
+já não existe.
+
 ### Gravar a demonstração de uma versão
 
 ```bash
