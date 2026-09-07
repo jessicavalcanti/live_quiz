@@ -11,9 +11,15 @@ defmodule LiveQuizWeb.Endpoint do
     same_site: "Lax"
   ]
 
+  # `:peer_data` carries the address the socket came from, which is what lets a
+  # LiveView spend the same budgets the controllers do — asking for a reset
+  # link, or trying join codes, happens over this socket and not over a request
+  # a plug could see (R05).
+  @connect_info [:peer_data, session: @session_options]
+
   socket "/live", Phoenix.LiveView.Socket,
-    websocket: [connect_info: [session: @session_options]],
-    longpoll: [connect_info: [session: @session_options]]
+    websocket: [connect_info: @connect_info],
+    longpoll: [connect_info: @connect_info]
 
   # Serve at "/" the static files from "priv/static" directory.
   #

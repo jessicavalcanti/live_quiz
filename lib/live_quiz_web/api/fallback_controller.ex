@@ -55,6 +55,13 @@ defmodule LiveQuizWeb.Api.FallbackController do
     error(conn, :unprocessable_entity, "Filtros e paginação inválidos", "invalid_filter")
   end
 
+  # A budget spent. `Retry-After` is part of the refusal rather than a courtesy:
+  # without it a client backs off by guessing, and guessing means retrying too
+  # soon (R05).
+  def call(conn, {:error, {:rate_limited, retry_after}}) do
+    LiveQuizWeb.RateLimit.refuse(conn, retry_after)
+  end
+
   def call(conn, {:error, :invalid_credentials}) do
     error(conn, :unauthorized, "E-mail ou senha inválidos")
   end

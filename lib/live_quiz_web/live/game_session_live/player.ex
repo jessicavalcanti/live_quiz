@@ -412,11 +412,26 @@ defmodule LiveQuizWeb.GameSessionLive.Player do
   defp submit(socket, option_id) do
     %{participant: participant, connected_ids: connected} = socket.assigns
 
+    case LiveQuiz.RateLimit.hit(:answer_by_participation, participant.id) do
+      :ok -> record(socket, participant, option_id, connected)
+      {:error, _retry_after} -> assign(socket, :notice, refusal(:rate_limited))
+    end
+  end
+
+  defp record(socket, participant, option_id, connected) do
     case Games.answer_question(participant, option_id, connected) do
       {:ok, _recorded} -> socket |> assign(:notice, nil) |> load_match()
       {:error, reason} -> socket |> assign(:notice, refusal(reason)) |> load_match()
     end
   end
+
+  # Recording an answer takes the lock of the match, so the budget is per
+  # participation and never per room: one person holding the button down must
+  # not be able to make the room slow for everybody playing with them (R05).
+  # The match is not re-read here — nothing about it changed, and re-reading is
+  # exactly the work being declined.
+  defp refusal(:rate_limited),
+    do: "Muitos toques seguidos. Espere um instante antes de responder de novo."
 
   defp refusal(:time_is_up),
     do: "O tempo desta pergunta acabou. Sua resposta não foi registrada."

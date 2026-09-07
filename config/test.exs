@@ -68,3 +68,8 @@ config :phoenix_live_view,
 # Sort query params output of verified routes for robust url comparisons
 config :phoenix,
   sort_verified_routes_query_params: true
+
+# Rate limiting is off by default in tests: a shared budget across async cases
+# would make one case fail because of another. The cases that exercise it turn
+# it on with `LiveQuiz.RateLimitCase`.
+config :live_quiz, LiveQuiz.RateLimit, enabled: false
