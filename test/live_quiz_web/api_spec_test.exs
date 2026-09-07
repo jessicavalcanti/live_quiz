@@ -156,8 +156,14 @@ defmodule LiveQuizWeb.ApiSpecTest do
 
       assert String.starts_with?(spec["openapi"], "3.")
       assert spec["info"]["title"] == "Live Quiz API"
-      assert spec["info"]["version"] == "1.0.0"
       assert is_map(spec["paths"])
+
+      # A versão vem da aplicação, e é isto que o teste afirma — não o número
+      # de hoje. Escrito à mão, ele reprovava a cada `chore(release): bump` e
+      # não dizia nada sobre a única coisa que importa aqui: que o documento
+      # publica a versão que está rodando.
+      assert spec["info"]["version"] == to_string(Application.spec(:live_quiz, :vsn))
+      assert spec["info"]["version"] =~ ~r/^\d+\.\d+\.\d+/
     end
 
     test "does not require authentication", %{conn: conn} do
