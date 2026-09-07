@@ -406,6 +406,7 @@ Variáveis lidas em tempo de execução (`config/runtime.exs`):
 | `SECRET_KEY_BASE` | sim | — |
 | `PHX_HOST` | não | `example.com` |
 | `PORT` | não | `4000` |
+| `TRUSTED_PROXY_HOPS` | **sim** | — |
 | `SMTP_MODE` | não | `provider` |
 | `SMTP_HOST` | **sim**, fora de `SMTP_MODE=demo` | — |
 | `SMTP_PORT` | não | `587` (`1025` no modo demo) |
@@ -420,6 +421,15 @@ O envio de e-mail é **assíncrono e durável**: a intenção é gravada em
 entrega com até 5 tentativas (30s, 2min, 10min, 1h). Uma mensagem deixa de ser
 tentada quando o link que ela carrega expira — insistir depois entregaria um
 endereço morto.
+
+`TRUSTED_PROXY_HOPS` diz o que está **na frente** da aplicação, e não tem
+padrão de propósito: `0` para conexão direta, ou o número de proxies confiáveis
+(um balanceador é `1`). Com ele, a origem contada pelo rate limiting é a entrada
+N-ésima **a contar do fim** de `X-Forwarded-For` — a que o proxy confiável mais
+próximo observou; o começo da lista é escrito pelo cliente e nunca é lido.
+Errar isso em silêncio ou deixa qualquer um gastar o orçamento alheio, ou
+colapsa todos os visitantes em um orçamento só e tranca uma sala fora do próprio
+jogo.
 
 `SMTP_MODE=demo` é o relay aberto do Mailpit, sem autenticação nem TLS, e é o
 que o `docker-compose.demo.yml` usa. Em qualquer outro modo a release **não

@@ -103,6 +103,9 @@ jobs:
       # que uma demonstração faz; a etapa "Sem credenciais de SMTP" abaixo é o
       # que prova que qualquer outra coisa precisa das credenciais.
       SMTP_MODE: demo
+      # A smoke fala direto com a release, sem proxy nenhum na frente. A release
+      # exige que o deploy diga qual é a topologia, e esta é a resposta dela.
+      TRUSTED_PROXY_HOPS: "0"
     services:
       db:
         image: postgres:16-alpine
@@ -130,7 +133,7 @@ jobs:
       - name: Migrações e seed da demonstração
         run: |
           docker run --rm --network host \
-            -e DATABASE_URL -e SECRET_KEY_BASE -e GUARDIAN_SECRET_KEY -e SMTP_MODE \
+            -e DATABASE_URL -e SECRET_KEY_BASE -e GUARDIAN_SECRET_KEY -e SMTP_MODE -e TRUSTED_PROXY_HOPS \
             -e DEMO_SEED=true \
             live-quiz-smoke bin/live_quiz eval 'LiveQuiz.Release.migrate(); LiveQuiz.Release.seed()'
 
@@ -141,6 +144,7 @@ jobs:
         run: |
           if docker run --rm --network host \
             -e DATABASE_URL -e SECRET_KEY_BASE -e GUARDIAN_SECRET_KEY -e PHX_HOST \
+            -e TRUSTED_PROXY_HOPS \
             live-quiz-smoke bin/live_quiz eval 'IO.puts("subiu")' > smtp.log 2>&1; then
             echo "::error::A release subiu sem SMTP_HOST, SMTP_USERNAME e SMTP_PASSWORD"
             cat smtp.log
@@ -157,7 +161,7 @@ jobs:
         run: |
           docker run -d --name smoke --network host \
             -e DATABASE_URL -e SECRET_KEY_BASE -e GUARDIAN_SECRET_KEY -e PHX_HOST \
-            -e SMTP_MODE \
+            -e SMTP_MODE -e TRUSTED_PROXY_HOPS \
             live-quiz-smoke
 
           for attempt in $(seq 1 60); do

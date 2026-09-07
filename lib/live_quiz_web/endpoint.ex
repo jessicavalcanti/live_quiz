@@ -19,7 +19,11 @@ defmodule LiveQuizWeb.Endpoint do
   # LiveView spend the same budgets the controllers do — asking for a reset
   # link, or trying join codes, happens over this socket and not over a request
   # a plug could see (R05).
-  @connect_info [:peer_data, session: @session_options]
+  # `:x_headers` joins `:peer_data` because a socket arrives through the same
+  # proxies a request does, and `LiveQuizWeb.RateLimit` has to count it the same
+  # way — otherwise the budgets a LiveView spends are exactly the ones that
+  # collapse behind a balancer.
+  @connect_info [:peer_data, :x_headers, session: @session_options]
 
   socket "/live", Phoenix.LiveView.Socket,
     websocket: [connect_info: @connect_info],

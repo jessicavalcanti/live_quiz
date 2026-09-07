@@ -237,6 +237,45 @@ if config_env() == :prod do
 
   config :live_quiz, LiveQuiz.Mailer, [{:adapter, Swoosh.Adapters.SMTP} | mailer_options]
 
+  # ## What is in front of the application
+  #
+  # `LiveQuizWeb.RateLimit` counts by origin, and what the origin *is* depends
+  # on the topology. Behind a balancer, the socket peer is the balancer, and
+  # every request in the world lands on one key — which is not a weak limiter
+  # but an outage, since a room of thirty people entering at once locks itself
+  # out of a budget of twenty.
+  #
+  # There is no safe default for this, so there is no default: a deployment says
+  # what it is. `0` for a direct connection; `N` for N trusted proxies in front,
+  # which makes the origin the entry N from the end of `X-Forwarded-For` — the
+  # one the nearest trusted proxy observed. The front of that list is written by
+  # the client and is never read.
+  trusted_proxy_hops =
+    case System.get_env("TRUSTED_PROXY_HOPS") do
+      nil ->
+        raise """
+        environment variable TRUSTED_PROXY_HOPS is missing.
+
+        Set it to 0 when the application takes connections directly, or to the
+        number of trusted proxies in front of it (a single load balancer is 1).
+        Getting this wrong silently either lets anybody spend anybody's rate
+        limit budget, or collapses every visitor into one budget and locks a
+        room out of its own game.
+        """
+
+      value ->
+        case Integer.parse(value) do
+          {hops, ""} when hops >= 0 ->
+            hops
+
+          _not_a_count ->
+            raise "environment variable TRUSTED_PROXY_HOPS is #{inspect(value)}, " <>
+                    "which is not a number of proxies."
+        end
+    end
+
+  config :live_quiz, LiveQuizWeb.RateLimit, trusted_proxy_hops: trusted_proxy_hops
+
   # Retrying is the outbox's job, not the adapter's: `LiveQuiz.Mail` counts the
   # attempts, backs them off, and stops at the life of the link it carries.
   config :live_quiz, LiveQuiz.Mail, from: System.get_env("MAIL_FROM", "nao-responda@livequiz.dev")
