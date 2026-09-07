@@ -8,23 +8,51 @@
     <link phx-track-static rel="stylesheet" href={~p"/assets/css/app.css"} />
     <script defer phx-track-static type="text/javascript" src={~p"/assets/js/app.js"}>
     </script>
+    <%!--
+      O único script inline do projeto, e ele é inline por um motivo: o tema tem
+      de estar no `<html>` antes do primeiro pixel. Movido para o bundle, que é
+      `defer`, a página pinta clara e depois escurece — o flash de tema que
+      nenhuma quantidade de CSS conserta. A regra que o próximo agente lê está
+      na seção 8 do AGENTS.md, com esta exceção nomeada (R42).
+
+      `localStorage` é lido e escrito dentro de `try`: em uma janela privada, ou
+      num navegador configurado para bloquear dados de site, o acesso *lança*.
+      Sem a proteção, essa exceção derrubava a IIFE inteira — nenhum tema
+      aplicado e nenhum dos ouvintes registrado, então o botão de tema parava de
+      funcionar em silêncio. Sem armazenamento, o tema vale para a sessão e não
+      é lembrado, que é a degradação certa.
+    --%>
     <script>
       (() => {
         const systemTheme = () => matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 
+        const remember = (theme) => {
+          try {
+            theme === "system" ? localStorage.removeItem("phx:theme") : localStorage.setItem("phx:theme", theme);
+          } catch (_unavailable) {}
+        };
+
+        const remembered = () => {
+          try {
+            return localStorage.getItem("phx:theme");
+          } catch (_unavailable) {
+            return null;
+          }
+        };
+
         const setTheme = (theme) => {
+          remember(theme);
+
           if (theme === "system") {
-            localStorage.removeItem("phx:theme");
             document.documentElement.setAttribute("data-theme", systemTheme());
             document.documentElement.setAttribute("data-theme-source", "system");
           } else {
-            localStorage.setItem("phx:theme", theme);
             document.documentElement.setAttribute("data-theme", theme);
             document.documentElement.setAttribute("data-theme-source", "user");
           }
         };
         if (!document.documentElement.hasAttribute("data-theme")) {
-          setTheme(localStorage.getItem("phx:theme") || "system");
+          setTheme(remembered() || "system");
         }
         window.addEventListener("storage", (e) => e.key === "phx:theme" && setTheme(e.newValue || "system"));
         window.addEventListener("phx:set-theme", (e) => setTheme(e.target.dataset.phxTheme));

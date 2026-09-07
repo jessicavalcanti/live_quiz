@@ -373,6 +373,8 @@ ou dentro do container com `docker compose exec app`.
 | Locks | ordem global única, declarada em `LiveQuiz.Games.Locks`: **identity → match → seats** |
 | Sessões | apagar `UserToken` encerra sessões web; desconectar sockets já montados exige `UserAuth.disconnect_sessions/1`. As sessões de API são revogadas em duas metades: a família em `refresh_tokens` (um dispositivo) e `users.auth_version` no claim `ver` (todos, na hora) |
 | E-mail | gravar a intenção e enviar são separados: `LiveQuiz.Mail.record/1` escreve na mesma transação do token e `LiveQuiz.Mail.Courier` entrega, com retry limitado. Uma mensagem para de ser tentada quando o link que ela carrega expira. Fora de `SMTP_MODE=demo`, a release exige host, usuário, senha e verifica o certificado |
+| CSS | Tailwind v4 + **daisyUI**, que é a stack aprovada e está no `mix.exs`. Isto **substitui** a diretriz gerada da seção 10, que manda escrever componentes só com Tailwind |
+| Scripts | um bundle (`app.js`), hooks colocados (`Phoenix.LiveView.ColocatedHook`) e **uma** exceção nomeada: o bootstrap de tema no `root.html.heex` |
 | Limites | orçamentos por operação em `LiveQuiz.RateLimit`, gastos **antes** do trabalho caro. Chave por operação + identidade + origem, nunca só a origem; responder é contado por participação, para que ninguém trave a sala inteira. A origem é `remote_ip` — `X-Forwarded-For` não é lido, então atrás de proxy é o proxy que precisa entregar o endereço do par |
 
 ---
@@ -410,6 +412,26 @@ gh issue view 1 --repo jessicavalcanti/live_quiz
 A partir daqui estão as diretrizes de uso de Elixir, Phoenix, Ecto e LiveView instaladas pelo
 `mix phx.new` e mantidas por `mix usage_rules.sync`. Elas complementam — e nunca substituem — as
 regras de processo das seções anteriores.
+
+> **Duas delas não valem aqui, e a seção 8 é quem manda** (R42). O texto abaixo é
+> gerado e volta ao original a cada `mix usage_rules.sync`, então corrigi-lo no
+> lugar não adiantaria; o que vale está anotado aqui e na tabela da seção 8.
+>
+> - *"Always manually write your own tailwind-based components instead of using
+>   daisyUI"* — **daisyUI é a stack deste projeto**, está no `mix.exs` e é o que
+>   toda a interface usa. Arrancá-la seria reescrever a interface inteira para
+>   satisfazer uma diretriz genérica, e o review pede explicitamente para não
+>   apagar estilos em massa. Componentes novos usam daisyUI + Tailwind como os
+>   existentes.
+> - *"Never write inline `<script>` tags within templates"* — vale para tudo
+>   menos **um** script, o bootstrap de tema em `root.html.heex`. Ele existe
+>   porque o tema tem de estar no `<html>` antes do primeiro pixel: o bundle é
+>   `defer`, e a página pintaria clara antes de escurecer. Hooks colocados não
+>   são scripts inline para efeito desta regra, como o próprio review observa.
+>
+> Qualquer *outro* `<script>` inline continua proibido, e não há uma terceira
+> exceção esperando para ser criada: se um script novo precisar rodar antes da
+> pintura, ele entra aqui, com o motivo escrito.
 
 This is a web application written using the Phoenix web framework.
 
