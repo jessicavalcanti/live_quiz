@@ -147,12 +147,20 @@ defmodule LiveQuiz.Games.QuestionTimerTest do
       :ok = Games.subscribe(session.id)
 
       assert QuestionTimer.fire_now(session.id) == :ok
-      await_stop(pid)
 
       current = reload(session)
       assert current.current_question_position == 2
       assert is_nil(current.current_question_closed_at)
       refute_receive {:question_closed, _nothing}, 100
+
+      # Ele não morre ao descobrir que ficou para trás: este processo é o timer
+      # da sala, e desistir aqui deixava a pergunta 2 sem prazo nenhum até o
+      # próximo boot. Ele passa a cronometrar a pergunta que a linha aponta.
+      assert Process.alive?(pid)
+      assert QuestionTimer.whereis(session.id) == pid
+      assert QuestionTimer.timing(session.id) == 2
+
+      :ok = QuestionTimer.stop(session.id)
     end
 
     test "a partida encerrada apaga o timer sem tocar em nada", %{

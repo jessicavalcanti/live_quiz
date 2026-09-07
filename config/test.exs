@@ -38,6 +38,10 @@ config :live_quiz, LiveQuiz.Games.ExpirationSweeper, enabled: false
 # its own with `enabled: true`.
 config :live_quiz, LiveQuiz.Games.QuestionTimer, enabled: false
 
+# Nor does the reconciler run on its own: a test that wants a lost timer put
+# back calls `QuestionTimerReconciler.reconcile_now/0`.
+config :live_quiz, LiveQuiz.Games.QuestionTimerReconciler, enabled: false
+
 # The grace period of the application's monitor is long on purpose: a test that
 # cares about timing starts a monitor of its own with a short window, so no stray
 # wait leaks from one test into the next.

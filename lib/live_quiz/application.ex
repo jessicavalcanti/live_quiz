@@ -23,6 +23,11 @@ defmodule LiveQuiz.Application do
       # match (AD-40), found through a registry so a match never has two.
       {Registry, keys: :unique, name: LiveQuiz.Games.QuestionTimerRegistry},
       LiveQuiz.Games.QuestionTimerSupervisor,
+      # Timers are temporary on purpose — one that dies for a question that is
+      # over must not come back — so something has to notice the ones that died
+      # for a question that is not. The reconciler is that something, and it is
+      # why a lost timer costs a tick instead of a restart (R19).
+      LiveQuiz.Games.QuestionTimerReconciler,
       # Start to serve requests, typically the last entry
       LiveQuizWeb.Endpoint
     ]
