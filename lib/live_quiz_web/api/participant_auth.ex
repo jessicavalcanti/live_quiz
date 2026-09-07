@@ -43,6 +43,13 @@ defmodule LiveQuizWeb.Api.ParticipantAuth do
   @scheme "participant"
   @bearer_scheme "bearer"
 
+  # A client presenting a handful of credentials is a client that has taken part
+  # in a handful of rooms; one presenting a hundred is a client turning a header
+  # into a lookup loop. The extras are dropped rather than refused: the ones
+  # that matter are the first few, and this is a hint about other rooms, not an
+  # authorization.
+  @max_credentials 10
+
   @impl Plug
   def init(opts), do: Keyword.get(opts, :require, true)
 
@@ -67,7 +74,12 @@ defmodule LiveQuizWeb.Api.ParticipantAuth do
     conn
     |> credentials()
     |> Enum.flat_map(fn {scheme, token} -> if scheme == @scheme, do: [token], else: [] end)
+    |> Enum.take(@max_credentials)
   end
+
+  @doc "How many participant credentials one request may present."
+  @spec max_credentials() :: pos_integer()
+  def max_credentials, do: @max_credentials
 
   # The JWT goes through the pipeline of the authenticated endpoints, so there
   # is a single place where a token is verified and a scope is assigned. It only
