@@ -376,6 +376,7 @@ ou dentro do container com `docker compose exec app`.
 | E-mail | gravar a intenção e enviar são separados: `LiveQuiz.Mail.record/1` escreve na mesma transação do token e `LiveQuiz.Mail.Courier` entrega, com retry limitado. Uma mensagem para de ser tentada quando o link que ela carrega expira. Fora de `SMTP_MODE=demo`, a release exige host, usuário, senha e verifica o certificado |
 | CSS | Tailwind v4 + **daisyUI**, que é a stack aprovada e está no `mix.exs`. Isto **substitui** a diretriz gerada da seção 10, que manda escrever componentes só com Tailwind |
 | Scripts | um bundle (`app.js`), hooks colocados (`Phoenix.LiveView.ColocatedHook`) e **uma** exceção nomeada: o bootstrap de tema no `root.html.heex` |
+| Telemetria | evento novo entra em `LiveQuizWeb.Telemetry.metrics/0` no mesmo PR — emitir sem declarar é escrever um número que nenhum reporter recolhe. Etiqueta só de conjunto fixo, nunca sala, pessoa ou endereço. O que for silencioso e significar "alguém não recebeu algo" vai também para `Telemetry.Alerts`, que registra em log sem depender de coletor |
 | Limites | orçamentos por operação em `LiveQuiz.RateLimit`, gastos **antes** do trabalho caro. Chave por operação + identidade + origem, nunca só a origem; responder é contado por participação, para que ninguém trave a sala inteira. A origem depende de `TRUSTED_PROXY_HOPS`, que um deploy **tem** de declarar: `0` conta o par do socket, `N` conta a entrada N-ésima do fim de `X-Forwarded-For`. O começo da lista é do cliente e nunca é lido |
 
 ---
