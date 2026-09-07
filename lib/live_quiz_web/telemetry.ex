@@ -12,11 +12,33 @@ defmodule LiveQuizWeb.Telemetry do
       # Telemetry poller will execute the given period measurements
       # every 10_000ms. Learn more here: https://telemetry-metrics.hexdocs.pm
       {:telemetry_poller, measurements: periodic_measurements(), period: 10_000}
-      # Add reporters as children of your supervision tree.
-      # {Telemetry.Metrics.ConsoleReporter, metrics: metrics()}
+      | reporters()
     ]
 
+    LiveQuizWeb.Telemetry.Alerts.attach()
+
     Supervisor.init(children, strategy: :one_for_one)
+  end
+
+  @doc """
+  The reporters that consume `metrics/0`, from configuration.
+
+  There is none by default, and that is the honest default: which collector to
+  ship to is a deployment's decision, not a library's. What matters is that
+  adding one is configuration rather than a code change —
+
+      config :live_quiz, LiveQuizWeb.Telemetry,
+        reporters: [{Telemetry.Metrics.ConsoleReporter, metrics: LiveQuizWeb.Telemetry.metrics()}]
+
+  — and that the handful of events which mean "something is wrong and nobody
+  will notice" reach the log even when there is no reporter at all. That is
+  `LiveQuizWeb.Telemetry.Alerts`.
+  """
+  @spec reporters() :: list()
+  def reporters do
+    :live_quiz
+    |> Application.get_env(__MODULE__, [])
+    |> Keyword.get(:reporters, [])
   end
 
   def metrics do
@@ -127,6 +149,45 @@ defmodule LiveQuizWeb.Telemetry do
       sum("live_quiz.games.reconciliation.stop.expired",
         tags: [:kind],
         description: "Rooms closed by the expiration sweep"
+      ),
+
+      # The outbox (R07). `kind` comes from the three flows that mail a link, so
+      # the cardinality is three — never the address, which is the person, and
+      # never the body, which is a live link.
+      counter("live_quiz.mail.sent.attempts",
+        tags: [:kind],
+        description: "Messages delivered, by which flow asked for them"
+      ),
+      summary("live_quiz.mail.sent.attempts",
+        tags: [:kind],
+        description: "How many attempts a delivered message took"
+      ),
+      counter("live_quiz.mail.failed.attempts",
+        tags: [:kind],
+        description: "Attempts a provider refused"
+      ),
+      counter("live_quiz.mail.exhausted.attempts",
+        tags: [:kind],
+        description: "Messages given up on after the last attempt"
+      ),
+      counter("live_quiz.mail.expired.count",
+        tags: [:kind],
+        description: "Messages dropped because the link they carry expired first"
+      ),
+
+      # The budgets of the open endpoints (R05). `bucket` is one of a fixed set
+      # declared by `LiveQuiz.RateLimit`.
+      counter("live_quiz.rate_limit.refused.count",
+        tags: [:bucket],
+        description: "Requests refused for having spent their budget"
+      ),
+      counter("live_quiz.rate_limit.overflow.count",
+        tags: [:bucket],
+        description: "Requests let through because the limiter hit its size cap"
+      ),
+      counter("live_quiz.rate_limit.untrusted_origin.count",
+        tags: [:reason],
+        description: "Requests whose forwarded headers did not match the declared topology"
       ),
 
       # VM Metrics

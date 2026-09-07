@@ -416,6 +416,21 @@ Variáveis lidas em tempo de execução (`config/runtime.exs`):
 | `SMTP_SSL` | não | `false` |
 | `MAIL_FROM` | não | `nao-responda@livequiz.dev` |
 
+**Observabilidade.** `LiveQuizWeb.Telemetry.metrics/0` descreve as métricas de
+Phoenix, banco, VM e domínio — partida, caixa de saída e orçamentos. Não há
+reporter por padrão, porque o coletor é decisão de quem implanta; anexar um é
+configuração:
+
+```elixir
+config :live_quiz, LiveQuizWeb.Telemetry,
+  reporters: [{Telemetry.Metrics.ConsoleReporter, metrics: LiveQuizWeb.Telemetry.metrics()}]
+```
+
+Sem coletor nenhum, dois fatos ainda chegam ao log em nível de erro, porque são
+silenciosos por construção: uma mensagem descartada porque o link venceu (a
+pessoa não recebeu e nada vai tentar de novo) e o limitador ter atingido o teto
+e parado de limitar.
+
 O envio de e-mail é **assíncrono e durável**: a intenção é gravada em
 `email_deliveries` na mesma transação do token, e `LiveQuiz.Mail.Courier`
 entrega com até 5 tentativas (30s, 2min, 10min, 1h). Uma mensagem deixa de ser
