@@ -125,8 +125,22 @@ defmodule LiveQuiz.Accounts.UserToken do
     end
   end
 
+  @doc """
+  How long a token of `context` is worth sending — its validity, in days.
+
+  The delivery of the message and the life of the link are the same deadline:
+  retrying a send after the link is dead delivers a dead link (R07).
+  """
+  @spec validity_in_days(String.t()) :: pos_integer()
+  def validity_in_days(context), do: days_for_context(context)
+
   defp days_for_context("confirm"), do: @confirm_validity_in_days
   defp days_for_context("reset_password"), do: @reset_password_validity_in_days
+
+  # A change of address carries the old one in its context, so it is matched by
+  # prefix. `verify_change_email_token_query/2` applies the same window in its
+  # own `where`; this is that same number, said where a caller can read it.
+  defp days_for_context("change:" <> _current_email), do: @change_email_validity_in_days
 
   @doc """
   Checks if the token is valid and returns its underlying lookup query.

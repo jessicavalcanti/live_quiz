@@ -15,6 +15,9 @@ defmodule LiveQuiz.Application do
       # The budgets of the open endpoints. Early, and before the endpoint, so
       # the first request of a boot is already counted (R05).
       LiveQuiz.RateLimit,
+      # The outbox. Recording a message and sending it are separate so that a
+      # provider that is slow does not make the interface slow (R07).
+      LiveQuiz.Mail.Courier,
       # Who is connected to a room, the grace period of an absent host and the
       # sweep that closes the rooms whose deadline ran out. All three come
       # after the PubSub they use and before the endpoint, so a browser never

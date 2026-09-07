@@ -43,7 +43,10 @@ RUN mix release
 # --- runtime: no Elixir, no source code ---------------------------------------
 FROM alpine:3.24 AS app
 
-RUN apk add --no-cache libstdc++ openssl ncurses-libs libgcc
+# `ca-certificates` is what makes a verified TLS connection to an SMTP provider
+# possible at all: without a trust store, `verify_peer` has nothing to verify
+# against and the alternative is accepting any certificate (R07).
+RUN apk add --no-cache libstdc++ openssl ncurses-libs libgcc ca-certificates
 
 ENV LANG=C.UTF-8 \
     PHX_SERVER=true
