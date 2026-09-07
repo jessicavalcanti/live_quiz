@@ -168,8 +168,14 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
     end
   end
 
-  def handle_event("close_question", _params, socket) do
-    command(socket, &Games.close_question(&1, &2))
+  # The position travels with this click too. The lock serializes two commands
+  # but says nothing about which question each one meant: a retry aimed at
+  # question 1 that arrives after the host advanced used to close question 2
+  # (R25).
+  def handle_event("close_question", params, socket) do
+    expected = expected_position(params)
+
+    command(socket, &Games.close_question/3, expected_position: expected)
   end
 
   # The position travels with the click (AD-44): it is what the screen believed
@@ -179,7 +185,7 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
   def handle_event("advance_question", params, socket) do
     expected = expected_position(params)
 
-    command(socket, &Games.advance_question(&1, &2, expected))
+    command(socket, &Games.advance_question(&1, &2, expected, &3))
   end
 
   def handle_event("open_finish", _params, socket) do
@@ -193,7 +199,7 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
   def handle_event("confirm_finish", _params, socket) do
     socket
     |> assign(:show_finish_modal?, false)
-    |> command(&Games.finish_game_session(&1, &2))
+    |> command(&Games.finish_game_session/3)
   end
 
   def handle_event("open_cancel", _params, socket) do
@@ -207,7 +213,7 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
   def handle_event("confirm_cancel", _params, socket) do
     socket
     |> assign(:show_cancel_modal?, false)
-    |> command(&Games.cancel_game_session(&1, &2))
+    |> command(&Games.cancel_game_session/3)
   end
 
   # The clipboard write itself is the hook's job; the server only confirms it,
@@ -223,13 +229,19 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
   # Every command of the match is the same gesture: a screen that lost the
   # access commands nothing, the context is what judges the click, and what
   # comes back is read again instead of being patched into the assigns.
-  defp command(socket, run) do
+  # `access_lost?` is what this tab believes; the lease the context checks is
+  # what the database holds. Believing the assign alone let a tab command a room
+  # another device had taken over, for as long as the revocation event had not
+  # been processed — or forever, if it arrived out of order (R22). The command
+  # carries the lease so the refusal comes from the row.
+  defp command(socket, run, opts \\ []) do
     if socket.assigns.access_lost? do
       {:noreply, socket}
     else
-      %{current_scope: scope, session: session} = socket.assigns
+      %{current_scope: scope, session: session, connection_id: connection_id} = socket.assigns
+      opts = Keyword.put(opts, :connection_id, connection_id)
 
-      case run.(scope, session) do
+      case run.(scope, session, opts) do
         {:ok, %GameSession{status: :in_progress} = running} ->
           {:noreply, socket |> assign(:session, running) |> load_match()}
 
@@ -241,6 +253,11 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
         # nothing to say about it beyond redrawing itself.
         {:error, :stale} ->
           {:noreply, load_match(socket)}
+
+        # The row says another connection holds the room. Whatever this tab
+        # believed, it is not the host any more.
+        {:error, :access_lost} ->
+          {:noreply, assign(socket, :access_lost?, true)}
 
         {:error, reason} ->
           {:noreply, put_flash(socket, :error, refusal(reason))}
@@ -259,6 +276,15 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
   end
 
   defp expected_position(_params), do: nil
+
+  defp still_in_control?(socket) do
+    %{session: session, connection_id: connection_id} = socket.assigns
+
+    case Games.get_live_game_session(session.id) do
+      nil -> false
+      current -> Games.host_connection_current?(current, connection_id)
+    end
+  end
 
   # `Phoenix.Presence` publishes its raw diff on the same topic. The nudge this
   # screen reacts to is `{:presence_changed, id}`, announced by
@@ -295,7 +321,11 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
     if connection_id == socket.assigns.connection_id do
       {:noreply, socket}
     else
-      {:noreply, assign(socket, :access_lost?, true)}
+      # Not "somebody else claimed it", but "does the room still say I hold it".
+      # Two claims in quick succession can reach this tab in either order, and
+      # believing the last message alone let the winner conclude it had lost
+      # (R22). The row is the only thing that knows.
+      {:noreply, assign(socket, :access_lost?, not still_in_control?(socket))}
     end
   end
 

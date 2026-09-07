@@ -261,13 +261,16 @@ defmodule LiveQuiz.Games do
   defdelegate snapshot_question_count(session), to: Match
   defdelegate question_count(session), to: Match
   defdelegate advance_question(scope, session, expected_position), to: Match
+  defdelegate advance_question(scope, session, expected_position, opts), to: Match
   defdelegate close_question(scope, session), to: Match
+  defdelegate close_question(scope, session, opts), to: Match
   defdelegate close_question_by_timeout(session_id), to: Match
   defdelegate list_sessions_with_open_question(), to: Match
   defdelegate get_session_for_timeout(session_id), to: Match
   defdelegate answer_question(participant, answer_option_id, connected_ids), to: Match
   defdelegate current_answers_count(session), to: Match
   defdelegate finish_game_session(scope, session), to: Match
+  defdelegate finish_game_session(scope, session, opts), to: Match
   defdelegate game_state(session, viewer), to: Match
   defdelegate question_results(session, position, viewer), to: Match
   defdelegate game_summary(session, viewer), to: Match
@@ -792,15 +795,25 @@ defmodule LiveQuiz.Games do
   open another one, with a new code. A room that is already over answers
   `:invalid_transition`: there is no reopening.
   """
-  @spec cancel_game_session(Scope.t(), GameSession.t()) ::
-          {:ok, GameSession.t()} | {:error, :unauthorized} | {:error, :invalid_transition}
+  @spec cancel_game_session(Scope.t(), GameSession.t(), keyword()) ::
+          {:ok, GameSession.t()}
+          | {:error, :unauthorized}
+          | {:error, :invalid_transition}
+          | {:error, :access_lost}
   # Every room decision by a host reads the room back through the scope, so
   # somebody who does not host it is refused instead of acting on it, and a
-  # stale struct cannot smuggle a transition past the check either.
-  def cancel_game_session(%Scope{} = scope, %GameSession{} = session) do
+  # stale struct cannot smuggle a transition past the check either. `opts` may
+  # carry `:connection_id`, the lease of the tab issuing the command, which is
+  # compared inside the transition's own transaction.
+  def cancel_game_session(%Scope{} = scope, %GameSession{} = session, opts \\ []) do
     case Room.fetch_hosted(scope, session) do
-      {:ok, session} -> close_and_announce(session, :cancelled, :game_cancelled)
-      {:error, :unauthorized} = error -> error
+      {:ok, session} ->
+        close_and_announce(session, :cancelled, :game_cancelled,
+          connection_id: opts[:connection_id]
+        )
+
+      {:error, :unauthorized} = error ->
+        error
     end
   end
 
@@ -876,6 +889,18 @@ defmodule LiveQuiz.Games do
       {1, [updated]} -> {:ok, updated}
       {0, _unchanged} -> {:ok, Room.reload(session)}
     end
+  end
+
+  @doc """
+  The live room with this id, or `nil`.
+
+  What the host monitor reads before deciding whether the connection holding
+  the room is the one still present; a room that is over has no absence left to
+  record.
+  """
+  @spec get_live_game_session(integer()) :: GameSession.t() | nil
+  def get_live_game_session(session_id) when is_integer(session_id) do
+    fetch_live_session(session_id)
   end
 
   @doc """
@@ -1436,7 +1461,7 @@ defmodule LiveQuiz.Games do
   # Both ways of closing a room share the transition and differ only in the
   # event they announce, which is what tells a lobby whether to say "cancelled"
   # or "expired". The broadcast is outside the transaction on purpose (AD-31).
-  defp close_and_announce(%GameSession{} = session, status, event, guards \\ []) do
+  defp close_and_announce(%GameSession{} = session, status, event, guards) do
     case close_session(session, status, guards) do
       {:ok, session} ->
         QuestionTimer.stop(session.id)
@@ -1471,17 +1496,27 @@ defmodule LiveQuiz.Games do
       # release ran and leave somebody tied to a room that had ended (R16).
       Locks.room(id)
 
-      case Repo.update_all(query,
-             set: [status: status, finished_at: at, expires_at: nil, updated_at: at]
-           ) do
-        {1, [session]} ->
-          Room.release_participants(id, at)
-          session
-
-        {0, _unchanged} ->
-          Repo.rollback(close_refusal(id, guards))
+      with :ok <- ensure_in_control(id, guards[:connection_id]),
+           {1, [session]} <-
+             Repo.update_all(query,
+               set: [status: status, finished_at: at, expires_at: nil, updated_at: at]
+             ) do
+        Room.release_participants(id, at)
+        session
+      else
+        {0, _unchanged} -> Repo.rollback(close_refusal(id, guards))
+        {:error, reason} -> Repo.rollback(reason)
       end
     end)
+  end
+
+  defp ensure_in_control(_id, nil), do: :ok
+
+  defp ensure_in_control(id, connection_id) do
+    case Repo.get(GameSession, id) do
+      nil -> {:error, :invalid_transition}
+      %GameSession{} = session -> Room.ensure_in_control(session, connection_id)
+    end
   end
 
   # Expiring carries the deadline the sweeper selected the room on, and the
@@ -1489,23 +1524,31 @@ defmodule LiveQuiz.Games do
   # has run out. A host who came back cleared it, and a host who dropped again
   # wrote a new one: neither matches, so a sweep that read the room a moment too
   # early closes nothing (R17).
-  defp apply_close_guards(query, [], _at), do: query
+  defp apply_close_guards(query, guards, at) do
+    case guards[:expires_at] do
+      nil ->
+        query
 
-  defp apply_close_guards(query, [expires_at: deadline], at) do
-    query
-    |> where([s], s.expires_at == ^deadline)
-    |> where([s], s.expires_at <= ^at)
+      deadline ->
+        query
+        |> where([s], s.expires_at == ^deadline)
+        |> where([s], s.expires_at <= ^at)
+    end
   end
 
   # A refusal has to say which of the two conditions failed, because the sweeper
   # skips a room whose deadline moved and would otherwise treat it as a broken
   # transition worth reporting.
-  defp close_refusal(_id, []), do: :invalid_transition
+  defp close_refusal(id, guards) do
+    case guards[:expires_at] do
+      nil ->
+        :invalid_transition
 
-  defp close_refusal(id, expires_at: _deadline) do
-    case Repo.get(GameSession, id) do
-      %GameSession{status: status} when status in [:waiting, :in_progress] -> :not_expired
-      _over_or_gone -> :invalid_transition
+      _deadline ->
+        case Repo.get(GameSession, id) do
+          %GameSession{status: status} when status in [:waiting, :in_progress] -> :not_expired
+          _over_or_gone -> :invalid_transition
+        end
     end
   end
 

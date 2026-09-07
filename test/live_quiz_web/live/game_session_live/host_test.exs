@@ -1398,14 +1398,34 @@ defmodule LiveQuizWeb.GameSessionLive.HostTest do
     test "a tela sem acesso recusa iniciar e cancelar", %{conn: conn, session: session} do
       session |> participant_fixture() |> connect_participant()
 
-      {:ok, lv, _html} = live(conn, ~p"/game-sessions/#{session.join_code}/host")
+      {:ok, first, _html} = live(conn, ~p"/game-sessions/#{session.join_code}/host")
+      {:ok, _second, _html} = live(conn, ~p"/game-sessions/#{session.join_code}/host")
 
-      send(lv.pid, {:host_access_transferred, Ecto.UUID.generate()})
-
-      render_click(lv, "start", %{})
-      render_click(lv, "confirm_cancel", %{})
+      render_click(first, "start", %{})
+      render_click(first, "confirm_cancel", %{})
 
       assert Repo.get!(GameSession, session.id).status == :waiting
+    end
+
+    test "um evento de transferência forjado não tira o controle de quem o tem", %{
+      conn: conn,
+      session: session
+    } do
+      session |> participant_fixture() |> connect_participant()
+
+      {:ok, lv, _html} = live(conn, ~p"/game-sessions/#{session.join_code}/host")
+
+      # O evento diz que outra conexão assumiu; a linha diz que esta aba ainda
+      # tem a sala. Só a linha decide — dois claims em sequência podem chegar em
+      # qualquer ordem, e acreditar na última mensagem fazia a vencedora concluir
+      # que tinha perdido.
+      send(lv.pid, {:host_access_transferred, Ecto.UUID.generate()})
+
+      refute has_element?(lv, "#access-lost-notice")
+
+      render_click(lv, "start", %{})
+
+      assert Repo.get!(GameSession, session.id).status == :in_progress
     end
   end
 

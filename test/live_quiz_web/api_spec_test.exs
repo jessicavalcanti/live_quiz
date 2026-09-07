@@ -127,7 +127,13 @@ defmodule LiveQuizWeb.ApiSpecTest do
     {"/api/v1/game-sessions/{code}/rejoin", "post"} => ["401", "404", "409", "410"],
     {"/api/v1/game-sessions/{code}/leave", "delete"} => ["401", "404"],
     {"/api/v1/game-sessions/{code}/next", "post"} => ["401", "403", "404", "409", "422"],
-    {"/api/v1/game-sessions/{code}/close-question", "post"} => ["401", "403", "404", "409"],
+    {"/api/v1/game-sessions/{code}/close-question", "post"} => [
+      "401",
+      "403",
+      "404",
+      "409",
+      "422"
+    ],
     {"/api/v1/game-sessions/{code}/finish", "post"} => ["401", "403", "404", "409"],
     {"/api/v1/game-sessions/{code}/answers", "post"} => ["401", "403", "404", "409", "422"],
     {"/api/v1/game-sessions/{code}/state", "get"} => ["401", "403", "404"],
@@ -271,7 +277,7 @@ defmodule LiveQuizWeb.ApiSpecTest do
 
       schemas = spec["components"]["schemas"]
 
-      assert map_size(schemas) == 41
+      assert map_size(schemas) == 42
 
       for {name, schema} <- schemas do
         assert is_binary(schema["description"]), "schema #{name} está sem description"
@@ -521,8 +527,18 @@ defmodule LiveQuizWeb.ApiSpecTest do
                },
                "/api/v1/game-sessions/{code}/answers" => %{
                  "$ref" => "#/components/schemas/AnswerRequest"
+               },
+               "/api/v1/game-sessions/{code}/close-question" => %{
+                 "$ref" => "#/components/schemas/CloseRequest"
                }
              }
+
+      # Encerrar aceita o corpo, mas não o exige: um cliente escrito antes de
+      # ele existir continua encerrando a pergunta corrente.
+      close = spec["paths"]["/api/v1/game-sessions/{code}/close-question"]["post"]
+
+      refute close["requestBody"]["required"]
+      assert spec["paths"]["/api/v1/game-sessions/{code}/next"]["post"]["requestBody"]["required"]
     end
 
     test "describes the order of the calls of a whole match in the tag", %{conn: conn} do

@@ -98,7 +98,31 @@ defmodule LiveQuiz.Games.Presence do
   @doc "Tells whether the host of the room is connected from anywhere."
   @spec host_connected?(integer()) :: boolean()
   def host_connected?(session_id) do
-    session_id |> presences() |> Enum.any?(fn {key, _presence} -> host_key?(key) end)
+    session_id |> host_metas() |> Enum.any?()
+  end
+
+  @doc """
+  Tells whether the connection that *holds* the room is connected.
+
+  Not the same question as `host_connected?/1`, and the difference is what
+  keeps an abandoned room from living forever: a host tab that was taken over
+  by another device still carries a presence, and counting it as the host
+  present meant the room never reached its expiry — nobody was watching it and
+  nothing said so. Only a meta carrying the connection id the room currently
+  holds answers `true` here.
+
+  A room nobody has claimed yet — opened through the API, with no socket behind
+  it — has no id to compare, so any host presence counts. That is the same
+  reading as before for that case, and the liveness of a REST-only room is its
+  own question.
+  """
+  @spec host_in_control?(GameSession.t()) :: boolean()
+  def host_in_control?(%GameSession{id: id, host_connection_id: nil}) do
+    host_connected?(id)
+  end
+
+  def host_in_control?(%GameSession{id: id, host_connection_id: current}) do
+    id |> host_metas() |> Enum.any?(&(Map.get(&1, :connection_id) == current))
   end
 
   @impl Phoenix.Presence
@@ -135,6 +159,13 @@ defmodule LiveQuiz.Games.Presence do
   end
 
   defp presences(session_id), do: session_id |> Games.topic() |> list()
+
+  defp host_metas(session_id) do
+    session_id
+    |> presences()
+    |> Enum.filter(fn {key, _presence} -> host_key?(key) end)
+    |> Enum.flat_map(fn {_key, %{metas: metas}} -> metas end)
+  end
 
   defp meta(connection_id) do
     %{connection_id: connection_id, online_at: DateTime.utc_now()}

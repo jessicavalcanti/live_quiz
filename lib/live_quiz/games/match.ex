@@ -201,14 +201,14 @@ defmodule LiveQuiz.Games.Match do
   Only the host commands a match, and only while it is running: anybody else is
   `:unauthorized`, and a room in the lobby or already over is `:invalid_status`.
   """
-  @spec advance_question(Scope.t(), GameSession.t(), pos_integer() | nil) ::
+  @spec advance_question(Scope.t(), GameSession.t(), pos_integer() | nil, keyword()) ::
           {:ok, GameSession.t()}
-          | {:error, :unauthorized | :invalid_status | :no_more_questions | :stale}
-  def advance_question(%Scope{} = scope, %GameSession{} = session, expected_position)
-      when is_nil(expected_position) or
-             (is_integer(expected_position) and expected_position > 0) do
+          | {:error, :unauthorized | :invalid_status | :no_more_questions | :stale | :access_lost}
+  def advance_question(%Scope{} = scope, %GameSession{} = session, expected_position, opts \\ [])
+      when (is_nil(expected_position) or
+              (is_integer(expected_position) and expected_position > 0)) and is_list(opts) do
     with {:ok, hosted} <- Room.fetch_hosted(scope, session),
-         {:ok, {advanced, effects}} <- open_next_question(hosted, expected_position) do
+         {:ok, {advanced, effects}} <- open_next_question(hosted, expected_position, opts) do
       publish_effects(advanced.id, effects)
       QuestionTimer.ensure_started(advanced)
       Topic.broadcast(advanced.id, {:question_advanced, advanced})
@@ -229,12 +229,27 @@ defmodule LiveQuiz.Games.Match do
   `{:question_closed, session}`, so a repeated click does not replay the
   reveal. A match that has not advanced to any question has nothing to close
   and answers `:no_open_question`.
+
+  `opts` carries what the caller believed when it decided to close:
+
+    * `:expected_position` — the question the command was meant for. Compared
+      with the persisted one and answered `:stale` when they differ. Advancing
+      already carried this (AD-44) and closing did not, so a retry or a double
+      click aimed at question 1 that arrived after the host advanced closed
+      question 2 instead — the lock serialized the two commands without ever
+      asking which question the second one meant (R25).
+    * `:connection_id` — the lease of the tab issuing the command, checked
+      under the lock. See `LiveQuiz.Games.Room.ensure_in_control/2`.
+
+  Both default to `nil`, which is no check: that is what a REST client sends
+  today, and tightening it is a contract change of its own.
   """
-  @spec close_question(Scope.t(), GameSession.t()) ::
-          {:ok, GameSession.t()} | {:error, :unauthorized | :invalid_status | :no_open_question}
-  def close_question(%Scope{} = scope, %GameSession{} = session) do
+  @spec close_question(Scope.t(), GameSession.t(), keyword()) ::
+          {:ok, GameSession.t()}
+          | {:error, :unauthorized | :invalid_status | :no_open_question | :stale | :access_lost}
+  def close_question(%Scope{} = scope, %GameSession{} = session, opts \\ []) do
     with {:ok, hosted} <- Room.fetch_hosted(scope, session),
-         {:ok, outcome} <- close_current_question(hosted) do
+         {:ok, outcome} <- close_current_question(hosted, opts) do
       QuestionTimer.stop(hosted.id)
 
       case outcome do
@@ -426,12 +441,12 @@ defmodule LiveQuiz.Games.Match do
   second `{:game_finished, session}`. A room still in the lobby, cancelled or
   expired answers `:invalid_status` — there is nothing running to end.
   """
-  @spec finish_game_session(Scope.t(), GameSession.t()) ::
-          {:ok, GameSession.t()} | {:error, :unauthorized | :invalid_status}
-  def finish_game_session(%Scope{} = scope, %GameSession{} = session) do
+  @spec finish_game_session(Scope.t(), GameSession.t(), keyword()) ::
+          {:ok, GameSession.t()} | {:error, :unauthorized | :invalid_status | :access_lost}
+  def finish_game_session(%Scope{} = scope, %GameSession{} = session, opts \\ []) do
     case Room.fetch_hosted(scope, session) do
       {:ok, %GameSession{status: :finished} = finished} -> {:ok, finished}
-      {:ok, %GameSession{} = current} -> finish_and_announce(current)
+      {:ok, %GameSession{} = current} -> finish_and_announce(current, opts)
       {:error, :unauthorized} = error -> error
     end
   end
@@ -725,11 +740,12 @@ defmodule LiveQuiz.Games.Match do
   # untouched. The lock lasts the transaction; the `WHERE` of each `UPDATE` is
   # still what decides, so a command that lost the race changes no row and is
   # told why instead of overwriting the winner.
-  defp open_next_question(%GameSession{id: id}, expected_position) do
+  defp open_next_question(%GameSession{id: id}, expected_position, opts) do
     Repo.transaction(fn ->
       Locks.match(id)
 
       with {:ok, running} <- GameSession.ensure_running(Repo.get(GameSession, id)),
+           :ok <- Room.ensure_in_control(running, opts[:connection_id]),
            :ok <- ensure_current_position(running, expected_position),
            {:ok, position} <- next_position(running),
            {:ok, settled, effects} <- settle_current_question(running),
@@ -741,25 +757,38 @@ defmodule LiveQuiz.Games.Match do
     end)
   end
 
-  defp close_current_question(%GameSession{id: id}) do
+  defp close_current_question(%GameSession{id: id}, opts) do
     Repo.transaction(fn ->
       Locks.match(id)
 
-      case GameSession.ensure_running(Repo.get(GameSession, id)) do
-        {:ok, %GameSession{current_question_position: nil}} ->
-          Repo.rollback(:no_open_question)
-
-        {:ok, %GameSession{current_question_closed_at: at} = closed} when not is_nil(at) ->
-          {:already_closed, closed}
-
-        {:ok, %GameSession{} = open} ->
-          close_now(open)
-
-        {:error, reason} ->
-          Repo.rollback(reason)
+      with {:ok, running} <- GameSession.ensure_running(Repo.get(GameSession, id)),
+           :ok <- Room.ensure_in_control(running, opts[:connection_id]),
+           :ok <- ensure_expected_position(running, opts[:expected_position]) do
+        close_settled_question(running)
+      else
+        {:error, reason} -> Repo.rollback(reason)
       end
     end)
   end
+
+  defp close_settled_question(%GameSession{current_question_position: nil}),
+    do: Repo.rollback(:no_open_question)
+
+  defp close_settled_question(%GameSession{current_question_closed_at: at} = closed)
+       when not is_nil(at),
+       do: {:already_closed, closed}
+
+  defp close_settled_question(%GameSession{} = open), do: close_now(open)
+
+  # `nil` is a caller that named no question, which is every client written
+  # before closing carried one. A named position that no longer matches is a
+  # command meant for a question the match has already left.
+  defp ensure_expected_position(%GameSession{}, nil), do: :ok
+
+  defp ensure_expected_position(%GameSession{current_question_position: position}, position),
+    do: :ok
+
+  defp ensure_expected_position(%GameSession{}, _stale), do: {:error, :stale}
 
   # The same lock and the same statement the host's closing takes, so the two
   # take turns and the loser writes nothing. The deadline is read inside the
@@ -1009,8 +1038,8 @@ defmodule LiveQuiz.Games.Match do
     |> Repo.one()
   end
 
-  defp finish_and_announce(%GameSession{} = session) do
-    case finish_match(session) do
+  defp finish_and_announce(%GameSession{} = session, opts) do
+    case finish_match(session, opts) do
       {:ok, {:finished, finished, effects}} ->
         QuestionTimer.stop(finished.id)
         publish_effects(finished.id, effects)
@@ -1036,7 +1065,7 @@ defmodule LiveQuiz.Games.Match do
   # the status first froze the results of a question that was still open and
   # never counted, and the scorer refuses a match that is already finished — so
   # the wrong tally was the one that stayed in the history (R12).
-  defp finish_match(%GameSession{id: id}) do
+  defp finish_match(%GameSession{id: id}, opts) do
     at = Room.now()
 
     query = from s in GameSession, where: s.id == ^id and s.status == :in_progress, select: s
@@ -1045,6 +1074,7 @@ defmodule LiveQuiz.Games.Match do
       Locks.match(id)
 
       with {:ok, running} <- GameSession.ensure_running(Repo.get(GameSession, id)),
+           :ok <- Room.ensure_in_control(running, opts[:connection_id]),
            {:ok, _settled, effects} <- settle_current_question(running),
            {1, [finished]} <-
              Repo.update_all(query,
