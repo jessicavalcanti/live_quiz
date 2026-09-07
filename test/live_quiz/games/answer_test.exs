@@ -72,16 +72,18 @@ defmodule LiveQuiz.Games.AnswerTest do
       assert {:error, changeset} =
                context |> new_answer(%{game_session_id: -1}) |> Repo.insert()
 
-      # A pergunta é de uma partida real, e a partida nomeada não existe: o par
-      # é o que não fecha, e é ele que o banco recusa.
-      assert "não pertence a esta partida" in errors_on(changeset).game_session_question_id
+      # Duas coisas estão erradas ao mesmo tempo: a partida não existe, e o par
+      # pergunta/partida não fecha. Qual das duas constraints o Postgres reporta
+      # não é contrato — o que importa é que a linha é recusada e o erro nomeia
+      # a relação, em vez de subir como exceção.
+      assert_relationship_error(changeset, [:game_session, :game_session_question_id])
     end
 
     test "refuses a participant that does not exist", context do
       assert {:error, changeset} =
                context |> new_answer(%{participant_id: -1}) |> Repo.insert()
 
-      assert "não pertence a esta partida" in errors_on(changeset).participant_id
+      assert_relationship_error(changeset, [:participant, :participant_id])
     end
 
     test "refuses a question that belongs to another match", context do
@@ -121,6 +123,16 @@ defmodule LiveQuiz.Games.AnswerTest do
 
       assert "não pertence a esta pergunta" in errors_on(changeset).game_session_answer_option_id
     end
+  end
+
+  # Qual constraint o banco verifica primeiro depende do plano, não do contrato.
+  # O que o chamador precisa é que a escrita seja recusada e que o erro aponte a
+  # relação — nunca uma exceção.
+  defp assert_relationship_error(changeset, fields) do
+    errors = errors_on(changeset)
+
+    assert Enum.any?(fields, &Map.has_key?(errors, &1)),
+           "esperava erro em uma de #{inspect(fields)}, recebi #{inspect(Map.keys(errors))}"
   end
 
   describe "database guarantees" do
