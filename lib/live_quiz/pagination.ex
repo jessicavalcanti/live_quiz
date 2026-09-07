@@ -27,6 +27,13 @@ defmodule LiveQuiz.Pagination do
   @default_per_page 20
   @max_per_page 100
 
+  # `page * per_page` becomes an `OFFSET`, and a page number nobody could ever
+  # reach turns into either a bigint Postgres refuses or a scan it should never
+  # be asked to do. Ten thousand pages of a hundred rows is a million rows deep,
+  # which is far past anything a person clicks to and far short of anything that
+  # breaks (R30). Beyond that the answer is "that is not a page", not a query.
+  @max_page 10_000
+
   @type t :: %{page: pos_integer(), per_page: pos_integer()}
 
   @doc "The page a request that named none is asking for."
@@ -37,15 +44,20 @@ defmodule LiveQuiz.Pagination do
   @spec default_per_page() :: pos_integer()
   def default_per_page, do: @default_per_page
 
-  @doc "The largest page anybody may ask for."
+  @doc "The largest page size anybody may ask for."
   @spec max_per_page() :: pos_integer()
   def max_per_page, do: @max_per_page
+
+  @doc "The highest page number anybody may ask for."
+  @spec max_page() :: pos_integer()
+  def max_page, do: @max_page
 
   @doc """
   Reads pagination, refusing anything that is not a page anybody could have.
 
   A missing value is not a refusal — it is the default. A present one that is
-  not a positive integer, or a `per_page` past `#{@max_per_page}`, is.
+  not a positive integer, a `page` past `#{@max_page}` or a `per_page` past
+  `#{@max_per_page}` is.
 
   ## Options
 
@@ -93,7 +105,7 @@ defmodule LiveQuiz.Pagination do
   defp fetch_page(params) do
     case get(params, :page) do
       blank when blank in [nil, ""] -> {:ok, @default_page}
-      value -> positive_integer(value)
+      value -> value |> positive_integer() |> at_most(@max_page)
     end
   end
 
@@ -102,12 +114,12 @@ defmodule LiveQuiz.Pagination do
 
     case get(params, :per_page) do
       blank when blank in [nil, ""] -> {:ok, default}
-      value -> value |> positive_integer() |> within_ceiling()
+      value -> value |> positive_integer() |> at_most(@max_per_page)
     end
   end
 
-  defp within_ceiling({:ok, per_page}) when per_page <= @max_per_page, do: {:ok, per_page}
-  defp within_ceiling(_past_the_ceiling_or_error), do: {:error, :invalid_filter}
+  defp at_most({:ok, value}, ceiling) when value <= ceiling, do: {:ok, value}
+  defp at_most(_past_the_ceiling_or_error, _ceiling), do: {:error, :invalid_filter}
 
   defp positive_integer(value) when is_integer(value) and value > 0, do: {:ok, value}
 

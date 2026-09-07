@@ -30,6 +30,15 @@ defmodule LiveQuiz.QuizzesQuestionsTest do
     |> Enum.map(&Map.merge(&1, Map.get(overrides, &1.position, %{})))
   end
 
+  defp put_positions(attrs, positions) do
+    options =
+      attrs.answer_options
+      |> Enum.zip(positions)
+      |> Enum.map(fn {option, position} -> %{option | position: position} end)
+
+    %{attrs | answer_options: options}
+  end
+
   defp attrs(overrides \\ %{}) do
     Enum.into(overrides, %{text: "Qual é a capital do Brasil?", answer_options: options()})
   end
@@ -93,7 +102,60 @@ defmodule LiveQuiz.QuizzesQuestionsTest do
     end
 
     test "refuses a quiz that belongs to somebody else", %{scope: scope, other_quiz: other_quiz} do
-      assert_raise MatchError, fn -> Quizzes.create_question(scope, other_quiz, attrs()) end
+      assert_raise Ecto.NoResultsError, fn ->
+        Quizzes.create_question(scope, other_quiz, attrs())
+      end
+    end
+
+    test "refuses a quiz whose owner was changed in memory", %{
+      scope: scope,
+      other_quiz: other_quiz
+    } do
+      forged = %{other_quiz | owner_id: scope.user.id}
+
+      assert_raise Ecto.NoResultsError, fn -> Quizzes.create_question(scope, forged, attrs()) end
+    end
+  end
+
+  describe "o conjunto de posições das alternativas" do
+    test "recusa posições repetidas antes de chegar ao índice do banco", %{
+      scope: scope,
+      quiz: quiz
+    } do
+      attrs = attrs() |> put_positions([1, 1, 3, 4])
+
+      assert {:error, changeset} = Quizzes.create_question(scope, quiz, attrs)
+
+      assert "as alternativas devem ocupar as posições de 1 a 4, sem repetir" in errors_on(
+               changeset
+             ).answer_options
+    end
+
+    test "recusa uma posição fora do intervalo", %{scope: scope, quiz: quiz} do
+      attrs = attrs() |> put_positions([1, 2, 3, 5])
+
+      assert {:error, changeset} = Quizzes.create_question(scope, quiz, attrs)
+      assert changeset.valid? == false
+    end
+
+    test "aceita as quatro posições fora de ordem", %{scope: scope, quiz: quiz} do
+      attrs = attrs() |> put_positions([4, 3, 2, 1])
+
+      assert {:ok, question} = Quizzes.create_question(scope, quiz, attrs)
+      assert question.answer_options |> Enum.map(& &1.position) |> Enum.sort() == [1, 2, 3, 4]
+    end
+
+    test "não reclama das posições quando o número de alternativas já está errado", %{
+      scope: scope,
+      quiz: quiz
+    } do
+      attrs = %{attrs() | answer_options: Enum.take(attrs().answer_options, 3)}
+
+      assert {:error, changeset} = Quizzes.create_question(scope, quiz, attrs)
+
+      assert errors_on(changeset).answer_options == [
+               "a pergunta deve ter exatamente 4 alternativas"
+             ]
     end
   end
 

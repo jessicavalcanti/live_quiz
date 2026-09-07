@@ -380,7 +380,19 @@ defmodule LiveQuiz.QuizzesTest do
     test "refuses a quiz that belongs to somebody else", %{scope: scope, other_scope: other} do
       quiz = quiz_fixture(other)
 
-      assert_raise MatchError, fn -> Quizzes.update_quiz(scope, quiz, %{title: "Invadido"}) end
+      # O mesmo 404 que uma leitura daquele quiz daria: o dono é resolvido na
+      # consulta, não conferido no struct que chegou.
+      assert_raise Ecto.NoResultsError, fn ->
+        Quizzes.update_quiz(scope, quiz, %{title: "Invadido"})
+      end
+    end
+
+    test "refuses a quiz whose owner was changed in memory", %{scope: scope, other_scope: other} do
+      forged = %{quiz_fixture(other) | owner_id: scope.user.id}
+
+      assert_raise Ecto.NoResultsError, fn ->
+        Quizzes.update_quiz(scope, forged, %{title: "Invadido"})
+      end
     end
   end
 
@@ -409,7 +421,20 @@ defmodule LiveQuiz.QuizzesTest do
     test "refuses a quiz that belongs to somebody else", %{scope: scope, other_scope: other} do
       quiz = quiz_fixture(other)
 
-      assert_raise MatchError, fn -> Quizzes.delete_quiz(scope, quiz) end
+      assert_raise Ecto.NoResultsError, fn -> Quizzes.delete_quiz(scope, quiz) end
+    end
+
+    test "refuses a quiz whose owner was changed in memory", %{scope: scope, other_scope: other} do
+      forged = %{quiz_fixture(other) | owner_id: scope.user.id}
+
+      assert_raise Ecto.NoResultsError, fn -> Quizzes.delete_quiz(scope, forged) end
+    end
+
+    test "refuses a quiz that no longer exists", %{scope: scope} do
+      quiz = quiz_fixture(scope)
+      {:ok, _deleted} = Quizzes.delete_quiz(scope, quiz)
+
+      assert_raise Ecto.NoResultsError, fn -> Quizzes.delete_quiz(scope, quiz) end
     end
   end
 

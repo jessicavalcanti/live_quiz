@@ -21,6 +21,8 @@ defmodule LiveQuiz.Games.ResultFilters do
   everything; the screens drop, so a hand-edited address still renders.
   """
 
+  alias LiveQuiz.ResourceId
+
   @type t :: %{
           quiz_id: pos_integer() | nil,
           from: DateTime.t() | nil,
@@ -89,19 +91,21 @@ defmodule LiveQuiz.Games.ResultFilters do
 
   defp fetch_quiz_id(params), do: params |> get(:quiz_id) |> quiz_id()
 
+  # A filter is not a path: an identifier nobody could have is a request the
+  # caller can fix, so it is refused as an invalid filter rather than answered
+  # as a missing resource. What counts as an identifier is
+  # `LiveQuiz.ResourceId`, so a value wider than a `bigint` is turned away here
+  # instead of reaching the database as a cast that fails (R30).
   defp quiz_id(value) do
     case value do
-      blank when blank in [nil, ""] -> {:ok, nil}
-      value when is_integer(value) and value > 0 -> {:ok, value}
-      value when is_binary(value) -> integer_id(value)
-      _value -> {:error, :invalid_filter}
-    end
-  end
+      blank when blank in [nil, ""] ->
+        {:ok, nil}
 
-  defp integer_id(value) do
-    case Integer.parse(value) do
-      {quiz_id, ""} when quiz_id > 0 -> {:ok, quiz_id}
-      _not_an_identifier -> {:error, :invalid_filter}
+      value ->
+        case ResourceId.cast(value) do
+          {:ok, quiz_id} -> {:ok, quiz_id}
+          :error -> {:error, :invalid_filter}
+        end
     end
   end
 
