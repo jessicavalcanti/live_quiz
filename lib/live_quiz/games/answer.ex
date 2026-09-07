@@ -82,6 +82,22 @@ defmodule LiveQuiz.Games.Answer do
     |> assoc_constraint(:game_session_question)
     |> assoc_constraint(:participant)
     |> assoc_constraint(:game_session_answer_option)
+    # The composite keys the database holds: an answer whose question,
+    # participant and option each exist but belong to different rooms is not an
+    # answer to anything. They fire before the single-column ones, so they are
+    # named here for the error to reach the caller as a changeset (R35).
+    |> foreign_key_constraint(:game_session_question_id,
+      name: :answers_question_belongs_to_session,
+      message: "não pertence a esta partida"
+    )
+    |> foreign_key_constraint(:participant_id,
+      name: :answers_participant_belongs_to_session,
+      message: "não pertence a esta partida"
+    )
+    |> foreign_key_constraint(:game_session_answer_option_id,
+      name: :answers_option_belongs_to_question,
+      message: "não pertence a esta pergunta"
+    )
     |> unique_constraint([:participant_id, :game_session_question_id],
       name: :answers_participant_id_game_session_question_id_index,
       message: "você já respondeu esta pergunta"

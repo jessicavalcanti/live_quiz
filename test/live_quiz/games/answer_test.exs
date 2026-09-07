@@ -72,24 +72,67 @@ defmodule LiveQuiz.Games.AnswerTest do
       assert {:error, changeset} =
                context |> new_answer(%{game_session_id: -1}) |> Repo.insert()
 
-      assert "does not exist" in errors_on(changeset).game_session
+      # Duas coisas estão erradas ao mesmo tempo: a partida não existe, e o par
+      # pergunta/partida não fecha. Qual das duas constraints o Postgres reporta
+      # não é contrato — o que importa é que a linha é recusada e o erro nomeia
+      # a relação, em vez de subir como exceção.
+      assert_relationship_error(changeset, [:game_session, :game_session_question_id])
     end
 
     test "refuses a participant that does not exist", context do
       assert {:error, changeset} =
                context |> new_answer(%{participant_id: -1}) |> Repo.insert()
 
-      assert "does not exist" in errors_on(changeset).participant
+      assert_relationship_error(changeset, [:participant, :participant_id])
     end
 
-    test "does not check that the question belongs to the match", context do
-      # Coherence between match, question, option and participant is the
-      # context's job when it records an answer (F3-04), not this schema's.
+    test "refuses a question that belongs to another match", context do
+      # Coerência entre partida, pergunta, alternativa e participação é decidida
+      # pelo contexto ao gravar uma resposta (F3-04). O banco passou a segurar a
+      # mesma regra, para as escritas em lote não poderem quebrá-la (R35).
       other_session = game_session_fixture()
       [other_question | _rest] = snapshot_fixture(other_session, count: 1)
 
-      assert new_answer(context, %{game_session_question_id: other_question.id}).valid?
+      assert {:error, changeset} =
+               context
+               |> new_answer(%{game_session_question_id: other_question.id})
+               |> Repo.insert()
+
+      assert "não pertence a esta partida" in errors_on(changeset).game_session_question_id
     end
+
+    test "refuses a participant from another match", context do
+      other_session = game_session_fixture()
+      stranger = participant_fixture(other_session)
+
+      assert {:error, changeset} =
+               context |> new_answer(%{participant_id: stranger.id}) |> Repo.insert()
+
+      assert "não pertence a esta partida" in errors_on(changeset).participant_id
+    end
+
+    test "refuses an option from another question", context do
+      other_session = game_session_fixture()
+      [other_question | _rest] = snapshot_fixture(other_session, count: 1)
+      [foreign_option | _rest] = other_question.answer_options
+
+      assert {:error, changeset} =
+               context
+               |> new_answer(%{game_session_answer_option_id: foreign_option.id})
+               |> Repo.insert()
+
+      assert "não pertence a esta pergunta" in errors_on(changeset).game_session_answer_option_id
+    end
+  end
+
+  # Qual constraint o banco verifica primeiro depende do plano, não do contrato.
+  # O que o chamador precisa é que a escrita seja recusada e que o erro aponte a
+  # relação — nunca uma exceção.
+  defp assert_relationship_error(changeset, fields) do
+    errors = errors_on(changeset)
+
+    assert Enum.any?(fields, &Map.has_key?(errors, &1)),
+           "esperava erro em uma de #{inspect(fields)}, recebi #{inspect(Map.keys(errors))}"
   end
 
   describe "database guarantees" do
