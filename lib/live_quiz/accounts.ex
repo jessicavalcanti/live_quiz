@@ -6,6 +6,14 @@ defmodule LiveQuiz.Accounts do
   import Ecto.Query, warn: false
   alias LiveQuiz.Repo
 
+  # How recently somebody has to have proved their password before the
+  # application will let them change it or change their e-mail. One number,
+  # because two of them is a validity nobody can predict: the settings page used
+  # to be mounted under a ten minute window and its events checked against a
+  # twenty minute one, so a tab could be refused entry and still be allowed to
+  # act (R06).
+  @sudo_window_minutes 10
+
   alias LiveQuiz.Accounts.{User, UserNotifier, UserToken}
 
   ## Database getters
@@ -42,6 +50,17 @@ defmodule LiveQuiz.Accounts do
       when is_binary(email) and is_binary(password) do
     user = Repo.get_by(User, email: email)
     if User.valid_password?(user, password), do: user
+  end
+
+  # A form posts strings; a request written by hand can post a map, a list or
+  # nothing at all. That is a credential nobody could have, not a reason to
+  # raise a `FunctionClauseError` and answer 500 (R06). It still runs the same
+  # dummy hash the miss above runs, so an unusable shape and a wrong password
+  # take the same time to be refused.
+  def get_user_by_email_and_password(_email, _password) do
+    User.valid_password?(nil, nil)
+
+    nil
   end
 
   @doc """
@@ -175,13 +194,17 @@ defmodule LiveQuiz.Accounts do
   The user is in sudo mode when the last authentication was done no further
   than 20 minutes ago. The limit can be given as second argument in minutes.
   """
-  def sudo_mode?(user, minutes \\ -20)
+  def sudo_mode?(user, minutes \\ -@sudo_window_minutes)
 
   def sudo_mode?(%User{authenticated_at: ts}, minutes) when is_struct(ts, DateTime) do
     DateTime.after?(ts, DateTime.utc_now() |> DateTime.add(minutes, :minute))
   end
 
   def sudo_mode?(_user, _minutes), do: false
+
+  @doc "How long a password stays freshly proved, in minutes."
+  @spec sudo_window_minutes() :: pos_integer()
+  def sudo_window_minutes, do: @sudo_window_minutes
 
   @doc """
   Returns an `%Ecto.Changeset{}` for changing the user email.

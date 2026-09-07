@@ -41,7 +41,12 @@ defmodule LiveQuizWeb.Endpoint do
     cookie_key: "request_logger"
 
   plug Plug.RequestId
-  plug Plug.Telemetry, event_prefix: [:phoenix, :endpoint]
+  # The request line carries the path, and three of this application's links
+  # carry a token *in* the path. `LiveQuizWeb.RequestLogging` is what keeps
+  # those four routes out of the access log entirely (R04).
+  plug Plug.Telemetry,
+    event_prefix: [:phoenix, :endpoint],
+    log: {LiveQuizWeb.RequestLogging, :level, []}
 
   plug Plug.Parsers,
     parsers: [:urlencoded, :multipart, :json],
