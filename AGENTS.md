@@ -369,7 +369,8 @@ ou dentro do container com `docker compose exec app`.
 | Arquitetura | `LiveView → Context → Changeset → Repo` e `Controller → Context → Changeset → Repo` |
 | Integridade | validação no changeset **e** constraint no banco — as escritas em lote não passam por changeset |
 | Locks | ordem global única, declarada em `LiveQuiz.Games.Locks`: **identity → match → seats** |
-| Sessões | apagar `UserToken` encerra sessões web e **não** invalida JWT; desconectar sockets já montados exige `UserAuth.disconnect_sessions/1` |
+| Sessões | apagar `UserToken` encerra sessões web; desconectar sockets já montados exige `UserAuth.disconnect_sessions/1`. As sessões de API são revogadas em duas metades: a família em `refresh_tokens` (um dispositivo) e `users.auth_version` no claim `ver` (todos, na hora) |
+| Limites | orçamentos por operação em `LiveQuiz.RateLimit`, gastos **antes** do trabalho caro. Chave por operação + identidade + origem, nunca só a origem; responder é contado por participação, para que ninguém trave a sala inteira. A origem é `remote_ip` — `X-Forwarded-For` não é lido, então atrás de proxy é o proxy que precisa entregar o endereço do par |
 
 ---
 

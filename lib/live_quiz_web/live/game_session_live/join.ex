@@ -16,10 +16,14 @@ defmodule LiveQuizWeb.GameSessionLive.Join do
   into "não foi possível entrar" would leave someone retyping a nickname when
   the room is simply full.
 
-  Nothing throttles the attempts here — the phase took that risk knowingly — so
-  the tries on codes that do not exist are at least written to the log, which is
-  what will say whether anybody is walking the code space before phase 3 decides
-  what to do about it.
+  Attempts are budgeted by origin (R05). A six character code is a short secret,
+  and both the things that can be done with one here — asking whether a room
+  exists, and entering it — spend from the same budget, because otherwise the
+  cheaper of the two is the one somebody would walk the code space with. A
+  partial code spends nothing: it cannot name a room, and charging for it would
+  bill a person for typing. Refusals on codes that do not exist are still
+  written to the log, which is what says whether anybody is walking the space
+  at all.
 
   Uniqueness of the nickname is the one rule not checked while typing: two
   guests racing for "Ana" make any answer given before the submit a promise the
@@ -43,6 +47,7 @@ defmodule LiveQuizWeb.GameSessionLive.Join do
   alias LiveQuiz.Games.GameSession
   alias LiveQuiz.Games.JoinCode
   alias LiveQuiz.Games.Participant
+  alias LiveQuizWeb.RateLimit
 
   @impl true
   def mount(params, _session, socket) do
@@ -50,6 +55,7 @@ defmodule LiveQuizWeb.GameSessionLive.Join do
 
     socket =
       socket
+      |> RateLimit.assign_origin()
       |> assign(:page_title, "Entrar em uma sala")
       |> assign(:trigger_submit, false)
       |> assign(:token, nil)
@@ -77,11 +83,17 @@ defmodule LiveQuizWeb.GameSessionLive.Join do
   def handle_event("join", %{"join" => params}, socket) do
     changeset = Games.change_join(params)
 
-    if changeset.valid? do
-      {:noreply, attempt_join(socket, params)}
-    else
-      {:noreply, assign_form(socket, params, action: :validate)}
+    cond do
+      not changeset.valid? -> {:noreply, assign_form(socket, params, action: :validate)}
+      RateLimit.hit(socket, :join_by_origin) != :ok -> {:noreply, refuse_over_budget(socket)}
+      true -> {:noreply, attempt_join(socket, params)}
     end
+  end
+
+  # Same screen, same shape of refusal as every other one: what a person can do
+  # about it is wait, and the message says so.
+  defp refuse_over_budget(socket) do
+    assign(socket, :error, :rate_limited)
   end
 
   # The token exists only in this answer, so it goes straight into the hidden
@@ -156,16 +168,41 @@ defmodule LiveQuizWeb.GameSessionLive.Join do
     end
   end
 
+  # A code shorter than a whole one names no room, so it is not looked up and
+  # not charged for: a budget spent by typing would be a budget that punishes
+  # the only people who type.
   defp load_preview(socket, code) do
-    preview =
-      case Games.preview_by_code(code) do
-        {:ok, preview} -> preview
-        {:error, :not_found} -> nil
-      end
+    if complete?(code) do
+      preview_complete_code(socket, code)
+    else
+      socket
+      |> assign(:code, code)
+      |> assign(:session_preview, nil)
+    end
+  end
 
-    socket
-    |> assign(:code, code)
-    |> assign(:session_preview, preview)
+  defp preview_complete_code(socket, code) do
+    case RateLimit.hit(socket, :join_by_origin) do
+      :ok ->
+        socket
+        |> assign(:code, code)
+        |> assign(:session_preview, preview_of(code))
+
+      {:error, _retry_after} ->
+        socket
+        |> assign(:code, code)
+        |> assign(:session_preview, nil)
+        |> refuse_over_budget()
+    end
+  end
+
+  defp complete?(code), do: String.length(code) == GameSession.join_code_length()
+
+  defp preview_of(code) do
+    case Games.preview_by_code(code) do
+      {:ok, preview} -> preview
+      {:error, :not_found} -> nil
+    end
   end
 
   defp assign_form(socket, params, opts \\ []) do
@@ -293,6 +330,9 @@ defmodule LiveQuizWeb.GameSessionLive.Join do
 
   defp error_message(:already_in_another_session),
     do: "Você já está em outra sala. Saia dela para entrar aqui."
+
+  defp error_message(:rate_limited),
+    do: "Muitas tentativas deste dispositivo. Espere um minuto e tente de novo."
 
   defp error_message(_reason), do: "Não foi possível entrar na sala. Tente novamente."
 end

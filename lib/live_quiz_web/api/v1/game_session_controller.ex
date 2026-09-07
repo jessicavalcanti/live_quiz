@@ -57,6 +57,12 @@ defmodule LiveQuizWeb.Api.V1.GameSessionController do
   # let "one room per person" recognize a guest (AD-28).
   plug ParticipantAuth, [require: false] when action in [:join]
 
+  # Six characters is a short secret, and reading a room by code is open to
+  # everybody, so both actions that take one are budgeted by origin. The budget
+  # is generous enough for a person typing a code off a projector twice and
+  # small enough that walking the space costs more than it yields (R05).
+  plug LiveQuizWeb.RateLimit, [bucket: :join_by_origin] when action in [:show, :join]
+
   @doc """
   Opens a room for a quiz of the authenticated user.
   """

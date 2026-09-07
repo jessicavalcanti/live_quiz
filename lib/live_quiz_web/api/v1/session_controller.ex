@@ -4,6 +4,12 @@ defmodule LiveQuizWeb.Api.V1.SessionController do
 
   `create/2` and `refresh/2` are public; `delete/2` and `me/2` run behind
   `LiveQuizWeb.Api.AuthPipeline` and therefore always have a `current_scope`.
+
+  Being public is what makes them worth a budget. Checking a password costs a
+  bcrypt hash — deliberately, that is the point of bcrypt — and an endpoint
+  that hashes on demand for anybody is a lever. `create/2` is counted twice,
+  by origin and by the account it names: the origin of a credential-stuffing
+  run moves, and the account it targets does not (R05).
   """
 
   use LiveQuizWeb, :controller
@@ -11,6 +17,7 @@ defmodule LiveQuizWeb.Api.V1.SessionController do
 
   alias LiveQuiz.Accounts
   alias LiveQuiz.Accounts.Guardian
+  alias LiveQuiz.RateLimit
   alias LiveQuizWeb.Api.V1.Schemas.ErrorResponse
   alias LiveQuizWeb.Api.V1.Schemas.RefreshRequest
   alias LiveQuizWeb.Api.V1.Schemas.RefreshResponse
@@ -20,6 +27,9 @@ defmodule LiveQuizWeb.Api.V1.SessionController do
   alias LiveQuizWeb.Api.V1.Schemas.ValidationErrorResponse
 
   action_fallback LiveQuizWeb.Api.FallbackController
+
+  plug LiveQuizWeb.RateLimit, [bucket: :login_by_origin] when action == :create
+  plug LiveQuizWeb.RateLimit, [bucket: :refresh_by_origin] when action == :refresh
 
   tags ["Sessão"]
 
@@ -36,13 +46,28 @@ defmodule LiveQuizWeb.Api.V1.SessionController do
     ]
 
   def create(conn, params) do
-    with {:ok, user} <- Accounts.authenticate_by_credentials(params),
+    with :ok <- spend_account_budget(params),
+         {:ok, user} <- Accounts.authenticate_by_credentials(params),
          {:ok, tokens} <- Guardian.build_tokens(user) do
       conn
       |> put_status(:created)
       |> render(:create, tokens: tokens, user: user)
     end
   end
+
+  # Spent before the hash, and keyed on the address as it was typed rather than
+  # on the account it resolves to: looking the account up first would answer
+  # "does this address exist" at whatever rate the caller likes, and the budget
+  # has to hold for an address that does not exist just as it does for one that
+  # does.
+  defp spend_account_budget(%{"email" => email}) when is_binary(email) do
+    case RateLimit.hit(:login_by_account, String.downcase(String.trim(email))) do
+      :ok -> :ok
+      {:error, retry_after} -> {:error, {:rate_limited, retry_after}}
+    end
+  end
+
+  defp spend_account_budget(_params), do: :ok
 
   @doc """
   Renews the session, rotating the refresh token along with the access token.

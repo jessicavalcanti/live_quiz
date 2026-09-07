@@ -1,7 +1,18 @@
 defmodule LiveQuizWeb.UserSessionController do
+  @moduledoc """
+  The web half of logging in and of changing a password.
+
+  Like its API counterpart, `create/2` is budgeted before it hashes anything:
+  by origin, and by the address it names, so that a run against one account
+  from many origins is counted too (R05). A spent budget answers as a refused
+  login does — same page, same message — because a form that says "too many
+  attempts for this address" has answered "this address exists".
+  """
+
   use LiveQuizWeb, :controller
 
   alias LiveQuiz.Accounts
+  alias LiveQuiz.RateLimit
   alias LiveQuizWeb.UserAuth
 
   def create(conn, %{"_action" => "registered"} = params) do
@@ -23,6 +34,31 @@ defmodule LiveQuizWeb.UserSessionController do
     email = user_params["email"]
     password = user_params["password"]
 
+    if login_budget_spent?(conn, email) do
+      refuse_login(conn, email)
+    else
+      authenticate(conn, email, password, user_params, info)
+    end
+  end
+
+  defp create(conn, _params, _info), do: refuse_login(conn, nil)
+
+  # Both budgets are spent, not just the first one to run out: an attempt is an
+  # attempt against the origin *and* against the address, and counting only one
+  # of them would let the other be walked around.
+  defp login_budget_spent?(conn, email) do
+    by_origin = RateLimit.hit(:login_by_origin, LiveQuizWeb.RateLimit.origin(conn))
+    by_account = spend_account_budget(email)
+
+    by_origin != :ok or by_account != :ok
+  end
+
+  defp spend_account_budget(email) when is_binary(email),
+    do: RateLimit.hit(:login_by_account, String.downcase(String.trim(email)))
+
+  defp spend_account_budget(_email), do: :ok
+
+  defp authenticate(conn, email, password, user_params, info) do
     case Accounts.get_user_by_email_and_password(email, password) do
       %Accounts.User{} = user ->
         conn
@@ -33,8 +69,6 @@ defmodule LiveQuizWeb.UserSessionController do
         refuse_login(conn, email)
     end
   end
-
-  defp create(conn, _params, _info), do: refuse_login(conn, nil)
 
   # In order to prevent user enumeration attacks, don't disclose whether the
   # email is registered. The address is echoed back only when it is a string:

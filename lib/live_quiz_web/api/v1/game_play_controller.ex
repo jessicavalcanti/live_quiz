@@ -39,6 +39,7 @@ defmodule LiveQuizWeb.Api.V1.GamePlayController do
   alias LiveQuiz.Games.GameSession
   alias LiveQuiz.Games.Participant
   alias LiveQuiz.Games.Presence
+  alias LiveQuiz.RateLimit
   alias LiveQuizWeb.Api.V1.Schemas.AnswerRequest
   alias LiveQuizWeb.Api.V1.Schemas.CloseRequest
   alias LiveQuizWeb.Api.V1.Schemas.ErrorResponse
@@ -269,6 +270,7 @@ defmodule LiveQuizWeb.Api.V1.GamePlayController do
     with {:ok, option_id} <- answer_option_id(params),
          {:ok, %GameSession{} = session} <- Games.get_match_by_code(code),
          {:ok, %Participant{} = participant} <- playing_participant(conn, session),
+         :ok <- spend_answer_budget(participant),
          {:ok, recorded} <-
            Games.answer_question(
              participant,
@@ -278,6 +280,18 @@ defmodule LiveQuizWeb.Api.V1.GamePlayController do
       conn
       |> put_status(:created)
       |> render(:answer, answer: recorded.answer, closed?: recorded.closed?)
+    end
+  end
+
+  # Keyed on the participation and never on the room: recording an answer takes
+  # the lock of the match, and one participant leaning on the button must not be
+  # able to make the room slow for the twenty people playing with them. The
+  # budget is spent after the participation is resolved, so it costs one lookup
+  # — which is what identifies whose budget it is (R05).
+  defp spend_answer_budget(%Participant{id: id}) do
+    case RateLimit.hit(:answer_by_participation, id) do
+      :ok -> :ok
+      {:error, retry_after} -> {:error, {:rate_limited, retry_after}}
     end
   end
 

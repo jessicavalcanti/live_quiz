@@ -12,6 +12,9 @@ defmodule LiveQuiz.Application do
       LiveQuiz.Repo,
       {DNSCluster, query: Application.get_env(:live_quiz, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: LiveQuiz.PubSub},
+      # The budgets of the open endpoints. Early, and before the endpoint, so
+      # the first request of a boot is already counted (R05).
+      LiveQuiz.RateLimit,
       # Who is connected to a room, the grace period of an absent host and the
       # sweep that closes the rooms whose deadline ran out. All three come
       # after the PubSub they use and before the endpoint, so a browser never
