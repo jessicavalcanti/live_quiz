@@ -1014,7 +1014,7 @@ defmodule LiveQuizWeb.GameSessionLive.HostTest do
 
       {:ok, lv, _html} = live(conn, ~p"/game-sessions/#{session.join_code}/host")
 
-      {:ok, _expired} = Games.expire_game_session(session)
+      {:ok, _expired} = session |> overdue_host_absence() |> Games.expire_game_session()
 
       assert has_element?(lv, "#room-closed")
       assert render(lv) =~ "Sala encerrada por ausência"
@@ -1311,7 +1311,7 @@ defmodule LiveQuizWeb.GameSessionLive.HostTest do
     test "a expiração aparece com o motivo da ausência", %{conn: conn, session: session} do
       {:ok, lv, _html} = live(conn, ~p"/game-sessions/#{session.join_code}/host")
 
-      {:ok, _expired} = Games.expire_game_session(session)
+      {:ok, _expired} = session |> overdue_host_absence() |> Games.expire_game_session()
 
       assert has_element?(lv, "#room-closed")
       assert render(lv) =~ "Sala encerrada por ausência"

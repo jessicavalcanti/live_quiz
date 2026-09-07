@@ -102,6 +102,10 @@ defmodule LiveQuiz.Games.ExpirationSweeper do
   defp expire(%GameSession{} = session) do
     case Games.expire_game_session(session) do
       {:ok, session} -> [session]
+      # The host came back, or dropped again and started a new countdown,
+      # between the listing and this call. Nothing to close and nothing to
+      # report: the next sweep will find the room again if it deserves it.
+      {:error, :not_expired} -> []
       {:error, :invalid_transition} -> []
     end
   rescue
