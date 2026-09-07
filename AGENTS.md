@@ -366,6 +366,7 @@ ou dentro do container com `docker compose exec app`.
 | Locale | Gettext `pt_BR`; mensagens de erro do Ecto traduzidas em `errors.po` |
 | Datas | persistidas em UTC; exibidas na web em `America/Sao_Paulo`; API sempre em ISO 8601 UTC. Um **filtro de dia** na web é lido no fuso da tela e convertido antes da consulta |
 | Contextos | `LiveQuiz.Accounts` (autenticação), `LiveQuiz.Quizzes` (quiz, perguntas, alternativas) e `LiveQuiz.Games` (sala, partida, pontuação e histórico) |
+| `Games` por dentro | `Games` é **fachada**: `Lobby` (entrar, sair, voltar, vagas), `Match` (orquestração da partida), `Scoring`, `History`, `Room` (consultas e transições de sala). Função nova entra no submódulo e é exposta por `defdelegate` — quem chama nunca aprende um nome novo |
 | Autorização | toda função pública de contexto recebe `scope` e filtra por dono **na query**; não-dono recebe 404. `owner_id` num struct que chegou do chamador não prova nada |
 | Identificadores | um id que nenhuma linha poderia ter é recurso ausente (404); filtro ou payload malformado é 422 |
 | Arquitetura | `LiveView → Context → Changeset → Repo` e `Controller → Context → Changeset → Repo` |
