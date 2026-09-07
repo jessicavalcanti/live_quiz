@@ -8,13 +8,30 @@ defmodule LiveQuiz.Games.Scoring do
   never anything the client sent — so the only thing a fast connection buys is
   arriving earlier.
 
+  Correct is a fact about the answer key and never about the score. The two
+  used to be the same test, and they disagree at the end of the clock: a
+  correct answer arriving with nothing left is worth zero points and was being
+  filed as a mistake.
+
+  The clock is the question's own, not the room's. The room's clock always
+  describes the question it is currently sitting on, so a question consolidated
+  after the match moved on was being measured against the *next* question's
+  start.
+
   Consolidating a question is idempotent and safe to lose a race on. It runs
   under the match's advisory lock and the question's row lock, and the question
-  carries a `scored_at` marker: the call that gets there first does the writing
-  and publishes `{:ranking_updated, ranking}`, and every call after it reads the
-  same standing back without counting anything twice. That matters because the
-  three ways a question can close — the host, the deadline, everybody having
-  answered — can happen in the same instant.
+  carries a `scored_at` marker: the call that gets there first does the writing,
+  and every call after it reads the same standing back without counting anything
+  twice. That matters because the ways a question can end — the host, the
+  deadline, everybody having answered, the host advancing past it, the host
+  finishing the match — can happen in the same instant.
+
+  `consolidate_question/2` is the half that touches the database and is called
+  from inside the transition's own transaction, so closing and counting commit
+  together or not at all. It publishes nothing: the events it produces travel
+  back to the transition, which announces them once the transaction has
+  committed. A ranking announced from inside a transaction is a ranking a
+  rollback can still take back.
 
   The room's metrics are written in two statements rather than one per person.
   Twenty-five participations used to mean up to fifty `UPDATE`s serialized
@@ -27,8 +44,6 @@ defmodule LiveQuiz.Games.Scoring do
 
   import Ecto.Query
 
-  require Logger
-
   alias LiveQuiz.Games.Access
   alias LiveQuiz.Games.Answer
   alias LiveQuiz.Games.GameSession
@@ -39,10 +54,37 @@ defmodule LiveQuiz.Games.Scoring do
   alias LiveQuiz.Repo
 
   @doc """
+  Whether an answer picked the option the frozen key marks as correct.
+
+  Correctness is a fact about the answer key, not about the score. The two used
+  to be the same test — `score > 0` — and they disagree at the end of the clock:
+  a correct answer that arrives with nothing left is worth zero points and was
+  being counted as a mistake, in the tally, in the tie-break and in the stored
+  history (R09).
+  """
+  @spec correct_answer?(Answer.t() | nil, GameSessionQuestion.t()) :: boolean()
+  def correct_answer?(nil, %GameSessionQuestion{}), do: false
+
+  def correct_answer?(%Answer{} = answer, %GameSessionQuestion{answer_options: options})
+      when is_list(options) do
+    case Enum.find(options, &(&1.id == answer.game_session_answer_option_id)) do
+      %{is_correct: true} -> true
+      _wrong_or_missing -> false
+    end
+  end
+
+  @doc """
   Calculates an answer's score from the frozen answer key and server timestamps.
 
   Correct answers are worth up to 1000 points, proportional to the time left
   when they arrived. Missing and incorrect answers are worth zero.
+
+  The clock comes from the question, not from the room. The room's
+  `current_question_started_at` always describes the question it is *currently*
+  sitting on, so measuring a question the match has already left against it
+  reads the next question's start — a two-second answer worth 800 points came
+  out as an instant one worth 1000 (R11). The room's clock is used only when it
+  really is this question's, that is, when the match is still on it.
   """
   @spec calculate_answer_score(Answer.t() | nil, GameSessionQuestion.t(), GameSession.t()) ::
           non_neg_integer()
@@ -50,14 +92,13 @@ defmodule LiveQuiz.Games.Scoring do
 
   def calculate_answer_score(
         %Answer{} = answer,
-        %GameSessionQuestion{answer_options: options},
+        %GameSessionQuestion{} = question,
         %GameSession{question_duration_seconds: duration} = session
       )
-      when is_list(options) and is_integer(duration) and duration > 0 do
-    option = Enum.find(options, &(&1.id == answer.game_session_answer_option_id))
-
-    if option && option.is_correct do
-      elapsed_ms = elapsed_time_ms(answer.answered_at, session.current_question_started_at)
+      when is_integer(duration) and duration > 0 do
+    with true <- correct_answer?(answer, question),
+         {:ok, started_at} <- question_started_at(question, session) do
+      elapsed_ms = elapsed_time_ms(answer.answered_at, started_at)
       remaining_ms = max(duration * 1_000 - elapsed_ms, 0)
 
       # A thousand points spread over the duration: the whole clock left is
@@ -66,47 +107,105 @@ defmodule LiveQuiz.Games.Scoring do
       # out above a thousand and does not need to be capped.
       div(remaining_ms, duration)
     else
-      0
+      _wrong_or_unknown_clock -> 0
     end
   end
 
+  @doc """
+  When the question started, or why that cannot be known.
+
+  Questions opened before the snapshot carried its own clock have no `started_at`
+  to read. The room's clock stands in for it only while the match is still on
+  that question, when it describes the same instant; past that, the honest answer
+  is `{:error, :missing_question_clock}` rather than a number that looks
+  plausible and is not.
+  """
+  @spec question_started_at(GameSessionQuestion.t(), GameSession.t()) ::
+          {:ok, DateTime.t()} | {:error, :missing_question_clock}
+  def question_started_at(%GameSessionQuestion{started_at: %DateTime{} = at}, %GameSession{}),
+    do: {:ok, at}
+
+  def question_started_at(
+        %GameSessionQuestion{position: position},
+        %GameSession{current_question_position: position, current_question_started_at: at}
+      )
+      when not is_nil(at),
+      do: {:ok, at}
+
+  def question_started_at(%GameSessionQuestion{}, %GameSession{}),
+    do: {:error, :missing_question_clock}
+
   defp elapsed_time_ms(%DateTime{} = answered_at, %DateTime{} = started_at) do
     max(DateTime.diff(answered_at, started_at, :millisecond), 0)
+  end
+
+  @doc """
+  Consolidates a settled question inside the transaction the caller already has.
+
+  This is the half of scoring that touches the database, and it does nothing
+  else: no transaction of its own, no lock of its own beyond the question row,
+  and above all no broadcast. The caller is a transition — closing, advancing,
+  finishing — that is holding the match lock and has not committed yet, and an
+  event published from inside it would announce a ranking that a rollback can
+  still take back.
+
+  Answers with the effects to publish once that outer transaction commits, and
+  with `scored?` saying whether this call was the one that did the writing. The
+  `scored_at` marker is what makes the second caller read the same standing back
+  instead of counting anything twice.
+
+  A failure comes back as `{:error, reason}` rather than rolling anything back:
+  whether a question that cannot be consolidated should stop the transition is
+  the transition's decision, not this function's.
+  """
+  @spec consolidate_question(GameSession.t(), pos_integer()) ::
+          {:ok, %{ranking: [map()], scored?: boolean()}}
+          | {:error, :question_open | :not_found | :invalid_status | :missing_question_clock}
+  def consolidate_question(%GameSession{id: session_id} = session, question_position)
+      when is_integer(question_position) and question_position > 0 do
+    with {:ok, running} <- GameSession.ensure_running(session),
+         :ok <- GameSession.ensure_question_settled(running, question_position),
+         {:ok, question} <- lock_snapshot_question(session_id, question_position),
+         :ok <- ensure_question_clock(question, running) do
+      participants = participants_for_scoring(session_id)
+
+      case question.scored_at do
+        %DateTime{} ->
+          {:ok, %{ranking: ranking_data(participants), scored?: false}}
+
+        nil ->
+          answers = answers_for_question(question.id)
+          ranking = score_participants(participants, answers, question, running)
+          mark_question_scored(question)
+
+          {:ok, %{ranking: ranking, scored?: true}}
+      end
+    end
+  end
+
+  # A question whose start cannot be known cannot be scored, and pretending it
+  # started now — or at zero — would write a wrong tally that nothing later can
+  # tell from a right one. Only rows opened before the snapshot carried its own
+  # clock can reach this.
+  defp ensure_question_clock(question, session) do
+    case question_started_at(question, session) do
+      {:ok, _at} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
   end
 
   defp score_question(session_id, question_position) do
     Repo.transaction(fn ->
       Locks.match(session_id)
 
-      session = Locks.session(session_id)
-
-      case session do
+      with %GameSession{} = current <- Locks.session(session_id),
+           {:ok, outcome} <- consolidate_question(current, question_position) do
+        outcome
+      else
         nil -> Repo.rollback(:not_found)
-        %GameSession{} = current -> score_locked_question(current, session_id, question_position)
+        {:error, reason} -> Repo.rollback(reason)
       end
     end)
-  end
-
-  defp score_locked_question(session, session_id, question_position) do
-    with {:ok, running} <- GameSession.ensure_running(session),
-         :ok <- GameSession.ensure_question_settled(running, question_position),
-         {:ok, question} <- lock_snapshot_question(session_id, question_position) do
-      answers = answers_for_question(question.id)
-      participants = participants_for_scoring(session_id)
-
-      case question.scored_at do
-        %DateTime{} ->
-          %{session: running, ranking_data: ranking_data(participants), scored?: false}
-
-        nil ->
-          scores = score_participants(participants, answers, question, running)
-          mark_question_scored(question)
-
-          %{session: running, ranking_data: scores, scored?: true}
-      end
-    else
-      {:error, reason} -> Repo.rollback(reason)
-    end
   end
 
   defp lock_snapshot_question(session_id, position) do
@@ -143,13 +242,15 @@ defmodule LiveQuiz.Games.Scoring do
   # arithmetic is the same; what changed is that it is written in two
   # statements, one per table, with the rows travelling as arrays.
   defp score_participants(participants, answers, question, session) do
+    {:ok, started_at} = question_started_at(question, session)
+
     scored =
       Enum.map(participants, fn participant ->
         answer = Map.get(answers, participant.id)
         score = calculate_answer_score(answer, question, session)
         answered? = not is_nil(answer)
-        correct? = answered? and score > 0
-        response_time = response_time_ms(answer, session.current_question_started_at)
+        correct? = correct_answer?(answer, question)
+        response_time = response_time_ms(answer, started_at)
 
         %{
           participant: %{
@@ -304,39 +405,20 @@ defmodule LiveQuiz.Games.Scoring do
   the three of them from disagreeing about what the room is told.
   """
   @spec score_closed_question(GameSession.t(), pos_integer()) ::
-          {:ok, [map()]} | {:error, :question_open | :not_found | :invalid_status}
+          {:ok, [map()]}
+          | {:error, :question_open | :not_found | :invalid_status | :missing_question_clock}
   def score_closed_question(%GameSession{id: session_id}, question_position)
       when is_integer(question_position) and question_position > 0 do
     case score_question(session_id, question_position) do
-      {:ok, %{ranking_data: ranking_data, scored?: true}} ->
-        publish_ranking(session_id, ranking_data)
-        {:ok, ranking_data}
+      {:ok, %{ranking: ranking, scored?: true}} ->
+        publish_ranking(session_id, ranking)
+        {:ok, ranking}
 
-      {:ok, %{ranking_data: ranking_data, scored?: false}} ->
-        {:ok, ranking_data}
+      {:ok, %{ranking: ranking, scored?: false}} ->
+        {:ok, ranking}
 
       {:error, reason} ->
         {:error, reason}
-    end
-  end
-
-  # The three ways a question closes all pass through here with the position the
-  # room is sitting on. A failure is logged rather than raised: the question is
-  # already closed and the reveal already announced, and a match must not stop
-  # because the tally could not be written.
-  @doc """
-  Scores the question the match is sitting on, logging rather than raising.
-
-  The three ways a question closes call this. A failure is not allowed to stop
-  a match: the question is already closed and the reveal already announced, and
-  a tally that could not be written is worth a log, not a crash in the middle of
-  a game.
-  """
-  @spec score_and_publish_ranking(GameSession.t()) :: :ok
-  def score_and_publish_ranking(%GameSession{current_question_position: position} = session) do
-    case score_closed_question(session, position) do
-      {:ok, _ranking} -> :ok
-      {:error, reason} -> Logger.warning("could not score closed question: #{inspect(reason)}")
     end
   end
 

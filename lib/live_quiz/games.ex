@@ -222,9 +222,12 @@ defmodule LiveQuiz.Games do
   ## Scoring
   #
   # What a closed question is worth and the standing it produces belong to
-  # `LiveQuiz.Games.Scoring`. The three ways a question closes all call
-  # `score_and_publish_ranking/1` there; the rest is delegated so that callers
-  # still have one address to know.
+  # `LiveQuiz.Games.Scoring`. The transitions that end a question — the host
+  # closing it, the deadline, everybody having answered, advancing past it and
+  # finishing the match — consolidate it with `consolidate_question/2` inside
+  # their own transaction, and publish what it produced once that transaction
+  # commits. The rest is delegated so that callers still have one address to
+  # know.
 
   defdelegate calculate_answer_score(answer, question, session), to: Scoring
   defdelegate score_closed_question(session, question_position), to: Scoring

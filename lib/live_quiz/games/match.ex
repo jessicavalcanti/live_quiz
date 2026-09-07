@@ -208,7 +208,8 @@ defmodule LiveQuiz.Games.Match do
       when is_nil(expected_position) or
              (is_integer(expected_position) and expected_position > 0) do
     with {:ok, hosted} <- Room.fetch_hosted(scope, session),
-         {:ok, advanced} <- open_next_question(hosted, expected_position) do
+         {:ok, {advanced, effects}} <- open_next_question(hosted, expected_position) do
+      publish_effects(advanced.id, effects)
       QuestionTimer.ensure_started(advanced)
       Topic.broadcast(advanced.id, {:question_advanced, advanced})
       {:ok, advanced}
@@ -237,8 +238,8 @@ defmodule LiveQuiz.Games.Match do
       QuestionTimer.stop(hosted.id)
 
       case outcome do
-        {:closed, closed} ->
-          Scoring.score_and_publish_ranking(closed)
+        {:closed, closed, effects} ->
+          publish_effects(closed.id, effects)
           Topic.broadcast(closed.id, {:question_closed, closed})
           {:ok, closed}
 
@@ -273,8 +274,8 @@ defmodule LiveQuiz.Games.Match do
           | {:error, :not_found | :invalid_status | :no_open_question | :not_due}
   def close_question_by_timeout(session_id) when is_integer(session_id) do
     case close_due_question(session_id) do
-      {:ok, {:closed, closed}} ->
-        Scoring.score_and_publish_ranking(closed)
+      {:ok, {:closed, closed, effects}} ->
+        publish_effects(closed.id, effects)
         Topic.broadcast(closed.id, {:question_closed, closed})
         {:ok, closed}
 
@@ -376,12 +377,12 @@ defmodule LiveQuiz.Games.Match do
       when is_integer(answer_option_id) and is_integer(connected_count) and
              connected_count >= 0 do
     case record_answer(participant, answer_option_id, connected_count) do
-      {:ok, %{session: session, closed?: closed?, count: count} = recorded} ->
+      {:ok, %{session: session, closed?: closed?, count: count, effects: effects} = recorded} ->
         Topic.broadcast(session.id, {:answer_submitted, session.id, count})
 
         if closed? do
           QuestionTimer.stop(session.id)
-          Scoring.score_and_publish_ranking(session)
+          publish_effects(session.id, effects)
           Topic.broadcast(session.id, {:question_closed, session})
         end
 
@@ -728,9 +729,9 @@ defmodule LiveQuiz.Games.Match do
       with {:ok, running} <- GameSession.ensure_running(Repo.get(GameSession, id)),
            :ok <- ensure_current_position(running, expected_position),
            {:ok, position} <- next_position(running),
-           :ok <- close_open_question(running),
-           {:ok, advanced} <- open_question(running, position) do
-        advanced
+           {:ok, settled, effects} <- settle_current_question(running),
+           {:ok, advanced} <- open_question(settled, position) do
+        {advanced, effects}
       else
         {:error, reason} -> Repo.rollback(reason)
       end
@@ -788,11 +789,61 @@ defmodule LiveQuiz.Games.Match do
     end
   end
 
+  # Closing and consolidating are one step, taken inside the transaction that is
+  # already holding the match lock. Scoring afterwards, in a transaction of its
+  # own, left a window in which an advance or a finish could commit first: the
+  # question ended up closed and never counted (R10, R12), and what did get
+  # counted was measured against the next question's clock (R11). The events the
+  # consolidation produces travel back out to be published after the commit —
+  # announcing a ranking a rollback can still take back is the other half of the
+  # same mistake.
   defp close_now(%GameSession{} = session) do
     case stamp_question_closed(session) do
-      {1, [closed]} -> {:closed, closed}
-      {0, _unchanged} -> {:already_closed, Room.reload(session)}
+      {1, [closed]} ->
+        case consolidate(closed, closed.current_question_position) do
+          {:ok, effects} -> {:closed, closed, effects}
+          {:error, reason} -> Repo.rollback(reason)
+        end
+
+      {0, _unchanged} ->
+        {:already_closed, Room.reload(session)}
     end
+  end
+
+  # Settles whatever question the match is sitting on, closing it first if it is
+  # still open. Used by the transitions that must not leave a question behind:
+  # advancing to the next one and finishing the match.
+  defp settle_current_question(%GameSession{current_question_position: nil} = session),
+    do: {:ok, session, []}
+
+  defp settle_current_question(%GameSession{} = session) do
+    settled = if GameSession.question_open?(session), do: close_open(session), else: session
+
+    case consolidate(settled, settled.current_question_position) do
+      {:ok, effects} -> {:ok, settled, effects}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp close_open(%GameSession{} = session) do
+    case stamp_question_closed(session) do
+      {1, [closed]} -> closed
+      {0, _lost_the_race} -> Room.reload(session)
+    end
+  end
+
+  defp consolidate(%GameSession{id: id} = session, position) do
+    case Scoring.consolidate_question(session, position) do
+      {:ok, %{scored?: true, ranking: ranking}} -> {:ok, [{id, {:ranking_updated, ranking}}]}
+      {:ok, %{scored?: false}} -> {:ok, []}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  # Everything the committed transaction wants the room to hear, announced only
+  # now that it is committed.
+  defp publish_effects(_session_id, effects) do
+    Enum.each(effects, fn {id, message} -> Topic.broadcast(id, message) end)
   end
 
   # The whole chain runs in one transaction under the advisory lock of the room,
@@ -887,27 +938,27 @@ defmodule LiveQuiz.Games.Match do
       )
 
     count = question_id |> current_answers() |> Repo.aggregate(:count, :id)
-    {session, closed?} = close_if_everybody_answered(session, count, connected)
+    {session, closed?, effects} = close_if_everybody_answered(session, count, connected)
 
-    %{answer: answer, session: session, closed?: closed?, count: count}
+    %{answer: answer, session: session, closed?: closed?, count: count, effects: effects}
   end
 
   # With nobody connected there is nothing to complete, so the rule never fires
   # and the question runs to its deadline or waits for the host. The count is
   # the one taken inside the transaction, which is what makes "I was the last
   # one missing" a fact instead of a guess.
-  defp close_if_everybody_answered(%GameSession{} = session, _count, 0), do: {session, false}
+  defp close_if_everybody_answered(%GameSession{} = session, _count, 0), do: {session, false, []}
 
   defp close_if_everybody_answered(%GameSession{} = session, count, connected)
        when count >= connected do
     case close_now(session) do
-      {:closed, closed} -> {closed, true}
-      {:already_closed, closed} -> {closed, false}
+      {:closed, closed, effects} -> {closed, true, effects}
+      {:already_closed, closed} -> {closed, false, []}
     end
   end
 
   defp close_if_everybody_answered(%GameSession{} = session, _count, _connected),
-    do: {session, false}
+    do: {session, false, []}
 
   defp current_answers(question_id) do
     where(Answer, [a], a.game_session_question_id == ^question_id)
@@ -925,8 +976,9 @@ defmodule LiveQuiz.Games.Match do
 
   defp finish_and_announce(%GameSession{} = session) do
     case finish_match(session) do
-      {:ok, {:finished, finished}} ->
+      {:ok, {:finished, finished, effects}} ->
         QuestionTimer.stop(finished.id)
+        publish_effects(finished.id, effects)
         Topic.broadcast(finished.id, {:game_finished, finished})
         {:ok, finished}
 
@@ -945,6 +997,10 @@ defmodule LiveQuiz.Games.Match do
   # only a running match may be finished, so a room still in the lobby is
   # refused instead of being closed as if it had been played. Losing the race to
   # another finish is not a failure — the match is over either way.
+  # Consolidating comes before the terminal state, under the same lock. Flipping
+  # the status first froze the results of a question that was still open and
+  # never counted, and the scorer refuses a match that is already finished — so
+  # the wrong tally was the one that stayed in the history (R12).
   defp finish_match(%GameSession{id: id}) do
     at = Room.now()
 
@@ -953,16 +1009,19 @@ defmodule LiveQuiz.Games.Match do
     Repo.transaction(fn ->
       Locks.match(id)
 
-      case Repo.update_all(query,
-             set: [status: :finished, finished_at: at, expires_at: nil, updated_at: at]
-           ) do
-        {1, [finished]} ->
-          persist_final_results(finished)
-          Room.release_participants(id, at)
-          {:finished, finished}
-
-        {0, _unchanged} ->
-          rollback_unless_finished(id)
+      with {:ok, running} <- GameSession.ensure_running(Repo.get(GameSession, id)),
+           {:ok, _settled, effects} <- settle_current_question(running),
+           {1, [finished]} <-
+             Repo.update_all(query,
+               set: [status: :finished, finished_at: at, expires_at: nil, updated_at: at]
+             ) do
+        persist_final_results(finished)
+        Room.release_participants(id, at)
+        {:finished, finished, effects}
+      else
+        {0, _unchanged} -> rollback_unless_finished(id)
+        {:error, :invalid_status} -> rollback_unless_finished(id)
+        {:error, reason} -> Repo.rollback(reason)
       end
     end)
   end
@@ -1107,15 +1166,6 @@ defmodule LiveQuiz.Games.Match do
     end
   end
 
-  # The question being left behind is closed inside the transaction that opens
-  # the next one: leaving it out would record a question that started and never
-  # ended, and phase 4 reads that ending.
-  defp close_open_question(%GameSession{} = session) do
-    if GameSession.question_open?(session), do: stamp_question_closed(session)
-
-    :ok
-  end
-
   defp stamp_question_closed(%GameSession{id: id}) do
     at = Room.now_usec()
 
@@ -1127,9 +1177,27 @@ defmodule LiveQuiz.Games.Match do
         where: is_nil(s.current_question_closed_at),
         select: s
 
-    Repo.update_all(query,
-      set: [current_question_closed_at: at, updated_at: DateTime.truncate(at, :second)]
+    case Repo.update_all(query,
+           set: [current_question_closed_at: at, updated_at: DateTime.truncate(at, :second)]
+         ) do
+      {1, [closed]} ->
+        stamp_snapshot_closed(closed, at)
+        {1, [closed]}
+
+      unchanged ->
+        unchanged
+    end
+  end
+
+  defp stamp_snapshot_closed(%GameSession{id: id, current_question_position: position}, at) do
+    Repo.update_all(
+      from(q in GameSessionQuestion,
+        where: q.game_session_id == ^id and q.position == ^position and is_nil(q.closed_at)
+      ),
+      set: [closed_at: at, updated_at: DateTime.truncate(at, :second)]
     )
+
+    :ok
   end
 
   # The position the match is leaving is repeated in the `WHERE`, so the second
@@ -1155,9 +1223,33 @@ defmodule LiveQuiz.Games.Match do
              updated_at: DateTime.truncate(at, :second)
            ]
          ) do
-      {1, [advanced]} -> {:ok, advanced}
-      {0, _unchanged} -> {:error, :stale}
+      {1, [advanced]} ->
+        stamp_snapshot_opened(advanced, position, at, ends_at)
+        {:ok, advanced}
+
+      {0, _unchanged} ->
+        {:error, :stale}
     end
+  end
+
+  # The same instants the room just got, written on the question itself. The
+  # room's clock always describes the question it is currently sitting on, so it
+  # is the wrong thing to measure an answer by once the match has moved on; the
+  # question's own copy stays true after that (R11).
+  defp stamp_snapshot_opened(%GameSession{id: id}, position, at, ends_at) do
+    Repo.update_all(
+      from(q in GameSessionQuestion,
+        where: q.game_session_id == ^id and q.position == ^position
+      ),
+      set: [
+        started_at: at,
+        ends_at: ends_at,
+        closed_at: nil,
+        updated_at: DateTime.truncate(at, :second)
+      ]
+    )
+
+    :ok
   end
 
   defp where_current_position(query, nil) do

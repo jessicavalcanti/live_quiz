@@ -15,6 +15,13 @@ defmodule LiveQuiz.Games.GameSessionQuestion do
   The parent id is not required here, so the snapshot of a whole match can be
   built as a nested changeset the way `LiveQuiz.Quizzes.Question` is; the
   `null: false` column is what refuses an orphan.
+
+  `started_at`, `ends_at` and `closed_at` are this question's own clock, written
+  by the transition that opens and the one that closes it. The room also carries
+  a clock, but that one always describes the question it is *currently* sitting
+  on: reading it to score a question the match has already left measures the
+  answer against the wrong start. They are set by transitions rather than cast,
+  which is why the changeset below does not accept them.
   """
 
   use Ecto.Schema
@@ -34,6 +41,9 @@ defmodule LiveQuiz.Games.GameSessionQuestion do
   schema "game_session_questions" do
     field :position, :integer
     field :text, :string
+    field :started_at, :utc_datetime_usec
+    field :ends_at, :utc_datetime_usec
+    field :closed_at, :utc_datetime_usec
     field :scored_at, :utc_datetime_usec
 
     belongs_to :game_session, GameSession
