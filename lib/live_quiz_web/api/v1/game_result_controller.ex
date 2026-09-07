@@ -75,8 +75,15 @@ defmodule LiveQuizWeb.Api.V1.GameResultController do
   @doc "Returns the complete immutable result to the host."
   operation :results,
     summary: "Consulta o resultado completo da partida",
-    description:
-      "Retorna a partida encerrada e todos os resultados. Operação restrita ao host autenticado; participantes devem usar o resultado individual.",
+    description: """
+    Retorna a partida encerrada e todos os resultados. Operação restrita ao host
+    autenticado; participantes devem usar o resultado individual.
+
+    O caminho aceita o `public_id` da partida ou o código de entrada. **Use o
+    `public_id` em links guardados**: o código é reutilizável depois que a sala
+    termina, então um endereço construído com ele passa a responder sobre outra
+    partida. O `public_id` vem no corpo desta resposta, em `data.session`.
+    """,
     security: [%{"bearerAuth" => []}],
     parameters: [code: @code],
     responses: [
@@ -86,7 +93,7 @@ defmodule LiveQuizWeb.Api.V1.GameResultController do
     ]
 
   def results(conn, %{"code" => code}) do
-    with {:ok, session} <- Games.get_match_by_code(code),
+    with {:ok, session} <- Games.get_match_by_reference(code),
          {:ok, session} <- Games.get_host_game_history(scope(conn), session.id) do
       render(conn, :results, session: session)
     end
@@ -95,7 +102,12 @@ defmodule LiveQuizWeb.Api.V1.GameResultController do
   @doc "Returns only the authenticated participant's immutable result."
   operation :my_result,
     summary: "Consulta o próprio resultado",
-    description: "Retorna somente o resultado do participante autenticado na partida encerrada.",
+    description: """
+    Retorna somente o resultado do participante autenticado na partida encerrada.
+
+    O caminho aceita o `public_id` da partida ou o código de entrada; guarde o
+    `public_id`, porque o código volta a circular quando a sala termina.
+    """,
     security: [%{"bearerAuth" => []}],
     parameters: [code: @code],
     responses: [
@@ -105,7 +117,7 @@ defmodule LiveQuizWeb.Api.V1.GameResultController do
     ]
 
   def my_result(conn, %{"code" => code}) do
-    with {:ok, session} <- Games.get_match_by_code(code),
+    with {:ok, session} <- Games.get_match_by_reference(code),
          {:ok, result} <- Games.get_my_game_result_for_session(scope(conn), session.id) do
       render(conn, :result, result: result)
     end

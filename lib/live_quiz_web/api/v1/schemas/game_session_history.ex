@@ -11,7 +11,16 @@ defmodule LiveQuizWeb.Api.V1.Schemas.GameSessionHistory do
       type: :object,
       properties: %{
         id: %Schema{type: :integer},
-        code: %Schema{type: :string, description: "Código da partida"},
+        public_id: %Schema{
+          type: :string,
+          format: :uuid,
+          description:
+            "Identificador durável da partida. Use este, e não o código, em links guardados"
+        },
+        code: %Schema{
+          type: :string,
+          description: "Código de entrada. Volta a circular depois que a sala termina"
+        },
         quiz_id: %Schema{
           type: :integer,
           nullable: true,
@@ -31,6 +40,7 @@ defmodule LiveQuizWeb.Api.V1.Schemas.GameSessionHistory do
       },
       required: [
         :id,
+        :public_id,
         :code,
         :quiz_id,
         :quiz_title,
@@ -42,6 +52,7 @@ defmodule LiveQuizWeb.Api.V1.Schemas.GameSessionHistory do
       ],
       example: %{
         "id" => 12,
+        "public_id" => "9f1c2b7e-4a3d-4f5e-8c6b-2d1e0f9a8b7c",
         "code" => "K7P4Q2",
         "quiz_id" => 7,
         "quiz_title" => "Geografia",

@@ -508,6 +508,7 @@ defmodule LiveQuiz.Games.GameSessionTest do
       assert_raise Ecto.ConstraintError, fn ->
         Repo.transaction(fn ->
           Repo.insert!(%GameSession{
+            public_id: Ecto.UUID.generate(),
             host_id: host.id,
             quiz_title: "Capitais do Brasil",
             join_code: "K7P4Q0"
@@ -522,6 +523,7 @@ defmodule LiveQuiz.Games.GameSessionTest do
       assert_raise Ecto.ConstraintError, fn ->
         Repo.transaction(fn ->
           Repo.insert!(%GameSession{
+            public_id: Ecto.UUID.generate(),
             host_id: host.id,
             quiz_title: "Capitais do Brasil",
             join_code: unique_join_code(),

@@ -39,6 +39,7 @@ defmodule LiveQuiz.Games.GameSession do
   @join_code_regex ~r/^[23456789ABCDEFGHJKLMNPQRSTUVWXYZ]{6}$/
 
   schema "game_sessions" do
+    field :public_id, Ecto.UUID
     field :quiz_title, :string
     field :join_code, :string
     field :status, Ecto.Enum, values: @statuses, default: :waiting
@@ -190,6 +191,9 @@ defmodule LiveQuiz.Games.GameSession do
   def create_changeset(session, attrs) do
     session
     |> cast(attrs, [:quiz_title, :join_code, :question_duration_seconds])
+    # Never cast: the durable identity of a room is issued by the server, and a
+    # room whose id came from the request is a room somebody else could name.
+    |> put_public_id()
     |> update_change(:quiz_title, &Changesets.trim/1)
     |> update_change(:join_code, &Changesets.upcase/1)
     |> validate_required([:quiz_title, :join_code, :host_id, :question_duration_seconds])
@@ -306,6 +310,17 @@ defmodule LiveQuiz.Games.GameSession do
   end
 
   defp stamp_status_timestamps(changeset, _status, _at), do: changeset
+
+  # A room keeps the id it was born with. The join code is reusable once a room
+  # is over — it is read out loud, so it is short — and that is what makes it a
+  # fine way in and a poor way back: a durable address needs something that is
+  # only ever about one room (R29).
+  defp put_public_id(changeset) do
+    case get_field(changeset, :public_id) do
+      nil -> put_change(changeset, :public_id, Ecto.UUID.generate())
+      _already_issued -> changeset
+    end
+  end
 
   defp unique_room_constraints(changeset) do
     changeset

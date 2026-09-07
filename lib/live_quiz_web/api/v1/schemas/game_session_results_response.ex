@@ -26,6 +26,7 @@ defmodule LiveQuizWeb.Api.V1.Schemas.GameSessionResultsResponse do
               type: :object,
               properties: %{
                 id: %Schema{type: :integer},
+                public_id: %Schema{type: :string, format: :uuid},
                 code: %Schema{type: :string},
                 quiz_id: %Schema{
                   type: :integer,
@@ -36,7 +37,7 @@ defmodule LiveQuizWeb.Api.V1.Schemas.GameSessionResultsResponse do
                 status: %Schema{type: :string, enum: ["finished"]},
                 finished_at: %Schema{type: :string, format: :"date-time", nullable: true}
               },
-              required: [:id, :code, :quiz_title, :status, :finished_at]
+              required: [:id, :public_id, :code, :quiz_title, :status, :finished_at]
             },
             results: %Schema{type: :array, items: GameResult}
           },
@@ -48,6 +49,7 @@ defmodule LiveQuizWeb.Api.V1.Schemas.GameSessionResultsResponse do
         "data" => %{
           "session" => %{
             "id" => 12,
+            "public_id" => "9f1c2b7e-4a3d-4f5e-8c6b-2d1e0f9a8b7c",
             "code" => "K7P4Q2",
             "quiz_id" => 7,
             "quiz_title" => "Geografia",

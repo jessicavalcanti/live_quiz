@@ -410,6 +410,48 @@ defmodule LiveQuiz.Games do
 
   def get_match_by_code(_code), do: {:error, :not_found}
 
+  @doc """
+  Fetches a room by the identifier that is only ever about that room.
+
+  The join code is reusable once a room is over, so an address built from it
+  answers about whatever room holds it now. `public_id` is issued once and never
+  reused, which is what a link kept from a finished match needs (R29).
+  """
+  @spec get_match_by_public_id(String.t()) :: {:ok, GameSession.t()} | {:error, :not_found}
+  def get_match_by_public_id(public_id) when is_binary(public_id) do
+    case Ecto.UUID.cast(public_id) do
+      {:ok, uuid} -> fetch_by_public_id(uuid)
+      :error -> {:error, :not_found}
+    end
+  end
+
+  def get_match_by_public_id(_public_id), do: {:error, :not_found}
+
+  @doc """
+  Fetches a room from a durable address, which may be either identifier.
+
+  A `public_id` names one room forever; a join code names the most recent room
+  that holds it, which is what every address written before public ids existed
+  carries. Telling them apart is a matter of shape, so both keep working and
+  only one of them is ambiguous.
+  """
+  @spec get_match_by_reference(String.t()) :: {:ok, GameSession.t()} | {:error, :not_found}
+  def get_match_by_reference(reference) when is_binary(reference) do
+    case get_match_by_public_id(reference) do
+      {:ok, session} -> {:ok, session}
+      {:error, :not_found} -> get_match_by_code(reference)
+    end
+  end
+
+  def get_match_by_reference(_reference), do: {:error, :not_found}
+
+  defp fetch_by_public_id(uuid) do
+    case Repo.get_by(GameSession, public_id: uuid) do
+      nil -> {:error, :not_found}
+      %GameSession{} = session -> {:ok, session}
+    end
+  end
+
   @doc "Returns the live room hosted by the scope user, if there is one."
   @spec get_active_session_for_host(Scope.t()) :: GameSession.t() | nil
   def get_active_session_for_host(%Scope{} = scope) do
