@@ -562,7 +562,7 @@ defmodule LiveQuizWeb.GameSessionLive.PlayerTest do
   describe "sair da sala" do
     setup :room_with_ana
 
-    test "sai do lobby, limpa a credencial da sala e libera outra entrada", %{
+    test "sai do lobby, guarda a volta e libera outra entrada", %{
       conn: conn,
       session: session,
       participant: participant
@@ -577,7 +577,12 @@ defmodule LiveQuizWeb.GameSessionLive.PlayerTest do
 
       assert redirected_to(conn) == ~p"/join"
       assert Phoenix.Flash.get(conn.assigns.flash, :info) =~ "saiu da sala"
-      assert remaining_tokens(conn) == %{}
+
+      # A credencial fica: o domínio guarda a participação e o apelido para a
+      # volta, e para um convidado esse token é a única prova de quem era. O que
+      # muda é que a tela de entrada não leva mais de volta sozinha.
+      assert Map.has_key?(remaining_tokens(conn), session.join_code)
+      assert resumable(conn) == %{}
 
       # A participação foi encerrada, então a pessoa pode entrar em outra sala.
       assert Repo.get!(Participant, participant.id).released_at != nil
@@ -625,7 +630,29 @@ defmodule LiveQuizWeb.GameSessionLive.PlayerTest do
       render_submit(form)
       conn = follow_trigger_action(form, conn)
 
-      assert remaining_tokens(conn) == %{other.join_code => "token-de-outra-sala"}
+      assert resumable(conn) == %{other.join_code => "token-de-outra-sala"}
+      assert Map.has_key?(remaining_tokens(conn), session.join_code)
+    end
+
+    test "a saída direta por HTTP encerra a participação sozinha", %{
+      conn: conn,
+      session: session,
+      participant: participant
+    } do
+      # Sem o evento do lobby antes: um `DELETE` direto, um retry, uma aba
+      # fechada no meio. A transição não pode depender de quem chegou primeiro.
+      conn = delete(conn, ~p"/game-sessions/#{session.join_code}/leave")
+
+      assert redirected_to(conn) == ~p"/join"
+      assert Repo.get!(Participant, participant.id).left_at != nil
+    end
+
+    test "sair duas vezes por HTTP é inócuo", %{conn: conn, session: session} do
+      first = delete(conn, ~p"/game-sessions/#{session.join_code}/leave")
+      assert redirected_to(first) == ~p"/join"
+
+      second = delete(conn, ~p"/game-sessions/#{session.join_code}/leave")
+      assert redirected_to(second) == ~p"/join"
     end
   end
 
@@ -1712,6 +1739,23 @@ defmodule LiveQuizWeb.GameSessionLive.PlayerTest do
 
   # Devolve as credenciais como o navegador as apresentaria na requisição
   # seguinte: o cookie escrito na resposta volta como cookie de requisição.
+  defp resumable(conn) do
+    case conn.resp_cookies[@cookie] do
+      %{max_age: 0} ->
+        %{}
+
+      %{value: value} ->
+        conn
+        |> recycle()
+        |> Map.replace!(:secret_key_base, LiveQuizWeb.Endpoint.config(:secret_key_base))
+        |> Plug.Test.put_req_cookie(@cookie, value)
+        |> ParticipantAuth.resumable_tokens()
+
+      _absent ->
+        %{}
+    end
+  end
+
   defp remaining_tokens(conn) do
     case conn.resp_cookies[@cookie] do
       %{max_age: 0} ->

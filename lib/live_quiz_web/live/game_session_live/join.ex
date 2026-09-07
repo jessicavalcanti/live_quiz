@@ -142,8 +142,13 @@ defmodule LiveQuizWeb.GameSessionLive.Join do
 
   # Whoever already holds a credential for this room is taken straight in: the
   # nickname was chosen once and coming back is not a new sign-up.
+  #
+  # Only a room this browser has not walked out of. Leaving keeps the credential
+  # — the domain holds the participation for a return — and a person who just
+  # read "você saiu da sala" being carried straight back into it is not a
+  # convenience (R26). Coming back is offered, not performed.
   defp redirect_if_already_in(socket, code) do
-    token = Map.get(socket.assigns.participant_tokens, code)
+    token = Map.get(socket.assigns.resumable_tokens, code)
 
     case Games.get_participant_of_session(token, code) do
       {:ok, _participant} -> redirect(socket, to: lobby_path(code))

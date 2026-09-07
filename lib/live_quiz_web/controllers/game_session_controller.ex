@@ -65,12 +65,21 @@ defmodule LiveQuizWeb.GameSessionController do
   end
 
   @doc """
-  Forgets the credential of one room, leaving the credentials of the others.
+  Leaves the room, and remembers the way back.
 
-  Only the browser side of leaving: the participation is closed by the lobby
-  (F2-10), which is what frees the person to enter somewhere else. Dropping the
-  credential here is what stops the join screen from taking them back into the
-  room they just walked out of.
+  Both halves of leaving happen here now. The transition used to be the lobby's
+  alone (F2-10) and this action only dropped the cookie, so a request that
+  arrived without the LiveView event before it — a direct `DELETE`, a retry, a
+  tab closed mid-flight — forgot the credential while the participation stayed
+  open. `LiveQuiz.Games.leave_game_session/1` is idempotent, so running it here
+  as well costs nothing when the lobby already did it and is the whole
+  transition when it did not.
+
+  The credential is **kept**, marked as a room this browser walked out of. The
+  domain holds the participation and the nickname for a return, and for a guest
+  that token is the only thing that can prove who they were; erasing it locked
+  them out of a room the context was still holding open (R26). What changes is
+  that the join screen stops walking back into it on its own.
 
   Leaving is not an ending, so the join screen is where it lands, with the
   reason said out loud: whoever clicked "Sair da sala" has to read that it
@@ -78,9 +87,21 @@ defmodule LiveQuizWeb.GameSessionController do
   """
   def leave(conn, %{"code" => code}) do
     conn
-    |> ParticipantAuth.drop_token(code)
-    |> put_flash(:info, "Você saiu da sala. Entre em outra quando quiser.")
+    |> leave_participation(code)
+    |> ParticipantAuth.mark_left(code)
+    |> put_flash(:info, "Você saiu da sala. Pode voltar por ela ou entrar em outra.")
     |> redirect(to: ~p"/join")
+  end
+
+  defp leave_participation(conn, code) do
+    token = conn |> ParticipantAuth.read_tokens() |> Map.get(JoinCode.normalize(code))
+
+    with token when is_binary(token) <- token,
+         {:ok, participant} <- Games.get_participant_of_session(token, code) do
+      {:ok, _left} = Games.leave_game_session(participant)
+    end
+
+    conn
   end
 
   defp lobby_path(code), do: ~p"/game-sessions/#{code}"
