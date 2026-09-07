@@ -1278,7 +1278,7 @@ defmodule LiveQuizWeb.GameSessionLive.PlayerTest do
       assert has_element?(lv, "#back-to-join")
     end
 
-    test "a tela final não fala de pontuação, posição nem ranking", %{
+    test "a tela final mostra pontuação, posição e ranking", %{
       conn: conn,
       session: session,
       scope: scope
@@ -1291,9 +1291,10 @@ defmodule LiveQuizWeb.GameSessionLive.PlayerTest do
 
       rendered = lv |> element("#room-closed") |> render()
 
-      for palavra <- ["ponto", "Ponto", "posição", "Posição", "ranking", "Ranking", "acerto"] do
-        refute rendered =~ palavra
-      end
+      assert rendered =~ "pontos"
+      assert rendered =~ "posição"
+      assert rendered =~ "Resultado final"
+      assert rendered =~ "acertos"
     end
 
     test "o cancelamento reaproveita a tela com a mensagem da fase 2", %{

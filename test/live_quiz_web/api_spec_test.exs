@@ -27,7 +27,11 @@ defmodule LiveQuizWeb.ApiSpecTest do
     {"/api/v1/quizzes/{quiz_id}/questions/{id}", "put"},
     {"/api/v1/quizzes/{quiz_id}/questions/{id}", "patch"},
     {"/api/v1/quizzes/{quiz_id}/questions/{id}", "delete"},
-    {"/api/v1/quizzes/{quiz_id}/questions/{id}/move", "patch"}
+    {"/api/v1/quizzes/{quiz_id}/questions/{id}/move", "patch"},
+    {"/api/v1/game-sessions/{code}/results", "get"},
+    {"/api/v1/game-sessions/{code}/results/me", "get"},
+    {"/api/v1/users/me/game-results", "get"},
+    {"/api/v1/quizzes/{quiz_id}/game-history", "get"}
   ]
 
   @host_operations [
@@ -92,7 +96,8 @@ defmodule LiveQuizWeb.ApiSpecTest do
   @either_operations [
     {"/api/v1/game-sessions/{code}/participants", "get"},
     {"/api/v1/game-sessions/{code}/state", "get"},
-    {"/api/v1/game-sessions/{code}/questions/{position}/results", "get"}
+    {"/api/v1/game-sessions/{code}/questions/{position}/results", "get"},
+    {"/api/v1/game-sessions/{code}/ranking", "get"}
   ]
 
   @open_operations [{"/api/v1/game-sessions/{code}/join", "post"}]
@@ -131,7 +136,12 @@ defmodule LiveQuizWeb.ApiSpecTest do
       "403",
       "404",
       "409"
-    ]
+    ],
+    {"/api/v1/game-sessions/{code}/ranking", "get"} => ["401", "403", "404"],
+    {"/api/v1/game-sessions/{code}/results", "get"} => ["401", "404"],
+    {"/api/v1/game-sessions/{code}/results/me", "get"} => ["401", "404"],
+    {"/api/v1/users/me/game-results", "get"} => ["401", "422"],
+    {"/api/v1/quizzes/{quiz_id}/game-history", "get"} => ["401", "404", "422"]
   }
 
   describe "GET /api/openapi" do
@@ -204,13 +214,21 @@ defmodule LiveQuizWeb.ApiSpecTest do
       spec = conn |> get(~p"/api/openapi") |> json_response(200)
 
       assert Enum.map(spec["tags"], & &1["name"]) ==
-               ["Sessão", "Quizzes", "Perguntas", "Salas", "Partida"]
+               ["Sessão", "Quizzes", "Perguntas", "Salas", "Partida", "Resultados"]
 
       assert spec["paths"]["/api/v1/me"]["get"]["tags"] == ["Sessão"]
       assert spec["paths"]["/api/v1/quizzes"]["get"]["tags"] == ["Quizzes"]
       assert spec["paths"]["/api/v1/quizzes/{quiz_id}/questions"]["get"]["tags"] == ["Perguntas"]
 
-      for {path, verb} <- @room_operations -- @match_operations do
+      for {path, verb} <-
+            (@room_operations -- @match_operations) --
+              [
+                {"/api/v1/game-sessions/{code}/ranking", "get"},
+                {"/api/v1/game-sessions/{code}/results", "get"},
+                {"/api/v1/game-sessions/{code}/results/me", "get"},
+                {"/api/v1/users/me/game-results", "get"},
+                {"/api/v1/quizzes/{quiz_id}/game-history", "get"}
+              ] do
         assert spec["paths"][path][verb]["tags"] == ["Salas"],
                "#{String.upcase(verb)} #{path} deveria estar na tag Salas"
       end
@@ -253,12 +271,33 @@ defmodule LiveQuizWeb.ApiSpecTest do
 
       schemas = spec["components"]["schemas"]
 
-      assert map_size(schemas) == 34
+      assert map_size(schemas) == 41
 
       for {name, schema} <- schemas do
         assert is_binary(schema["description"]), "schema #{name} está sem description"
         assert schema["example"], "schema #{name} está sem example"
       end
+    end
+
+    test "describes the result payloads without anonymous objects", %{conn: conn} do
+      spec = conn |> get(~p"/api/openapi") |> json_response(200)
+
+      assert spec["components"]["schemas"]["RankingResponse"]["properties"]["data"]["items"] ==
+               %{"$ref" => "#/components/schemas/RankingEntry"}
+
+      assert spec["components"]["schemas"]["GameResultResponse"]["properties"]["data"] ==
+               %{"$ref" => "#/components/schemas/GameResult"}
+
+      assert spec["components"]["schemas"]["GameResultListResponse"]["properties"]["data"][
+               "items"
+             ] ==
+               %{"$ref" => "#/components/schemas/GameResult"}
+
+      assert spec["paths"]["/api/v1/quizzes/{quiz_id}/game-history"]["get"]["responses"]["200"][
+               "content"
+             ]["application/json"]["schema"] == %{
+               "$ref" => "#/components/schemas/GameHistoryResponse"
+             }
     end
   end
 
@@ -283,7 +322,7 @@ defmodule LiveQuizWeb.ApiSpecTest do
     test "documents the sixteen operations of the rooms", %{conn: conn} do
       spec = conn |> get(~p"/api/openapi") |> json_response(200)
 
-      assert length(@room_operations) == 16
+      assert length(@room_operations) == 17
 
       for {path, verb} <- @room_operations do
         operation = spec["paths"][path][verb]
@@ -309,7 +348,7 @@ defmodule LiveQuizWeb.ApiSpecTest do
       room_ids =
         for {path, verb} <- @room_operations, do: spec["paths"][path][verb]["operationId"]
 
-      assert length(Enum.uniq(room_ids)) == 16
+      assert length(Enum.uniq(room_ids)) == 17
       assert room_ids -- ids == []
     end
 
@@ -646,7 +685,15 @@ defmodule LiveQuizWeb.ApiSpecTest do
         assert is_map(spec["paths"][path][verb]), "#{String.upcase(verb)} #{path} sumiu"
       end
 
-      for {path, verb} <- @room_operations -- @match_operations do
+      for {path, verb} <-
+            (@room_operations -- @match_operations) --
+              [
+                {"/api/v1/game-sessions/{code}/ranking", "get"},
+                {"/api/v1/game-sessions/{code}/results", "get"},
+                {"/api/v1/game-sessions/{code}/results/me", "get"},
+                {"/api/v1/users/me/game-results", "get"},
+                {"/api/v1/quizzes/{quiz_id}/game-history", "get"}
+              ] do
         assert spec["paths"][path][verb]["tags"] == ["Salas"]
       end
     end

@@ -105,6 +105,17 @@ defmodule LiveQuizWeb.Router do
     post "/game-sessions/:code/answers", GamePlayController, :answer
     get "/game-sessions/:code/state", GamePlayController, :state
     get "/game-sessions/:code/questions/:position/results", GamePlayController, :results
+
+    get "/game-sessions/:code/ranking", GameResultController, :ranking
+  end
+
+  scope "/api/v1", LiveQuizWeb.Api.V1 do
+    pipe_through [:api, :api_authenticated]
+
+    get "/game-sessions/:code/results", GameResultController, :results
+    get "/game-sessions/:code/results/me", GameResultController, :my_result
+    get "/users/me/game-results", GameResultController, :my_history
+    get "/quizzes/:quiz_id/game-history", GameResultController, :quiz_history
   end
 
   # Enable LiveDashboard and Swoosh mailbox preview in development
@@ -137,6 +148,11 @@ defmodule LiveQuizWeb.Router do
       live "/quizzes/:id/questions/new", QuizLive.Editor, :new_question
       live "/quizzes/:id/questions/:question_id/edit", QuizLive.Editor, :edit_question
       live "/game-sessions/:code/host", GameSessionLive.Host, :show
+      live "/game-results", GameResultLive.Index, :index
+      live "/game-results/:id", GameResultLive.Show, :show
+      live "/game-history", GameHistoryLive.Index, :index
+      live "/game-history/:id", GameHistoryLive.Show, :show
+      live "/game-history/:id/participants/:result_id", GameHistoryLive.Participant, :show
       live "/users/settings", UserLive.Settings, :edit
       live "/users/settings/confirm-email/:token", UserLive.Settings, :confirm_email
     end

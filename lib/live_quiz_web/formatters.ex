@@ -88,6 +88,28 @@ defmodule LiveQuizWeb.Formatters do
     "#{div(seconds, 60)}:#{pad(rem(seconds, 60))}"
   end
 
+  @doc "Formats a score with the pt-BR thousands separator."
+  @spec format_score(non_neg_integer()) :: String.t()
+  def format_score(score) when is_integer(score) and score >= 0 do
+    score
+    |> Integer.to_string()
+    |> String.replace(~r/(?<=\d)(?=(\d{3})+$)/, ".")
+    |> then(&"#{&1} pontos")
+  end
+
+  @doc "Formats the number of correct answers in a ranking row."
+  @spec format_correct_answers(non_neg_integer()) :: String.t()
+  def format_correct_answers(answers) when is_integer(answers) and answers >= 0 do
+    "#{answers} #{if answers == 1, do: "acerto", else: "acertos"}"
+  end
+
+  @doc "Formats a response time in milliseconds for the final result."
+  @spec format_response_time(non_neg_integer()) :: String.t()
+  def format_response_time(milliseconds) when is_integer(milliseconds) and milliseconds >= 0 do
+    seconds = milliseconds / 1000
+    :erlang.float_to_binary(seconds, decimals: 1) <> " s"
+  end
+
   @doc """
   Writes how many people let a question go by without answering.
 

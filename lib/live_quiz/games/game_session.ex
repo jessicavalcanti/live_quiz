@@ -22,6 +22,7 @@ defmodule LiveQuiz.Games.GameSession do
   import Ecto.Changeset
 
   alias LiveQuiz.Accounts.User
+  alias LiveQuiz.Games.GameResult
   alias LiveQuiz.Games.GameSessionQuestion
   alias LiveQuiz.Games.Participant
   alias LiveQuiz.Quizzes.Quiz
@@ -65,6 +66,7 @@ defmodule LiveQuiz.Games.GameSession do
     belongs_to :quiz, Quiz
     belongs_to :host, User
     has_many :participants, Participant
+    has_many :game_results, GameResult
     has_many :snapshot_questions, GameSessionQuestion, preload_order: [asc: :position]
 
     timestamps(type: :utc_datetime)

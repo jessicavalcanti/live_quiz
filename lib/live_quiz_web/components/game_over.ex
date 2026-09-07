@@ -9,8 +9,8 @@ defmodule LiveQuizWeb.GameOver do
 
   It is deliberately simple (F3-10): the title, how many questions were applied
   and a way out. There is no score, no position and no ranking here — those are
-  phase 4, and they will be computed on top of the very answers this phase
-  persisted, not sneaked into this screen ahead of time.
+  phase 4, and when a finished result is available this component receives the
+  persisted ranking and immutable participant snapshot from `Games`.
 
   Who is reading changes three things and only three: the wording — the host
   cancelled the room, the participant had it cancelled on them — the way out,
@@ -34,6 +34,8 @@ defmodule LiveQuizWeb.GameOver do
   attr :summary, :map, default: nil, doc: "de `LiveQuiz.Games.game_summary/2`"
   attr :reason, :atom, values: [:finished, :cancelled, :expired], required: true
   attr :viewer, :atom, values: [:host, :player], required: true
+  attr :ranking, :list, default: nil
+  attr :result, :map, default: nil
 
   @doc """
   Renders the ending of a match for the host or for whoever played it.
@@ -52,6 +54,48 @@ defmodule LiveQuizWeb.GameOver do
       <p :if={played?(@summary)} id="questions-played" class="mt-3 text-lg">
         {Formatters.format_questions_played(@summary.questions_played, @summary.question_count)}
       </p>
+
+      <%= if @reason == :finished and @ranking do %>
+        <LiveQuizWeb.Ranking.ranking
+          ranking={@ranking}
+          current_participant_id={result_participant_id(@result)}
+          title="Resultado final"
+        />
+      <% end %>
+
+      <div
+        :if={@reason == :finished && @result}
+        id="own-result-summary"
+        class="mt-6 space-y-3 rounded-2xl border border-primary bg-primary/5 p-5 text-left"
+      >
+        <h2 class="text-xl font-bold">Seu resultado</h2>
+        <p id="own-final-position">
+          Você terminou em <strong>{@result.final_position}º lugar</strong>
+        </p>
+        <p id="own-final-score"><strong>{Formatters.format_score(@result.score)}</strong></p>
+        <dl class="grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
+          <div>
+            <dt class="text-base-content/70">Acertos</dt><dd class="font-bold">
+              {@result.correct_answers}
+            </dd>
+          </div>
+          <div>
+            <dt class="text-base-content/70">Erros</dt><dd class="font-bold">
+              {@result.incorrect_answers}
+            </dd>
+          </div>
+          <div>
+            <dt class="text-base-content/70">Sem resposta</dt><dd class="font-bold">
+              {@result.unanswered_questions}
+            </dd>
+          </div>
+          <div>
+            <dt class="text-base-content/70">Tempo médio</dt><dd class="font-bold">
+              {Formatters.format_response_time(@result.average_response_time_ms)}
+            </dd>
+          </div>
+        </dl>
+      </div>
 
       <div class="mt-6">
         <.button
@@ -75,6 +119,9 @@ defmodule LiveQuizWeb.GameOver do
   # is a number that only asks to be interpreted.
   defp played?(%{questions_played: played}) when played > 0, do: true
   defp played?(_nothing_played), do: false
+
+  defp result_participant_id(%{participant_id: participant_id}), do: participant_id
+  defp result_participant_id(_result), do: nil
 
   defp heading_tag(:host), do: "h2"
   defp heading_tag(:player), do: "h1"

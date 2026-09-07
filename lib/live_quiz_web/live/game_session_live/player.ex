@@ -62,6 +62,7 @@ defmodule LiveQuizWeb.GameSessionLive.Player do
   alias LiveQuizWeb.Formatters
   alias LiveQuizWeb.GameOver
   alias LiveQuizWeb.QuestionResults
+  alias LiveQuizWeb.Ranking
   alias Phoenix.Socket.Broadcast
 
   @impl true
@@ -90,6 +91,8 @@ defmodule LiveQuizWeb.GameSessionLive.Player do
       |> assign(:results, nil)
       |> assign(:summary, nil)
       |> assign(:notice, nil)
+      |> assign(:ranking, nil)
+      |> assign(:result, nil)
       |> stream(:participants, [])
 
     cond do
@@ -130,10 +133,14 @@ defmodule LiveQuizWeb.GameSessionLive.Player do
         # There is no live participation to come back to, but whoever holds the
         # credential of this room is still somebody who played it: it is what
         # authorizes reading how far the match got.
+        {:ok, participant} = Games.get_participation_by_token(token)
+
         socket
         |> assign(:session, session)
+        |> assign(:participant, participant)
         |> assign(:ended, ended_reason(session))
         |> assign(:summary, summary_for_token(session, token))
+        |> load_final_data(session)
 
       {:error, :not_found} ->
         back_to_join(socket)
@@ -233,6 +240,7 @@ defmodule LiveQuizWeb.GameSessionLive.Player do
     |> assign(:game_state, state)
     |> assign(:selected_option_id, state.my_answer_option_id)
     |> load_results(state)
+    |> load_ranking(state)
   end
 
   defp settle(socket, %{status: :waiting}), do: clear_match(socket)
@@ -246,6 +254,7 @@ defmodule LiveQuizWeb.GameSessionLive.Player do
     |> assign(:game_state, nil)
     |> assign(:selected_option_id, nil)
     |> assign(:results, nil)
+    |> assign(:ranking, nil)
     |> assign(:notice, nil)
   end
 
@@ -264,6 +273,34 @@ defmodule LiveQuizWeb.GameSessionLive.Player do
   end
 
   defp load_results(socket, _open_or_pending), do: assign(socket, :results, nil)
+
+  defp load_ranking(socket, %{question_state: :closed}) do
+    %{session: session, participant: participant} = socket.assigns
+
+    case Games.current_ranking(session, participant) do
+      {:ok, ranking} -> assign(socket, :ranking, ranking)
+      {:error, :unauthorized} -> assign(socket, :ranking, nil)
+    end
+  end
+
+  defp load_ranking(socket, _state), do: assign(socket, :ranking, nil)
+
+  defp load_final_data(socket, %GameSession{status: :finished} = session) do
+    %{participant: participant} = socket.assigns
+
+    socket =
+      case Games.current_ranking(session, participant) do
+        {:ok, ranking} -> assign(socket, :ranking, ranking)
+        {:error, :unauthorized} -> assign(socket, :ranking, nil)
+      end
+
+    case Games.get_game_result(participant, session.id, participant.id) do
+      {:ok, result} -> assign(socket, :result, result)
+      {:error, :not_found} -> assign(socket, :result, nil)
+    end
+  end
+
+  defp load_final_data(socket, _session), do: assign(socket, ranking: nil, result: nil)
 
   # What the match added up to, read once, when the room is already over: it is
   # the one number the ending screen shows, and no screen of this phase shows it
@@ -463,6 +500,11 @@ defmodule LiveQuizWeb.GameSessionLive.Player do
     {:noreply, socket |> assign(:session, session) |> load_match()}
   end
 
+  def handle_info({:ranking_updated, ranking}, socket),
+    do: {:noreply, assign(socket, :ranking, ranking)}
+
+  def handle_info({:question_scored, _session, _ranking}, socket), do: {:noreply, socket}
+
   # The one event of the match this screen has nothing to do with: how many
   # people have answered is the host's number, and putting it here would tell
   # whoever is still choosing how far behind the room they are.
@@ -485,6 +527,7 @@ defmodule LiveQuizWeb.GameSessionLive.Player do
   defp close(socket, session) do
     socket
     |> assign(:session, session)
+    |> load_final_data(session)
     |> load_summary()
     |> assign(:ended, ended_reason(session))
   end
@@ -518,6 +561,8 @@ defmodule LiveQuizWeb.GameSessionLive.Player do
               summary={@summary}
               reason={@ended}
               viewer={:player}
+              ranking={@ranking}
+              result={@result}
             />
           <% @game_state -> %>
             <.match
@@ -528,6 +573,8 @@ defmodule LiveQuizWeb.GameSessionLive.Player do
               host_connected?={@host_connected?}
               leaving?={@leaving?}
               code={@code}
+              current_participant_id={@participant.id}
+              ranking={@ranking}
             />
           <% @participant -> %>
             <.lobby
@@ -641,6 +688,8 @@ defmodule LiveQuizWeb.GameSessionLive.Player do
   attr :host_connected?, :boolean, required: true
   attr :leaving?, :boolean, required: true
   attr :code, :string, required: true
+  attr :current_participant_id, :integer, required: true
+  attr :ranking, :list, default: nil
 
   defp match(assigns) do
     ~H"""
@@ -773,6 +822,12 @@ defmodule LiveQuizWeb.GameSessionLive.Player do
       </p>
 
       <QuestionResults.question_results :if={@results} results={@results} viewer={:player} />
+
+      <Ranking.ranking
+        :if={@ranking}
+        ranking={@ranking}
+        current_participant_id={@current_participant_id}
+      />
 
       <p class="mt-6 text-base-content/70">
         Aguarde: o host abre a próxima pergunta quando quiser.

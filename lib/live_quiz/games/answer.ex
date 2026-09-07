@@ -12,6 +12,11 @@ defmodule LiveQuiz.Games.Answer do
   measures the distance from the question opening to the answer, and whole
   seconds would tie half the room. It is always stamped by the server.
 
+  `response_time_ms` is the distance from the question opening to
+  `answered_at`, stamped once when the question is scored. It is stored instead
+  of derived because the immutable result of AD-55 is built at the end of the
+  match, when the opening instant of each question is long gone.
+
   `game_session_id` is redundant — the question already knows its match — and
   kept anyway: every query of phase 4 is by match, and the direct cascade keeps
   deletion simple.
@@ -34,6 +39,7 @@ defmodule LiveQuiz.Games.Answer do
 
   schema "answers" do
     field :answered_at, :utc_datetime_usec
+    field :response_time_ms, :integer, default: 0
 
     belongs_to :game_session, GameSession
     belongs_to :game_session_question, GameSessionQuestion

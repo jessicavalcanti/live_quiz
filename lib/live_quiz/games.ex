@@ -137,6 +137,7 @@ defmodule LiveQuiz.Games do
   alias LiveQuiz.Accounts.Scope
   alias LiveQuiz.Accounts.User
   alias LiveQuiz.Games.Answer
+  alias LiveQuiz.Games.GameResult
   alias LiveQuiz.Games.GameSession
   alias LiveQuiz.Games.GameSessionAnswerOption
   alias LiveQuiz.Games.GameSessionQuestion
@@ -882,6 +883,7 @@ defmodule LiveQuiz.Games do
 
       case outcome do
         {:closed, closed} ->
+          score_and_publish_ranking(closed)
           broadcast(closed.id, {:question_closed, closed})
           {:ok, closed}
 
@@ -917,6 +919,7 @@ defmodule LiveQuiz.Games do
   def close_question_by_timeout(session_id) when is_integer(session_id) do
     case close_due_question(session_id) do
       {:ok, {:closed, closed}} ->
+        score_and_publish_ranking(closed)
         broadcast(closed.id, {:question_closed, closed})
         {:ok, closed}
 
@@ -926,6 +929,263 @@ defmodule LiveQuiz.Games do
       {:error, reason} ->
         {:error, reason}
     end
+  end
+
+  @doc """
+  Calculates an answer's score from the frozen answer key and server timestamps.
+
+  Correct answers are worth up to 1000 points, proportional to the time left
+  when they arrived. Missing and incorrect answers are worth zero.
+  """
+  @spec calculate_answer_score(Answer.t() | nil, GameSessionQuestion.t(), GameSession.t()) ::
+          non_neg_integer()
+  def calculate_answer_score(nil, %GameSessionQuestion{}, %GameSession{}), do: 0
+
+  def calculate_answer_score(
+        %Answer{} = answer,
+        %GameSessionQuestion{answer_options: options},
+        %GameSession{question_duration_seconds: duration} = session
+      )
+      when is_list(options) and is_integer(duration) and duration > 0 do
+    option = Enum.find(options, &(&1.id == answer.game_session_answer_option_id))
+
+    if option && option.is_correct do
+      elapsed_ms = elapsed_time_ms(answer.answered_at, session.current_question_started_at)
+      remaining_ms = max(duration * 1_000 - elapsed_ms, 0)
+      min(div(1_000 * remaining_ms, duration * 1_000), 1_000)
+    else
+      0
+    end
+  end
+
+  defp elapsed_time_ms(%DateTime{} = answered_at, %DateTime{} = started_at) do
+    max(DateTime.diff(answered_at, started_at, :millisecond), 0)
+  end
+
+  defp score_question(session_id, question_position) do
+    Repo.transaction(fn ->
+      lock_match(session_id)
+
+      session = lock_session(session_id)
+
+      case session do
+        nil -> Repo.rollback(:not_found)
+        %GameSession{} = current -> score_locked_question(current, session_id, question_position)
+      end
+    end)
+  end
+
+  defp score_locked_question(session, session_id, question_position) do
+    with {:ok, running} <- ensure_running(session),
+         :ok <- ensure_question_settled(running, question_position),
+         {:ok, question} <- lock_snapshot_question(session_id, question_position) do
+      answers = answers_for_question(question.id)
+      participants = participants_for_scoring(session_id)
+
+      case question.scored_at do
+        %DateTime{} ->
+          %{session: running, ranking_data: ranking_data(participants), scored?: false}
+
+        nil ->
+          scores = score_participants(participants, answers, question, running)
+          mark_question_scored(question)
+
+          %{session: running, ranking_data: scores, scored?: true}
+      end
+    else
+      {:error, reason} -> Repo.rollback(reason)
+    end
+  end
+
+  defp lock_snapshot_question(session_id, position) do
+    GameSessionQuestion
+    |> where([q], q.game_session_id == ^session_id and q.position == ^position)
+    |> lock("FOR UPDATE")
+    |> preload(:answer_options)
+    |> Repo.one()
+    |> case do
+      nil -> {:error, :not_found}
+      question -> {:ok, question}
+    end
+  end
+
+  defp answers_for_question(question_id) do
+    Answer
+    |> where([a], a.game_session_question_id == ^question_id)
+    |> preload(:game_session_answer_option)
+    |> Repo.all()
+    |> Map.new(&{&1.participant_id, &1})
+  end
+
+  defp participants_for_scoring(session_id) do
+    Participant
+    |> where([p], p.game_session_id == ^session_id)
+    |> order_by([p], asc: p.id)
+    |> Repo.all()
+  end
+
+  defp score_participants(participants, answers, question, session) do
+    participants
+    |> Enum.map(fn participant ->
+      answer = Map.get(answers, participant.id)
+      score = calculate_answer_score(answer, question, session)
+      answered? = not is_nil(answer)
+      correct? = answered? and score > 0
+      response_time = response_time_ms(answer, session.current_question_started_at)
+      if answered?, do: stamp_response_time(answer, response_time)
+
+      metrics = %{
+        score: participant.score + score,
+        correct_answers: participant.correct_answers + if(correct?, do: 1, else: 0),
+        incorrect_answers:
+          participant.incorrect_answers + if(answered? and not correct?, do: 1, else: 0),
+        total_response_time_ms: participant.total_response_time_ms + response_time
+      }
+
+      participant
+      |> Ecto.Changeset.change(metrics)
+      |> Repo.update!()
+      |> participant_ranking_data()
+    end)
+    |> Enum.sort_by(
+      &{-&1.score, -&1.correct_answers, &1.total_response_time_ms, &1.participant_id}
+    )
+    |> Enum.with_index(1)
+    |> Enum.map(fn {participant, position} -> Map.put(participant, :position, position) end)
+  end
+
+  defp stamp_response_time(%Answer{} = answer, response_time) do
+    answer
+    |> Ecto.Changeset.change(response_time_ms: response_time)
+    |> Repo.update!()
+  end
+
+  defp response_time_ms(nil, _started_at), do: 0
+
+  defp response_time_ms(%Answer{answered_at: answered_at}, %DateTime{} = started_at) do
+    elapsed_time_ms(answered_at, started_at)
+  end
+
+  defp mark_question_scored(%GameSessionQuestion{id: id}) do
+    {1, _} =
+      Repo.update_all(
+        from(q in GameSessionQuestion, where: q.id == ^id and is_nil(q.scored_at)),
+        set: [scored_at: now_usec()]
+      )
+
+    :ok
+  end
+
+  defp ranking_data(participants) do
+    participants
+    |> Enum.map(&participant_ranking_data/1)
+    |> Enum.sort_by(
+      &{-&1.score, -&1.correct_answers, &1.total_response_time_ms, &1.participant_id}
+    )
+    |> Enum.with_index(1)
+    |> Enum.map(fn {participant, position} -> Map.put(participant, :position, position) end)
+  end
+
+  defp ranking_participants(session_id) do
+    Participant
+    |> where([p], p.game_session_id == ^session_id)
+    |> order_by([p],
+      desc: p.score,
+      desc: p.correct_answers,
+      asc: p.total_response_time_ms,
+      asc: p.id
+    )
+    |> Repo.all()
+  end
+
+  defp participant_ranking_data(participant) do
+    %{
+      participant_id: participant.id,
+      nickname: participant.nickname,
+      score: participant.score,
+      correct_answers: participant.correct_answers,
+      incorrect_answers: participant.incorrect_answers,
+      total_response_time_ms: participant.total_response_time_ms
+    }
+  end
+
+  defp participant_ranking_data(participant, position) do
+    participant
+    |> participant_ranking_data()
+    |> Map.put(:position, position)
+  end
+
+  @doc """
+  Consolidates every participant's last answer for a closed question.
+
+  A persisted marker, protected by the match and question row locks, makes
+  repeated and concurrent calls return the same ranking without duplicating
+  participant metrics. The event is published only after commit.
+  """
+  @spec score_closed_question(GameSession.t(), pos_integer()) ::
+          {:ok, [map()]} | {:error, :question_open | :not_found | :invalid_status}
+  def score_closed_question(%GameSession{id: session_id}, question_position)
+      when is_integer(question_position) and question_position > 0 do
+    case score_question(session_id, question_position) do
+      {:ok, %{session: session, ranking_data: ranking_data, scored?: true}} ->
+        broadcast(session.id, {:question_scored, session, ranking_data})
+        publish_ranking(session.id, ranking_data)
+        {:ok, ranking_data}
+
+      {:ok, %{ranking_data: ranking_data, scored?: false}} ->
+        {:ok, ranking_data}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp score_and_publish_ranking(%GameSession{
+         id: session_id,
+         current_question_position: position
+       }) do
+    case score_question(session_id, position) do
+      {:ok, %{ranking_data: ranking_data, scored?: true}} ->
+        publish_ranking(session_id, ranking_data)
+
+      {:ok, %{scored?: false}} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("could not score closed question: #{inspect(reason)}")
+    end
+  end
+
+  @doc """
+  Returns the current ranking of a match to its host or a participant.
+
+  The query orders every participant by the competition rules, then assigns a
+  sequential position in that same order. A participant remains visible after
+  disconnecting because ranking is based on persisted metrics, not presence.
+  """
+  @spec current_ranking(GameSession.t(), Scope.t() | Participant.t()) ::
+          {:ok, [map()]} | {:error, :unauthorized}
+  def current_ranking(%GameSession{} = session, viewer) do
+    current = reload_session(session)
+
+    if allowed_to_watch?(current, viewer) do
+      current.id
+      |> ranking_participants()
+      |> Enum.with_index(1)
+      |> Enum.map(fn {participant, position} ->
+        participant_ranking_data(participant, position)
+      end)
+      |> then(&{:ok, &1})
+    else
+      {:error, :unauthorized}
+    end
+  end
+
+  @doc "Publishes the ranking after the transaction that calculated it commits."
+  @spec publish_ranking(integer(), [map()]) :: :ok
+  def publish_ranking(game_session_id, ranking)
+      when is_integer(game_session_id) and is_list(ranking) do
+    broadcast(game_session_id, {:ranking_updated, ranking})
   end
 
   @doc """
@@ -1023,6 +1283,7 @@ defmodule LiveQuiz.Games do
 
         if closed? do
           QuestionTimer.stop(session.id)
+          score_and_publish_ranking(session)
           broadcast(session.id, {:question_closed, session})
         end
 
@@ -1117,6 +1378,160 @@ defmodule LiveQuiz.Games do
       {:ok, %GameSession{status: :finished} = finished} -> {:ok, finished}
       {:ok, %GameSession{} = current} -> finish_and_announce(current)
       {:error, :unauthorized} = error -> error
+    end
+  end
+
+  @doc """
+  Fetches one immutable result for its host or for the participant it belongs to.
+
+  A participant can never use its identity to read another participant's result;
+  callers that are not part of the match receive the same not-found response as
+  an unknown result.
+  """
+  @spec get_game_result(Scope.t() | Participant.t() | nil, integer(), integer()) ::
+          {:ok, GameResult.t()} | {:error, :not_found}
+  def get_game_result(identity, session_id, participant_id)
+      when is_integer(session_id) and is_integer(participant_id) do
+    query =
+      from r in GameResult,
+        where: r.game_session_id == ^session_id and r.participant_id == ^participant_id,
+        preload: [:game_session, :participant]
+
+    case Repo.one(query) do
+      %GameResult{} = result ->
+        if result_visible_to?(result, identity), do: {:ok, result}, else: {:error, :not_found}
+
+      nil ->
+        {:error, :not_found}
+    end
+  end
+
+  @doc "Fetches a participant's own result by its stable result identifier."
+  @spec get_my_game_result(Scope.t(), integer() | String.t()) ::
+          {:ok, GameResult.t()} | {:error, :not_found}
+  def get_my_game_result(%Scope{} = scope, id) do
+    query =
+      from r in GameResult,
+        where: r.id == ^id and r.user_id == ^scope.user.id,
+        preload: [:game_session, :participant]
+
+    case Repo.one(query) do
+      %GameResult{} = result -> {:ok, result}
+      nil -> {:error, :not_found}
+    end
+  end
+
+  @doc "Fetches the authenticated user's result for a finished match."
+  @spec get_my_game_result_for_session(Scope.t(), integer()) ::
+          {:ok, GameResult.t()} | {:error, :not_found}
+  def get_my_game_result_for_session(%Scope{} = scope, session_id)
+      when is_integer(session_id) do
+    query =
+      from r in GameResult,
+        where: r.game_session_id == ^session_id and r.user_id == ^scope.user.id,
+        join: s in assoc(r, :game_session),
+        where: s.status == :finished,
+        preload: [:game_session, :participant]
+
+    case Repo.one(query) do
+      %GameResult{} = result -> {:ok, result}
+      nil -> {:error, :not_found}
+    end
+  end
+
+  @doc "Lists the finished results belonging to the authenticated participant."
+  @spec list_game_results(Scope.t(), map() | keyword(), map() | keyword()) :: map()
+  def list_game_results(%Scope{} = scope, filters, pagination) do
+    query =
+      from r in GameResult,
+        join: s in assoc(r, :game_session),
+        where: r.user_id == ^scope.user.id and s.status == :finished
+
+    query
+    |> result_filters(filters)
+    |> paginate_results(pagination)
+  end
+
+  @doc "Lists finished matches hosted for quizzes owned by the authenticated user."
+  @spec list_quiz_game_history(Scope.t(), integer(), map() | keyword(), map() | keyword()) ::
+          map()
+  def list_quiz_game_history(%Scope{} = scope, quiz_id, filters, pagination)
+      when is_integer(quiz_id) do
+    query =
+      from s in GameSession,
+        left_join: q in assoc(s, :quiz),
+        where: s.host_id == ^scope.user.id and s.quiz_id == ^quiz_id and s.status == :finished,
+        left_join: r in assoc(s, :game_results),
+        group_by: [s.id, q.id],
+        select: %{
+          session: s,
+          quiz_title: s.quiz_title,
+          participants_count: count(r.id),
+          winner_nickname:
+            fragment("(array_agg(? ORDER BY ? ASC))[1]", r.nickname, r.final_position),
+          winner_score: fragment("(array_agg(? ORDER BY ? ASC))[1]", r.score, r.final_position)
+        }
+
+    query
+    |> session_result_filters(filters)
+    |> maybe_filter_session_quiz(filters)
+    |> paginate_sessions(pagination)
+  end
+
+  @doc "Lists every finished match hosted by quizzes owned by the user."
+  @spec list_host_game_history(Scope.t(), map() | keyword(), map() | keyword()) :: map()
+  def list_host_game_history(%Scope{} = scope, filters, pagination) do
+    query =
+      from s in GameSession,
+        left_join: q in assoc(s, :quiz),
+        where: s.host_id == ^scope.user.id and s.status == :finished,
+        left_join: r in assoc(s, :game_results),
+        group_by: [s.id, q.id],
+        select: %{
+          session: s,
+          quiz_title: s.quiz_title,
+          participants_count: count(r.id),
+          winner_nickname:
+            fragment("(array_agg(? ORDER BY ? ASC))[1]", r.nickname, r.final_position),
+          winner_score: fragment("(array_agg(? ORDER BY ? ASC))[1]", r.score, r.final_position)
+        }
+
+    query
+    |> session_result_filters(filters)
+    |> maybe_filter_session_quiz(filters)
+    |> paginate_sessions(pagination)
+  end
+
+  @doc "Fetches a finished match and its complete host-visible ranking."
+  @spec get_host_game_history(Scope.t(), integer() | String.t()) ::
+          {:ok, GameSession.t()} | {:error, :not_found}
+  def get_host_game_history(%Scope{} = scope, id) do
+    results_query = from r in GameResult, order_by: [asc: r.final_position]
+
+    query =
+      from s in GameSession,
+        where: s.id == ^id and s.host_id == ^scope.user.id and s.status == :finished,
+        preload: [game_results: ^results_query]
+
+    case Repo.one(query) do
+      %GameSession{} = session -> {:ok, session}
+      nil -> {:error, :not_found}
+    end
+  end
+
+  @doc "Fetches one immutable participant result for the host of its match."
+  @spec get_host_game_result(Scope.t(), integer() | String.t()) ::
+          {:ok, GameResult.t()} | {:error, :not_found}
+  def get_host_game_result(%Scope{} = scope, id) do
+    query =
+      from r in GameResult,
+        join: s in assoc(r, :game_session),
+        where: r.id == ^id and s.host_id == ^scope.user.id and s.status == :finished,
+        preload: [:game_session, :participant]
+
+    case Repo.one(query) do
+      %GameResult{} = result -> {:ok, result}
+      nil -> {:error, :not_found}
     end
   end
 
@@ -2302,6 +2717,7 @@ defmodule LiveQuiz.Games do
              set: [status: :finished, finished_at: at, expires_at: nil, updated_at: at]
            ) do
         {1, [finished]} ->
+          persist_final_results(finished)
           release_participants(id, at)
           {:finished, finished}
 
@@ -2317,6 +2733,249 @@ defmodule LiveQuiz.Games do
       _lobby_or_closed -> Repo.rollback(:invalid_status)
     end
   end
+
+  defp persist_final_results(%GameSession{} = session) do
+    participants = ranking_participants(session.id)
+
+    participants
+    |> Enum.with_index(1)
+    |> Enum.each(fn {participant, position} ->
+      Repo.update_all(
+        from(p in Participant, where: p.id == ^participant.id),
+        set: [final_position: position, updated_at: now()]
+      )
+    end)
+
+    questions = snapshot_questions(session.id) |> preload(:answer_options) |> Repo.all()
+    answers = Repo.all(from a in Answer, where: a.game_session_id == ^session.id)
+    answer_by_participant = Enum.group_by(answers, & &1.participant_id)
+
+    rows =
+      Enum.map(Enum.with_index(participants, 1), fn {participant, position} ->
+        participant_answers = Map.get(answer_by_participant, participant.id, [])
+        answered_count = length(participant_answers)
+
+        %{
+          game_session_id: session.id,
+          participant_id: participant.id,
+          user_id: participant.user_id,
+          quiz_id: session.quiz_id,
+          quiz_title: session.quiz_title,
+          nickname: participant.nickname,
+          score: participant.score,
+          correct_answers: participant.correct_answers,
+          incorrect_answers: participant.incorrect_answers,
+          unanswered_questions: max(length(questions) - answered_count, 0),
+          answered_questions: answered_count,
+          total_response_time_ms: participant.total_response_time_ms,
+          average_response_time_ms: average_response_time(participant, answered_count),
+          final_position: position,
+          question_results: question_result_snapshot(questions, participant_answers),
+          inserted_at: now(),
+          updated_at: now()
+        }
+      end)
+
+    Repo.insert_all(GameResult, rows,
+      on_conflict: :nothing,
+      conflict_target: [:game_session_id, :participant_id]
+    )
+  end
+
+  defp average_response_time(_participant, 0), do: 0
+
+  defp average_response_time(%Participant{total_response_time_ms: total}, answered_count),
+    do: div(total, answered_count)
+
+  defp question_result_snapshot(questions, answers) do
+    answers_by_question = Map.new(answers, &{&1.game_session_question_id, &1})
+
+    Map.new(questions, fn question ->
+      answer = Map.get(answers_by_question, question.id)
+
+      chosen =
+        answer &&
+          Enum.find(question.answer_options, &(&1.id == answer.game_session_answer_option_id))
+
+      key = Integer.to_string(question.position)
+
+      {key,
+       %{
+         "question" => question.question_text,
+         "options" =>
+           Enum.map(question.answer_options, fn option ->
+             %{
+               "position" => option.position,
+               "text" => option.text,
+               "correct" => option.is_correct
+             }
+           end),
+         "answer_option_id" => answer && answer.game_session_answer_option_id,
+         "answer" => chosen && chosen.text,
+         "correct" => chosen && chosen.is_correct,
+         "answered_at" => answer && DateTime.to_iso8601(answer.answered_at),
+         "response_time_ms" => (answer && answer.response_time_ms) || 0
+       }}
+    end)
+  end
+
+  defp result_visible_to?(%GameResult{game_session: %GameSession{host_id: host_id}}, %Scope{
+         user: %User{id: host_id}
+       }),
+       do: true
+
+  defp result_visible_to?(%GameResult{participant_id: participant_id}, %Participant{
+         id: participant_id
+       }),
+       do: true
+
+  defp result_visible_to?(%GameResult{user_id: user_id}, %Scope{user: %User{id: user_id}}),
+    do: true
+
+  defp result_visible_to?(_result, _identity), do: false
+
+  defp result_filters(query, filters) do
+    filters = Map.new(filters)
+
+    query
+    |> maybe_filter_quiz(Map.get(filters, :quiz_id) || Map.get(filters, "quiz_id"))
+    |> maybe_filter_date(:inserted_at, Map.get(filters, :from) || Map.get(filters, "from"), :>=)
+    |> maybe_filter_date(:inserted_at, Map.get(filters, :to) || Map.get(filters, "to"), :<=)
+  end
+
+  defp session_result_filters(query, filters) do
+    filters = Map.new(filters)
+
+    query
+    |> maybe_filter_session_date(Map.get(filters, :from) || Map.get(filters, "from"), :>=)
+    |> maybe_filter_session_date(Map.get(filters, :to) || Map.get(filters, "to"), :<=)
+  end
+
+  defp maybe_filter_session_quiz(query, filters) do
+    filters = Map.new(filters)
+    quiz_id = Map.get(filters, :quiz_id) || Map.get(filters, "quiz_id")
+
+    case quiz_id do
+      nil -> query
+      "" -> query
+      value -> where(query, [s, _q, _r], s.quiz_id == ^value)
+    end
+  end
+
+  defp maybe_filter_quiz(query, nil), do: query
+  defp maybe_filter_quiz(query, quiz_id), do: where(query, [r, _s], r.quiz_id == ^quiz_id)
+
+  defp maybe_filter_date(query, _field, nil, _operator), do: query
+
+  defp maybe_filter_date(query, field, value, operator) do
+    case parse_filter_date(value) do
+      {:ok, datetime} ->
+        case operator do
+          :>= -> where(query, [r, _s], field(r, ^field) >= ^datetime)
+          :<= -> where(query, [r, _s], field(r, ^field) <= ^datetime)
+        end
+
+      :error ->
+        query
+    end
+  end
+
+  defp maybe_filter_session_date(query, nil, _operator), do: query
+
+  defp maybe_filter_session_date(query, value, operator) do
+    case parse_filter_date(value) do
+      {:ok, datetime} ->
+        case operator do
+          :>= ->
+            where(query, [s, _q, r], coalesce(s.finished_at, r.inserted_at) >= ^datetime)
+
+          :<= ->
+            where(query, [s, _q, r], coalesce(s.finished_at, r.inserted_at) <= ^datetime)
+        end
+
+      :error ->
+        query
+    end
+  end
+
+  defp paginate_results(query, pagination) do
+    pagination = Map.new(pagination)
+    page = normalize_result_page(Map.get(pagination, :page) || Map.get(pagination, "page"))
+
+    per_page =
+      normalize_result_per_page(Map.get(pagination, :per_page) || Map.get(pagination, "per_page"))
+
+    total = Repo.aggregate(query, :count, :id)
+
+    %{
+      entries:
+        Repo.all(
+          from r in query,
+            order_by: [desc: r.inserted_at, desc: r.id],
+            limit: ^per_page,
+            offset: ^((page - 1) * per_page)
+        ),
+      page: page,
+      per_page: per_page,
+      total_entries: total,
+      total_pages: ceil(total / per_page)
+    }
+  end
+
+  defp paginate_sessions(query, pagination) do
+    pagination = Map.new(pagination)
+    page = normalize_result_page(Map.get(pagination, :page) || Map.get(pagination, "page"))
+
+    per_page =
+      normalize_result_per_page(Map.get(pagination, :per_page) || Map.get(pagination, "per_page"))
+
+    total = query |> Repo.all() |> length()
+
+    entries =
+      query
+      |> order_by([s, _q, _r], desc: s.finished_at, desc: s.id)
+      |> limit(^per_page)
+      |> offset(^((page - 1) * per_page))
+      |> Repo.all()
+
+    %{
+      entries: entries,
+      page: page,
+      per_page: per_page,
+      total_entries: total,
+      total_pages: ceil(total / per_page)
+    }
+  end
+
+  defp parse_filter_date(%DateTime{} = value), do: {:ok, value}
+
+  defp parse_filter_date(value) when is_binary(value) do
+    case DateTime.from_iso8601(value) do
+      {:ok, datetime, _offset} -> {:ok, datetime}
+      {:error, _reason} -> :error
+    end
+  end
+
+  defp parse_filter_date(_value), do: :error
+
+  defp normalize_result_page(value) when is_integer(value) and value > 0, do: value
+
+  defp normalize_result_page(value) when is_binary(value) do
+    case Integer.parse(value) do
+      {page, ""} when page > 0 -> page
+      _ -> 1
+    end
+  end
+
+  defp normalize_result_page(_value), do: 1
+
+  defp normalize_result_per_page(value) when is_integer(value) and value in 1..100, do: value
+
+  defp normalize_result_per_page(value) when is_binary(value),
+    do: value |> Integer.parse() |> normalize_result_per_page()
+
+  defp normalize_result_per_page({per_page, ""}) when per_page in 1..100, do: per_page
+  defp normalize_result_per_page(_value), do: 20
 
   defp ensure_running(%GameSession{status: :in_progress} = session), do: {:ok, session}
   defp ensure_running(_over_or_gone), do: {:error, :invalid_status}

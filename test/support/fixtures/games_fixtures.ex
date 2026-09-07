@@ -17,6 +17,7 @@ defmodule LiveQuiz.GamesFixtures do
 
   alias LiveQuiz.Accounts.Scope
   alias LiveQuiz.Games.Answer
+  alias LiveQuiz.Games.GameResult
   alias LiveQuiz.Games.GameSession
   alias LiveQuiz.Games.GameSessionAnswerOption
   alias LiveQuiz.Games.GameSessionQuestion
@@ -244,6 +245,35 @@ defmodule LiveQuiz.GamesFixtures do
       game_session_answer_option_id: option.id,
       answered_at: Map.get(attrs, :answered_at) || now_usec()
     })
+    |> Repo.insert!()
+  end
+
+  @doc "Inserts a complete immutable result snapshot for a participant."
+  @spec game_result_fixture(GameSession.t(), Participant.t(), map()) :: GameResult.t()
+  def game_result_fixture(%GameSession{} = session, %Participant{} = participant, attrs \\ %{}) do
+    attrs = Map.new(attrs)
+
+    %GameResult{
+      game_session_id: session.id,
+      participant_id: participant.id,
+      user_id: participant.user_id,
+      quiz_id: session.quiz_id
+    }
+    |> GameResult.changeset(
+      Enum.into(attrs, %{
+        quiz_title: session.quiz_title,
+        nickname: participant.nickname,
+        score: participant.score,
+        correct_answers: participant.correct_answers,
+        incorrect_answers: participant.incorrect_answers,
+        unanswered_questions: 0,
+        answered_questions: participant.correct_answers + participant.incorrect_answers,
+        total_response_time_ms: participant.total_response_time_ms,
+        average_response_time_ms: participant.total_response_time_ms,
+        final_position: participant.final_position || 1,
+        question_results: %{}
+      })
+    )
     |> Repo.insert!()
   end
 

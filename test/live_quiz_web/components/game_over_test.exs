@@ -127,4 +127,45 @@ defmodule LiveQuizWeb.GameOverTest do
       assert render_ending(:host, :finished) =~ "<h2"
     end
   end
+
+  describe "resultado final" do
+    test "mostra ranking e resumo individual quando a partida termina" do
+      html =
+        render_component(&GameOver.game_over/1,
+          session: %GameSession{quiz_title: "Geografia", status: :finished},
+          reason: :finished,
+          viewer: :player,
+          ranking: [
+            %{
+              participant_id: 7,
+              position: 1,
+              nickname: "Ana",
+              score: 1250,
+              correct_answers: 2
+            }
+          ],
+          result: %{
+            participant_id: 7,
+            final_position: 1,
+            score: 1250,
+            correct_answers: 2,
+            incorrect_answers: 1,
+            unanswered_questions: 0,
+            average_response_time_ms: 850
+          }
+        )
+
+      assert html =~ "Resultado final"
+      assert html =~ "Ana"
+      assert html =~ "1º lugar"
+      assert html =~ "1.250 pontos"
+      assert html =~ "Tempo médio"
+    end
+
+    test "não mostra ranking para partidas canceladas" do
+      html = render_ending(:player, :cancelled, ranking: [%{participant_id: 1}])
+
+      refute html =~ ~s(id="ranking")
+    end
+  end
 end

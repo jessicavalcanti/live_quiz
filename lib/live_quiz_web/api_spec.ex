@@ -79,7 +79,8 @@ defmodule LiveQuizWeb.ApiSpec do
         estão previstos para uma fase futura, junto com o cliente mobile.
         """
       },
-      %Tag{name: "Partida", description: match_tag_description()}
+      %Tag{name: "Partida", description: match_tag_description()},
+      %Tag{name: "Resultados", description: "Ranking, resultados imutáveis e históricos."}
     ]
   end
 
