@@ -4,35 +4,36 @@ defmodule LiveQuizWeb.GameHistoryLive.Index do
   use LiveQuizWeb, :live_view
 
   alias LiveQuiz.Games
+  alias LiveQuiz.Games.ResultFilters
+  alias LiveQuizWeb.FilterForm
   alias LiveQuizWeb.Formatters
 
   @per_page 10
 
   @impl true
   def mount(_params, _session, socket),
-    do: {:ok, assign(socket, page_title: "Histórico dos quizzes")}
+    do:
+      {:ok,
+       assign(socket, page_title: "Histórico dos quizzes", filters: FilterForm.from_params(%{}))}
 
   @impl true
   def handle_params(params, _uri, socket) do
-    filters = Map.take(params, ["quiz_id", "from", "to"])
-
     page =
-      Games.list_host_game_history(socket.assigns.current_scope, expand_dates(filters), %{
-        page: params["page"],
-        per_page: @per_page
-      })
+      Games.list_host_game_history(
+        socket.assigns.current_scope,
+        # O dia que a tela mostra é o de São Paulo, e é nesse fuso que ela tem
+        # de ser lida — senão a partida que aparece no dia 6 fica de fora quando
+        # se filtra o dia 6 (R39).
+        ResultFilters.normalize(params, time_zone: ResultFilters.screen_time_zone()),
+        %{page: params["page"], per_page: @per_page}
+      )
 
-    {:noreply,
-     assign(socket,
-       page: page,
-       filters: Map.merge(%{"quiz_id" => "", "from" => "", "to" => ""}, filters)
-     )}
+    {:noreply, assign(socket, page: page, filters: FilterForm.from_params(params))}
   end
 
   @impl true
   def handle_event("filter", %{"filters" => filters}, socket) do
-    filters = for {key, value} <- filters, value != "", into: %{}, do: {key, value}
-    {:noreply, push_patch(socket, to: ~p"/game-history?#{Map.merge(filters, %{"page" => 1})}")}
+    {:noreply, push_patch(socket, to: ~p"/game-history?#{FilterForm.query(filters, 1)}")}
   end
 
   @impl true
@@ -122,21 +123,5 @@ defmodule LiveQuizWeb.GameHistoryLive.Index do
     """
   end
 
-  defp pagination_path(filters, page), do: ~p"/game-history?#{Map.put(filters, "page", page)}"
-
-  defp expand_dates(filters) do
-    filters
-    |> expand_date("from", "T00:00:00Z")
-    |> expand_date("to", "T23:59:59Z")
-  end
-
-  defp expand_date(filters, key, suffix) do
-    case filters[key] do
-      <<year::binary-size(4), "-", month::binary-size(2), "-", day::binary-size(2)>> ->
-        Map.put(filters, key, "#{year}-#{month}-#{day}#{suffix}")
-
-      _ ->
-        filters
-    end
-  end
+  defp pagination_path(filters, page), do: ~p"/game-history?#{FilterForm.query(filters, page)}"
 end

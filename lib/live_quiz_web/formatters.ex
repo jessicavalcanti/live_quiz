@@ -88,6 +88,18 @@ defmodule LiveQuizWeb.Formatters do
     "#{div(seconds, 60)}:#{pad(rem(seconds, 60))}"
   end
 
+  @doc """
+  The letter an alternative is shown with, from its position.
+
+  Position `1` is `A`, and the four alternatives of a question never go past
+  `D`. Three screens label the same alternatives — the host's, the player's and
+  the reveal — and a letter that disagreed between them would be a room reading
+  out an answer nobody else can see.
+  """
+  @spec option_letter(pos_integer()) :: String.t()
+  def option_letter(position) when is_integer(position) and position > 0,
+    do: <<?A + position - 1>>
+
   @doc "Formats a score with the pt-BR thousands separator."
   @spec format_score(non_neg_integer()) :: String.t()
   def format_score(score) when is_integer(score) and score >= 0 do

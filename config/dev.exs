@@ -15,7 +15,7 @@ config :live_quiz, LiveQuiz.Repo,
   show_sensitive_data_on_connection_error: true,
   pool_size: 10
 
-# Segredo de conveniência para os JWTs da API em desenvolvimento.
+# Convenience secret for the API JWTs in development.
 config :live_quiz, LiveQuiz.Accounts.Guardian,
   secret_key: "JiC91dD4zQHzNQaudAcsznLVF9ReFEyMr3rNZxK3JADrMlLE9FJ89oojoeyNmfzx"
 

@@ -4,16 +4,30 @@ defmodule LiveQuizWeb.Endpoint do
   # The session will be stored in the cookie and signed,
   # this means its contents can be read but not tampered with.
   # Set :encryption_salt if you would also like to encrypt it.
+  # `Plug.Session` reads its options when the endpoint compiles, so this one is
+  # a compile time setting. The two cookies written from Elixir read the same
+  # key at runtime instead, where a test can reach it.
   @session_options [
     store: :cookie,
     key: "_live_quiz_key",
     signing_salt: "shQYKH+0",
-    same_site: "Lax"
+    same_site: "Lax",
+    secure: Application.compile_env(:live_quiz, :secure_cookies, false)
   ]
 
+  # `:peer_data` carries the address the socket came from, which is what lets a
+  # LiveView spend the same budgets the controllers do — asking for a reset
+  # link, or trying join codes, happens over this socket and not over a request
+  # a plug could see (R05).
+  # `:x_headers` joins `:peer_data` because a socket arrives through the same
+  # proxies a request does, and `LiveQuizWeb.RateLimit` has to count it the same
+  # way — otherwise the budgets a LiveView spends are exactly the ones that
+  # collapse behind a balancer.
+  @connect_info [:peer_data, :x_headers, session: @session_options]
+
   socket "/live", Phoenix.LiveView.Socket,
-    websocket: [connect_info: [session: @session_options]],
-    longpoll: [connect_info: [session: @session_options]]
+    websocket: [connect_info: @connect_info],
+    longpoll: [connect_info: @connect_info]
 
   # Serve at "/" the static files from "priv/static" directory.
   #
@@ -41,7 +55,12 @@ defmodule LiveQuizWeb.Endpoint do
     cookie_key: "request_logger"
 
   plug Plug.RequestId
-  plug Plug.Telemetry, event_prefix: [:phoenix, :endpoint]
+  # The request line carries the path, and three of this application's links
+  # carry a token *in* the path. `LiveQuizWeb.RequestLogging` is what keeps
+  # those four routes out of the access log entirely (R04).
+  plug Plug.Telemetry,
+    event_prefix: [:phoenix, :endpoint],
+    log: {LiveQuizWeb.RequestLogging, :level, []}
 
   plug Plug.Parsers,
     parsers: [:urlencoded, :multipart, :json],

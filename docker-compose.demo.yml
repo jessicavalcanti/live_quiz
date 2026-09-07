@@ -17,7 +17,9 @@ services:
 
   mailpit:
     image: axllent/mailpit
-    ports: ["${MAILPIT_UI_PORT:-8025}:8025"]
+    # Local por padrão, como no ambiente de desenvolvimento: a caixa de entrada
+    # da demonstração não precisa estar acessível na rede.
+    ports: ["127.0.0.1:${MAILPIT_UI_PORT:-8025}:8025"]
 
   app:
     build:
@@ -29,11 +31,25 @@ services:
       DATABASE_URL: ecto://postgres:postgres@db/live_quiz_demo
       SECRET_KEY_BASE: ${SECRET_KEY_BASE:-demo-secret-key-base-com-no-minimo-64-caracteres-para-a-demonstracao-local}
       GUARDIAN_SECRET_KEY: ${GUARDIAN_SECRET_KEY:-demo-guardian-secret-key-apenas-para-a-demonstracao-local}
-      PHX_HOST: localhost
+      # As contas da demonstração têm senha publicada. Elas só existem porque
+      # esta variável pede por elas, e ela só é definida aqui.
+      DEMO_SEED: "true"
+      # O endereço que participantes vão abrir. Para uma demonstração em LAN,
+      # aponte `PHX_HOST` para um nome que os aparelhos resolvam e `DEMO_PORT`
+      # para a porta publicada — o link e o QR code saem daqui.
+      PHX_HOST: ${PHX_HOST:-localhost}
+      PHX_SCHEME: ${PHX_SCHEME:-http}
+      PHX_URL_PORT: ${DEMO_PORT:-4000}
       PORT: "4000"
+      # O relay aberto ao lado é da demonstração, e agora precisa dizer isso:
+      # sem SMTP_MODE=demo a release exige credenciais de um provedor real (R07).
+      SMTP_MODE: demo
       SMTP_HOST: mailpit
       SMTP_PORT: "1025"
-    ports: ["${DEMO_PORT:-4000}:4000"]
+    # A aplicação é o único serviço que uma demonstração em LAN precisa expor, e
+    # ainda assim só quando alguém pede: `DEMO_BIND=0.0.0.0` junto com um
+    # `PHX_HOST` que os aparelhos consigam resolver.
+    ports: ["${DEMO_BIND:-127.0.0.1}:${DEMO_PORT:-4000}:4000"]
     command: >
       sh -c "bin/live_quiz eval 'LiveQuiz.Release.migrate(); LiveQuiz.Release.seed()' &&
              bin/live_quiz start"

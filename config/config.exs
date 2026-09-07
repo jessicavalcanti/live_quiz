@@ -30,9 +30,9 @@ config :live_quiz, LiveQuizWeb.Gettext, default_locale: "pt_BR", locales: ~w(pt_
 # Timestamps are stored in UTC and converted to America/Sao_Paulo only for display.
 config :elixir, :time_zone_database, Tz.TimeZoneDatabase
 
-# JWT da API: o access token dura 15 minutos; o refresh token tem TTL próprio,
-# definido em `LiveQuiz.Accounts.Guardian`. A `secret_key` é fixa em dev e test e
-# vem de variável de ambiente em produção (`config/runtime.exs`).
+# API JWTs: the access token lasts 15 minutes; the refresh token carries a TTL of
+# its own, set in `LiveQuiz.Accounts.Guardian`. The `secret_key` is fixed in dev
+# and test and comes from the environment in production (`config/runtime.exs`).
 config :live_quiz, LiveQuiz.Accounts.Guardian,
   issuer: "live_quiz",
   ttl: {15, :minutes}
@@ -91,6 +91,20 @@ config :logger, :default_formatter,
 
 # Use Jason for JSON parsing in Phoenix
 config :phoenix, :json_library, Jason
+
+# Every name a credential travels under in this application, listed rather than
+# inherited: the Phoenix default covers `password` and nothing else, while a
+# login, a refresh, a participation and a reset each send something worth
+# keeping out of the log (R04). Matching is by substring, so `refresh_token` and
+# `access_token` are both covered by `token`.
+config :phoenix, :filter_parameters, [
+  "password",
+  "password_confirmation",
+  "token",
+  "secret",
+  "authorization",
+  "access_token_hash"
+]
 
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.

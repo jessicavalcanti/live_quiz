@@ -125,8 +125,10 @@ defmodule LiveQuiz.Games.ExpirationSweeperTest do
     test "uma sala que explode não interrompe as demais nem derruba o sweeper" do
       session = expiring_session(:waiting, minutes_ago(6))
       # Uma sala com id inválido faz a consulta de encerramento estourar, que é
-      # a falha que a varredura tem de absorver.
-      broken = %GameSession{id: "sala inexistente"}
+      # a falha que a varredura tem de absorver. O prazo vencido é o que faz a
+      # chamada chegar até a consulta: expirar é condicionado ao prazo com que a
+      # sala foi selecionada, e uma sala sem prazo é recusada antes disso.
+      broken = %GameSession{id: "sala inexistente", expires_at: minutes_ago(6)}
 
       sweeper =
         start_supervised!(

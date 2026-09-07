@@ -25,10 +25,21 @@ defmodule LiveQuizWeb.Api.V1.Schemas.GameResultResponse do
           "incorrect_answers" => 1,
           "unanswered_questions" => 0,
           "answered_questions" => 10,
+          "played_questions" => 10,
+          "total_questions" => 10,
           "total_response_time_ms" => 12_400,
           "average_response_time_ms" => 1240,
           "final_position" => 1,
-          "question_results" => [],
+          "question_results" => %{
+            "1" => %{
+              "question" => "Qual é a capital do Brasil?",
+              "answer_option_id" => 41,
+              "answer" => "Brasília",
+              "correct" => true,
+              "answered_at" => "2026-09-05T18:19:12Z",
+              "response_time_ms" => 1240
+            }
+          },
           "inserted_at" => "2026-09-05T18:20:00Z"
         }
       }

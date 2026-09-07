@@ -34,7 +34,9 @@ defmodule LiveQuizWeb.ApiSpec do
     %OpenApi{
       info: %Info{
         title: "Live Quiz API",
-        version: "1.0.0",
+        # Read from the application rather than written down again: the version
+        # lives in `mix.exs` and a second copy is a copy that goes stale (R33).
+        version: to_string(Application.spec(:live_quiz, :vsn)),
         description: "API da plataforma de quizzes em tempo real"
       },
       servers: [Server.from_endpoint(Endpoint)],
@@ -49,12 +51,25 @@ defmodule LiveQuizWeb.ApiSpec do
             description: "Token de acesso obtido em POST /api/v1/session"
           },
           "participantAuth" => %SecurityScheme{
-            type: "http",
-            scheme: "Participant",
+            type: "apiKey",
+            name: "X-Participant-Token",
+            in: "header",
             description: """
             Credencial de participação, devolvida uma única vez por
             POST /api/v1/game-sessions/{code}/join. Vale enquanto a sala estiver ativa
             e identifica também participantes sem conta.
+
+            Viaja em um cabeçalho próprio, e não em `Authorization`: uma conta e
+            uma participação podem chegar na mesma requisição, e `Authorization`
+            repetido não é um contrato interoperável — clientes, proxies e SDKs
+            gerados podem consolidar, descartar ou recusar campos repetidos.
+
+            Um cliente com credenciais de várias salas envia um
+            `X-Participant-Token` por sala.
+
+            **Depreciado:** `Authorization: Participant <token>` continua sendo
+            aceito, e só é consultado quando não há `X-Participant-Token`. Será
+            removido quando nenhum cliente depender dele.
             """
           }
         }

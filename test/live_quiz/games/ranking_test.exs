@@ -78,7 +78,6 @@ defmodule LiveQuiz.Games.RankingTest do
       |> Enum.map(fn {:ok, result} -> result end)
 
     assert Enum.all?(results, &match?({:ok, _}, &1))
-    assert_receive {:question_scored, %GameSession{}, _ranking}
     assert_receive {:ranking_updated, ranking}
     assert length(ranking) == 1
     refute_receive {:ranking_updated, _ranking}

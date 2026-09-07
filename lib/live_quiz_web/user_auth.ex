@@ -24,6 +24,13 @@ defmodule LiveQuizWeb.UserAuth do
     same_site: "Lax"
   ]
 
+  # It carries a session token for a fortnight, so it is written with `secure`
+  # wherever the application is served over https — decided at runtime, since
+  # over http a secure cookie is one the browser never sends back.
+  defp remember_me_options do
+    Keyword.put(@remember_me_options, :secure, LiveQuizWeb.secure_cookies?())
+  end
+
   # How old the session token should be before a new one is issued. When a request is made
   # with a session token older than this value, then a new session token will be created
   # and the session and remember-me cookies (if set) will be updated with the new token.
@@ -63,7 +70,7 @@ defmodule LiveQuizWeb.UserAuth do
 
     conn
     |> renew_session(nil)
-    |> delete_resp_cookie(@remember_me_cookie, @remember_me_options)
+    |> delete_resp_cookie(@remember_me_cookie, remember_me_options())
     |> redirect(to: ~p"/")
   end
 
@@ -167,7 +174,7 @@ defmodule LiveQuizWeb.UserAuth do
   defp write_remember_me_cookie(conn, token) do
     conn
     |> put_session(:user_remember_me, true)
-    |> put_resp_cookie(@remember_me_cookie, token, @remember_me_options)
+    |> put_resp_cookie(@remember_me_cookie, token, remember_me_options())
   end
 
   defp put_token_in_session(conn, token) do
@@ -186,6 +193,35 @@ defmodule LiveQuizWeb.UserAuth do
   end
 
   defp user_session_topic(token), do: "users_sessions:#{Base.url_encode64(token)}"
+
+  @doc """
+  Whether this account has proved its password recently enough to act.
+
+  The one place a controller or a LiveView event asks. Answering
+  `{:error, :sudo_required}` instead of raising is the point: a tab that
+  crossed the window between being opened and being submitted is an ordinary
+  thing, not an exception (R06).
+  """
+  @spec ensure_sudo(User.t() | nil) :: :ok | {:error, :sudo_required}
+  def ensure_sudo(user) do
+    if Accounts.sudo_mode?(user), do: :ok, else: {:error, :sudo_required}
+  end
+
+  @doc """
+  Sends somebody back to prove their password, remembering where they were.
+
+  Nothing they typed comes along: a form that crossed the sudo window is
+  re-entered after logging in, and carrying a password through a redirect to
+  save one retype is not a trade worth making.
+  """
+  @spec require_reauthentication(Plug.Conn.t(), String.t()) :: Plug.Conn.t()
+  def require_reauthentication(conn, return_to) do
+    conn
+    |> put_session(:user_return_to, return_to)
+    |> Phoenix.Controller.put_flash(:error, "Confirme sua senha para continuar.")
+    |> Phoenix.Controller.redirect(to: ~p"/users/log-in")
+    |> halt()
+  end
 
   @doc """
   Handles mounting and authenticating the current_scope in LiveViews.
@@ -241,7 +277,7 @@ defmodule LiveQuizWeb.UserAuth do
   def on_mount(:require_sudo_mode, _params, session, socket) do
     socket = mount_current_scope(socket, session)
 
-    if Accounts.sudo_mode?(socket.assigns.current_scope.user, -10) do
+    if Accounts.sudo_mode?(socket.assigns.current_scope.user) do
       {:cont, socket}
     else
       socket =

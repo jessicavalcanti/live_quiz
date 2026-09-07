@@ -235,7 +235,7 @@ defmodule LiveQuizWeb.Api.V1.ParticipantControllerTest do
 
     test "uma sala expirada responde 410", context do
       %{session: session, token: token} = context
-      {:ok, _session} = Games.expire_game_session(session)
+      {:ok, _session} = session |> overdue_host_absence() |> Games.expire_game_session()
 
       assert token |> credential() |> post(rejoin_path(session)) |> json_response(410) == %{
                "errors" => %{"detail" => "Esta sala foi encerrada"}

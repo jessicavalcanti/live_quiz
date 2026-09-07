@@ -93,7 +93,7 @@ defmodule LiveQuizWeb.GameSessionControllerTest do
   end
 
   describe "DELETE /game-sessions/:code/leave" do
-    test "esquece só a credencial daquela sala", %{conn: conn} do
+    test "guarda a credencial de volta e tira só aquela sala das retomáveis", %{conn: conn} do
       conn =
         conn
         |> put_participant_token("J9M3T5", "token-1")
@@ -102,16 +102,26 @@ defmodule LiveQuizWeb.GameSessionControllerTest do
         |> delete(~p"/game-sessions/K7P4Q2/leave")
 
       assert redirected_to(conn) == ~p"/join"
-      assert ParticipantAuth.read_tokens(recycled(conn)) == %{"J9M3T5" => "token-1"}
+
+      # A credencial sobrevive: o domínio guarda a participação e o apelido para
+      # a volta, e para um convidado esse token é a única prova de quem era.
+      assert ParticipantAuth.read_tokens(recycled(conn)) == %{
+               "J9M3T5" => "token-1",
+               "K7P4Q2" => "token-2"
+             }
+
+      assert ParticipantAuth.resumable_tokens(recycled(conn)) == %{"J9M3T5" => "token-1"}
     end
 
-    test "esquecer a última credencial apaga o cookie", %{conn: conn} do
+    test "sair da última sala não apaga o cookie", %{conn: conn} do
       conn =
         conn
         |> put_participant_token("K7P4Q2", "token-1")
         |> delete(~p"/game-sessions/K7P4Q2/leave")
 
-      assert %{max_age: 0} = conn.resp_cookies[@cookie]
+      refute match?(%{max_age: 0}, conn.resp_cookies[@cookie])
+      assert ParticipantAuth.read_tokens(recycled(conn)) == %{"K7P4Q2" => "token-1"}
+      assert ParticipantAuth.resumable_tokens(recycled(conn)) == %{}
     end
 
     test "esquecer uma sala desconhecida não derruba a tela", %{conn: conn} do

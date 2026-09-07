@@ -9,6 +9,7 @@ defmodule LiveQuizWeb.Api.ErrorJSON do
 
   @unauthorized "Não autenticado"
   @not_found "Não encontrado"
+  @too_many_requests "Muitas tentativas. Tente novamente em instantes."
 
   @doc """
   Renders an error of the API.
@@ -17,6 +18,8 @@ defmodule LiveQuizWeb.Api.ErrorJSON do
       the stable `:code` of the refusal when it has one;
     * `"changeset.json"` — the field errors of an invalid changeset, already
       translated to pt-BR;
+    * `"429.json"` — a budget spent, carrying the `rate_limited` code because a
+      client is expected to act on it: wait out the `Retry-After` and retry;
     * `"<status>.json"` — the standard message of that status.
 
   The message is written for a person and is free to change; the code is written
@@ -39,6 +42,9 @@ defmodule LiveQuizWeb.Api.ErrorJSON do
 
   def render("401.json", _assigns), do: %{errors: %{detail: @unauthorized}}
   def render("404.json", _assigns), do: %{errors: %{detail: @not_found}}
+
+  def render("429.json", _assigns),
+    do: %{errors: %{detail: @too_many_requests, code: "rate_limited"}}
 
   def render(template, _assigns) do
     %{errors: %{detail: Phoenix.Controller.status_message_from_template(template)}}

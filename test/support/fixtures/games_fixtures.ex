@@ -156,7 +156,7 @@ defmodule LiveQuiz.GamesFixtures do
       |> Map.drop([:question])
       |> Enum.into(%{
         position: next_snapshot_question_position(session),
-        question_text: "Qual é a capital do Brasil?"
+        text: "Qual é a capital do Brasil?"
       })
 
     %GameSessionQuestion{game_session_id: session.id, question_id: question && question.id}
@@ -199,16 +199,25 @@ defmodule LiveQuiz.GamesFixtures do
 
   The option in position 1 is the correct one. Answers the questions in order,
   with `answer_options` preloaded, which is the shape the execution reads.
+
+  `:played` says how many of them the match actually reached, and defaults to
+  none: a bare snapshot is what `start_game_session/3` writes, before any
+  question is opened. Each played question gets the clock the transition would
+  have written — a question with no `started_at` was never opened, and phase 4
+  counts it out of the result rather than as an absence of that person. A test
+  that stages a match as already played says `played: n`, and one that drives
+  it with `advance_question/3` needs nothing: the transition writes the clock.
   """
   @spec snapshot_fixture(GameSession.t(), keyword()) :: [GameSessionQuestion.t()]
   def snapshot_fixture(%GameSession{} = session, opts \\ []) do
     count = Keyword.get(opts, :count, 3)
+    played = Keyword.get(opts, :played, 0)
 
     for position <- 1..count//1 do
       question =
         game_session_question_fixture(session, %{
           position: position,
-          question_text: "Pergunta #{position} da partida"
+          text: "Pergunta #{position} da partida"
         })
 
       for {text, option_position} <- Enum.with_index(@snapshot_option_texts, 1) do
@@ -219,8 +228,28 @@ defmodule LiveQuiz.GamesFixtures do
         })
       end
 
-      Repo.preload(question, :answer_options)
+      if position <= played, do: mark_question_played(question, session)
+
+      question |> Repo.reload!() |> Repo.preload(:answer_options)
     end
+  end
+
+  @doc """
+  Writes on a snapshot question the clock the transition that opens one writes.
+
+  Only the instants: whether the question was scored is `scored_at`, which the
+  consolidation owns.
+  """
+  @spec mark_question_played(GameSessionQuestion.t(), GameSession.t()) :: :ok
+  def mark_question_played(%GameSessionQuestion{id: id}, %GameSession{} = session) do
+    started_at = now_usec()
+    ends_at = DateTime.add(started_at, session.question_duration_seconds, :second)
+
+    Repo.update_all(from(q in GameSessionQuestion, where: q.id == ^id),
+      set: [started_at: started_at, ends_at: ends_at]
+    )
+
+    :ok
   end
 
   @doc """
@@ -253,6 +282,18 @@ defmodule LiveQuiz.GamesFixtures do
   def game_result_fixture(%GameSession{} = session, %Participant{} = participant, attrs \\ %{}) do
     attrs = Map.new(attrs)
 
+    # The three counts have to agree — the schema and a database constraint both
+    # say so — and a fixture that names only some of them derives the rest
+    # instead of leaving the caller to keep them in step.
+    answered =
+      Map.get_lazy(attrs, :answered_questions, fn ->
+        participant.correct_answers + participant.incorrect_answers
+      end)
+
+    unanswered = Map.get(attrs, :unanswered_questions, 0)
+    played = Map.get(attrs, :played_questions, answered + unanswered)
+    total = Map.get(attrs, :total_questions, played)
+
     %GameResult{
       game_session_id: session.id,
       participant_id: participant.id,
@@ -266,8 +307,10 @@ defmodule LiveQuiz.GamesFixtures do
         score: participant.score,
         correct_answers: participant.correct_answers,
         incorrect_answers: participant.incorrect_answers,
-        unanswered_questions: 0,
-        answered_questions: participant.correct_answers + participant.incorrect_answers,
+        unanswered_questions: unanswered,
+        answered_questions: answered,
+        played_questions: played,
+        total_questions: total,
         total_response_time_ms: participant.total_response_time_ms,
         average_response_time_ms: participant.total_response_time_ms,
         final_position: participant.final_position || 1,
@@ -275,6 +318,26 @@ defmodule LiveQuiz.GamesFixtures do
       })
     )
     |> Repo.insert!()
+  end
+
+  @doc """
+  Stamps a host absence whose deadline has already run out.
+
+  What the sweeper sees when it picks a room up, which is also the only state
+  `Games.expire_game_session/1` acts on: expiring is conditioned on the very
+  deadline the caller was selected with, so a test that wants a room expired
+  has to give it one.
+  """
+  @spec overdue_host_absence(GameSession.t(), non_neg_integer()) :: GameSession.t()
+  def overdue_host_absence(%GameSession{id: id} = session, seconds_ago \\ 60) do
+    expires_at = DateTime.add(now(), -seconds_ago, :second)
+    disconnected_at = DateTime.add(expires_at, -300, :second)
+
+    Repo.update_all(from(s in GameSession, where: s.id == ^id),
+      set: [host_disconnected_at: disconnected_at, expires_at: expires_at, updated_at: now()]
+    )
+
+    %{session | host_disconnected_at: disconnected_at, expires_at: expires_at}
   end
 
   @doc "The current instant with the second precision the schemas persist."

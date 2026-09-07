@@ -227,6 +227,72 @@ defmodule LiveQuizWeb.ParticipantAuthTest do
     end
   end
 
+  describe "mark_left/2" do
+    test "mantém a credencial e tira a sala das retomáveis", %{conn: conn} do
+      conn =
+        conn
+        |> ParticipantAuth.put_token("K7P4Q2", "token-1")
+        |> recycle_cookie()
+        |> ParticipantAuth.mark_left("K7P4Q2")
+        |> recycle_cookie()
+
+      # Continua sendo uma credencial conhecida — é o que a exclusividade lê —
+      # e deixa de ser um convite para voltar sozinho.
+      assert ParticipantAuth.read_tokens(conn) == %{"K7P4Q2" => "token-1"}
+      assert ParticipantAuth.resumable_tokens(conn) == %{}
+    end
+
+    test "não toca nas outras salas", %{conn: conn} do
+      conn =
+        conn
+        |> ParticipantAuth.put_token("J9M3T5", "token-1")
+        |> recycle_cookie()
+        |> ParticipantAuth.put_token("K7P4Q2", "token-2")
+        |> recycle_cookie()
+        |> ParticipantAuth.mark_left("K7P4Q2")
+        |> recycle_cookie()
+
+      assert ParticipantAuth.resumable_tokens(conn) == %{"J9M3T5" => "token-1"}
+
+      assert ParticipantAuth.read_tokens(conn) == %{
+               "J9M3T5" => "token-1",
+               "K7P4Q2" => "token-2"
+             }
+    end
+
+    test "entrar de novo torna a sala retomável outra vez", %{conn: conn} do
+      conn =
+        conn
+        |> ParticipantAuth.put_token("K7P4Q2", "token-1")
+        |> recycle_cookie()
+        |> ParticipantAuth.mark_left("K7P4Q2")
+        |> recycle_cookie()
+        |> ParticipantAuth.put_token("K7P4Q2", "token-1")
+        |> recycle_cookie()
+
+      assert ParticipantAuth.resumable_tokens(conn) == %{"K7P4Q2" => "token-1"}
+    end
+
+    test "marcar uma sala desconhecida não inventa credencial", %{conn: conn} do
+      conn = ParticipantAuth.mark_left(conn, "K7P4Q2")
+
+      # Sem entrada nenhuma, o cookie é apagado como sempre foi.
+      assert %{max_age: 0} = conn.resp_cookies[ParticipantAuth.cookie_name()]
+      assert conn.assigns.participant_tokens == %{}
+    end
+  end
+
+  describe "credenciais escritas antes do estado existir" do
+    test "um par simples é lido como sala retomável", %{conn: conn} do
+      # A forma que o cookie tinha antes de as entradas carregarem estado: era
+      # uma sala em que o navegador entraria de volta, que é o que `active` diz.
+      conn = sign(conn, [{"K7P4Q2", "token-1"}])
+
+      assert ParticipantAuth.read_tokens(conn) == %{"K7P4Q2" => "token-1"}
+      assert ParticipantAuth.resumable_tokens(conn) == %{"K7P4Q2" => "token-1"}
+    end
+  end
+
   describe "fetch_participant_tokens/2" do
     test "espelha as credenciais no assign e na sessão", %{conn: conn} do
       conn =
@@ -236,7 +302,10 @@ defmodule LiveQuizWeb.ParticipantAuthTest do
         |> ParticipantAuth.fetch_participant_tokens([])
 
       assert conn.assigns.participant_tokens == %{"K7P4Q2" => "token-1"}
-      assert Plug.Conn.get_session(conn, @session_key) == [{"K7P4Q2", "token-1"}]
+
+      assert Plug.Conn.get_session(conn, @session_key) == [
+               %{code: "K7P4Q2", token: "token-1", state: :active}
+             ]
     end
 
     test "sem cookie deixa o assign vazio", %{conn: conn} do

@@ -57,6 +57,8 @@ defmodule LiveQuizWeb.Api.V1.GameResultJSON do
       incorrect_answers: result.incorrect_answers,
       unanswered_questions: result.unanswered_questions,
       answered_questions: result.answered_questions,
+      played_questions: result.played_questions,
+      total_questions: result.total_questions,
       total_response_time_ms: result.total_response_time_ms,
       average_response_time_ms: result.average_response_time_ms,
       final_position: result.final_position,
@@ -68,6 +70,7 @@ defmodule LiveQuizWeb.Api.V1.GameResultJSON do
   defp session_data(session),
     do: %{
       id: session.id,
+      public_id: session.public_id,
       code: session.join_code,
       quiz_id: session.quiz_id,
       quiz_title: session.quiz_title,

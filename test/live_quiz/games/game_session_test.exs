@@ -298,12 +298,11 @@ defmodule LiveQuiz.Games.GameSessionTest do
     end
   end
 
-  describe "question_open?/1 and question_closed?/1" do
+  describe "question_open?/1" do
     test "are both false before the first advance" do
       session = %GameSession{status: :in_progress}
 
       refute GameSession.question_open?(session)
-      refute GameSession.question_closed?(session)
     end
 
     test "report an open question while no closing instant is stamped" do
@@ -315,7 +314,6 @@ defmodule LiveQuiz.Games.GameSessionTest do
       }
 
       assert GameSession.question_open?(session)
-      refute GameSession.question_closed?(session)
     end
 
     test "report a closed question once the closing instant is stamped" do
@@ -328,7 +326,6 @@ defmodule LiveQuiz.Games.GameSessionTest do
       }
 
       refute GameSession.question_open?(session)
-      assert GameSession.question_closed?(session)
     end
 
     test "are both false once the match is over, whatever the columns say" do
@@ -340,7 +337,6 @@ defmodule LiveQuiz.Games.GameSessionTest do
         }
 
         refute GameSession.question_open?(session), "expected no open question in #{status}"
-        refute GameSession.question_closed?(session), "expected no closed question in #{status}"
       end
     end
 
@@ -348,7 +344,6 @@ defmodule LiveQuiz.Games.GameSessionTest do
       session = %GameSession{status: :waiting}
 
       refute GameSession.question_open?(session)
-      refute GameSession.question_closed?(session)
     end
 
     test "follow the columns persisted by the room" do
@@ -513,6 +508,7 @@ defmodule LiveQuiz.Games.GameSessionTest do
       assert_raise Ecto.ConstraintError, fn ->
         Repo.transaction(fn ->
           Repo.insert!(%GameSession{
+            public_id: Ecto.UUID.generate(),
             host_id: host.id,
             quiz_title: "Capitais do Brasil",
             join_code: "K7P4Q0"
@@ -527,6 +523,7 @@ defmodule LiveQuiz.Games.GameSessionTest do
       assert_raise Ecto.ConstraintError, fn ->
         Repo.transaction(fn ->
           Repo.insert!(%GameSession{
+            public_id: Ecto.UUID.generate(),
             host_id: host.id,
             quiz_title: "Capitais do Brasil",
             join_code: unique_join_code(),
@@ -627,5 +624,33 @@ defmodule LiveQuiz.Games.GameSessionTest do
 
   defp participants_of(%GameSession{id: id}) do
     from p in Participant, where: p.game_session_id == ^id
+  end
+
+  describe "question_due?/1" do
+    test "a room with no deadline running is never due" do
+      refute GameSession.question_due?(%GameSession{current_question_ends_at: nil})
+    end
+
+    test "is true once the instant is behind us and false while it is ahead" do
+      past = DateTime.add(DateTime.utc_now(), -1, :second)
+      future = DateTime.add(DateTime.utc_now(), 60, :second)
+
+      assert GameSession.question_due?(%GameSession{current_question_ends_at: past})
+      refute GameSession.question_due?(%GameSession{current_question_ends_at: future})
+    end
+
+    test "is only about the clock, never about the question being closed" do
+      past = DateTime.add(DateTime.utc_now(), -1, :second)
+
+      closed = %GameSession{
+        status: :in_progress,
+        current_question_position: 1,
+        current_question_ends_at: past,
+        current_question_closed_at: DateTime.utc_now()
+      }
+
+      assert GameSession.question_due?(closed)
+      refute GameSession.question_open?(closed)
+    end
   end
 end

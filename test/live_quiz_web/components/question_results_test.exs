@@ -13,7 +13,7 @@ defmodule LiveQuizWeb.QuestionResultsTest do
       %{
         position: 1,
         question_count: 10,
-        question_text: "Qual é a capital do Brasil?",
+        text: "Qual é a capital do Brasil?",
         answers_count: 22,
         no_answer_count: 3,
         participants_count: 25,

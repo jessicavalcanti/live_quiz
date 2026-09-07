@@ -13,11 +13,26 @@ defmodule LiveQuizWeb.ParticipantAuth do
   first one, which a single slot would have thrown away. Only the 20 most
   recently used entries are kept, so a browser that has been through many rooms
   never grows a cookie big enough to be refused. Recency is why the cookie
-  stores an ordered list of pairs and only the readers see a map.
+  stores an ordered list and only the readers see a map.
 
   The very same credentials feed `:known_tokens` on
   `LiveQuiz.Games.join_game_session/4`, which is how "one room per person"
   recognizes a guest (AD-28).
+
+  ## Holding a credential and wanting to be taken back are different things
+
+  Leaving a room used to erase the credential. For a guest that credential is
+  the *only* thing the server can recognize them by: the domain keeps the
+  participation and the nickname reserved for a return, and the browser was
+  throwing away the one key to it — so the person could not go back to a room
+  the context was still holding open for them, and the exclusivity check stopped
+  seeing that room at all (R26).
+
+  So an entry carries a state as well as a token. `active` is a room the browser
+  would be taken straight back into; `left` is a room it still holds the key to
+  and will not be walked into by accident. Both are known credentials;
+  only `active` is an intent to enter. Entries written before this distinction
+  existed are read as `active`, which is what they were.
 
   A LiveView cannot write cookies, and it cannot read them either — the socket
   only ever gets the Plug session. So `fetch_participant_tokens/2` runs in the
@@ -39,6 +54,20 @@ defmodule LiveQuizWeb.ParticipantAuth do
   @cookie "lq_participant"
   @max_age 60 * 60 * 24 * 30
   @cookie_options [sign: true, max_age: @max_age, same_site: "Lax", http_only: true]
+
+  @doc """
+  The options this cookie is written with.
+
+  `secure` is decided at runtime rather than baked in, because it is the one
+  option that depends on how the application is served: on over https, off over
+  the http that development and the suite speak, where a secure cookie is one
+  the browser never sends back.
+  """
+  @spec cookie_options() :: keyword()
+  def cookie_options do
+    Keyword.put(@cookie_options, :secure, LiveQuizWeb.secure_cookies?())
+  end
+
   @max_entries 20
   @session_key "participant_tokens"
 
@@ -59,14 +88,36 @@ defmodule LiveQuizWeb.ParticipantAuth do
   def max_age, do: @max_age
 
   @doc """
-  Reads the join code to token map, from a connection or from a LiveView session.
+  Every credential the browser holds, whatever state it is in.
+
+  This is what `:known_tokens` wants: exclusivity is a question about the rooms
+  a guest is tied to, and a room they walked out of is still one of them until
+  the domain says otherwise.
 
   Always answers with a map, whatever the client sent.
   """
   @spec read_tokens(Plug.Conn.t() | map()) :: %{String.t() => String.t()}
-  def read_tokens(%Plug.Conn{} = conn), do: conn |> read_entries() |> Map.new()
+  def read_tokens(source), do: source |> entries(:all) |> Map.new(&{&1.code, &1.token})
 
-  def read_tokens(%{} = session), do: session |> Map.get(@session_key) |> sanitize() |> Map.new()
+  @doc """
+  The credentials of the rooms the browser would be taken back into.
+
+  What the join screen reads. A room the person left on purpose is not one of
+  them: they still hold its key, and walking back in without being asked is not
+  what "sair da sala" meant.
+  """
+  @spec resumable_tokens(Plug.Conn.t() | map()) :: %{String.t() => String.t()}
+  def resumable_tokens(source) do
+    source
+    |> entries(:all)
+    |> Enum.filter(&(&1.state == :active))
+    |> Map.new(&{&1.code, &1.token})
+  end
+
+  defp entries(%Plug.Conn{} = conn, :all), do: read_entries(conn)
+
+  defp entries(%{} = session, :all),
+    do: session |> Map.get(@session_key) |> sanitize()
 
   @doc """
   Stores the credential of one room, keeping the 20 most recently used ones.
@@ -82,21 +133,39 @@ defmodule LiveQuizWeb.ParticipantAuth do
     entries =
       conn
       |> read_entries()
-      |> Enum.reject(fn {code, _token} -> code == normalized end)
+      |> Enum.reject(&(&1.code == normalized))
       |> Enum.take(@max_entries - 1)
 
-    write(conn, [{normalized, token} | entries])
+    write(conn, [%{code: normalized, token: token, state: :active} | entries])
   end
 
-  @doc "Forgets the credential of one room, leaving every other one in place."
-  @spec drop_token(Plug.Conn.t(), String.t()) :: Plug.Conn.t()
-  def drop_token(%Plug.Conn{} = conn, code) when is_binary(code) do
+  @doc """
+  Marks the room as left, keeping the credential that can take the person back.
+
+  Not the same as forgetting it. The domain keeps the participation and the
+  nickname reserved, so the key has to survive; what changes is that the join
+  screen stops walking back into that room on its own.
+  """
+  @spec mark_left(Plug.Conn.t(), String.t()) :: Plug.Conn.t()
+  def mark_left(%Plug.Conn{} = conn, code) when is_binary(code) do
     normalized = JoinCode.normalize(code)
 
     entries =
       conn
       |> read_entries()
-      |> Enum.reject(fn {code, _token} -> code == normalized end)
+      |> Enum.map(fn entry ->
+        if entry.code == normalized, do: %{entry | state: :left}, else: entry
+      end)
+
+    write(conn, entries)
+  end
+
+  @doc "Forgets the credential of one room entirely, leaving every other one in place."
+  @spec drop_token(Plug.Conn.t(), String.t()) :: Plug.Conn.t()
+  def drop_token(%Plug.Conn{} = conn, code) when is_binary(code) do
+    normalized = JoinCode.normalize(code)
+
+    entries = conn |> read_entries() |> Enum.reject(&(&1.code == normalized))
 
     write(conn, entries)
   end
@@ -112,7 +181,7 @@ defmodule LiveQuizWeb.ParticipantAuth do
     entries = read_entries(conn)
 
     conn
-    |> assign(:participant_tokens, Map.new(entries))
+    |> assign(:participant_tokens, Map.new(entries, &{&1.code, &1.token}))
     |> put_session(@session_key, entries)
   end
 
@@ -125,7 +194,9 @@ defmodule LiveQuizWeb.ParticipantAuth do
   @spec on_mount(atom(), map(), map(), Socket.t()) :: {:cont, Socket.t()}
   def on_mount(:mount_participant_tokens, _params, session, socket) do
     {:cont,
-     Phoenix.Component.assign_new(socket, :participant_tokens, fn -> read_tokens(session) end)}
+     socket
+     |> Phoenix.Component.assign_new(:participant_tokens, fn -> read_tokens(session) end)
+     |> Phoenix.Component.assign_new(:resumable_tokens, fn -> resumable_tokens(session) end)}
   end
 
   defp read_entries(%Plug.Conn{} = conn) do
@@ -137,7 +208,7 @@ defmodule LiveQuizWeb.ParticipantAuth do
   end
 
   defp write(conn, entries) do
-    conn = assign(conn, :participant_tokens, Map.new(entries))
+    conn = assign(conn, :participant_tokens, Map.new(entries, &{&1.code, &1.token}))
 
     if entries == [] do
       conn
@@ -145,22 +216,30 @@ defmodule LiveQuizWeb.ParticipantAuth do
       |> delete_session(@session_key)
     else
       conn
-      |> put_resp_cookie(@cookie, entries, @cookie_options)
+      |> put_resp_cookie(@cookie, entries, cookie_options())
       |> put_session(@session_key, entries)
     end
   end
 
-  # Anything that is not a list of `{code, token}` string pairs is dropped: a
-  # cookie that is only partly readable is a cookie of unknown origin.
+  # Anything that is not a credential is dropped: a cookie that is only partly
+  # readable is a cookie of unknown origin. A bare `{code, token}` pair is one
+  # written before entries carried a state, and it meant a room the browser
+  # would be taken back into — which is what `active` says.
   defp sanitize(entries) when is_list(entries) do
     entries
-    |> Enum.filter(fn
-      {code, token} -> is_binary(code) and is_binary(token)
-      _entry -> false
-    end)
-    |> Enum.uniq_by(fn {code, _token} -> code end)
+    |> Enum.flat_map(&entry/1)
+    |> Enum.uniq_by(& &1.code)
     |> Enum.take(@max_entries)
   end
 
   defp sanitize(_entries), do: []
+
+  defp entry(%{code: code, token: token, state: state})
+       when is_binary(code) and is_binary(token) and state in [:active, :left],
+       do: [%{code: code, token: token, state: state}]
+
+  defp entry({code, token}) when is_binary(code) and is_binary(token),
+    do: [%{code: code, token: token, state: :active}]
+
+  defp entry(_not_a_credential), do: []
 end

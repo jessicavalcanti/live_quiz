@@ -13,12 +13,16 @@ LiveView + PostgreSQL**, com uma **API JSON** paralela para consumo futuro por a
 O projeto é entregue em **4 fases**, cada uma equivalente a uma sprint com funcionalidade de negócio
 completa. O plano completo está em [`plataforma_quiz_4_fases.md`](plataforma_quiz_4_fases.md).
 
-| Fase | Entrega |
-|---|---|
-| 1 | Criação e gerenciamento de quizzes (**em andamento**) |
-| 2 | Sala de quiz e lobby em tempo real |
-| 3 | Execução do quiz em tempo real |
-| 4 | Pontuação, ranking e histórico |
+| Fase | Entrega | Estado |
+|---|---|---|
+| 1 | Criação e gerenciamento de quizzes | entregue em `v0.1.0` |
+| 2 | Sala de quiz e lobby em tempo real | entregue em `v0.2.0` |
+| 3 | Execução do quiz em tempo real | entregue em `v0.3.0` |
+| 4 | Pontuação, ranking e histórico | entregue em `v1.0.0` |
+
+As quatro fases estão entregues. O trabalho em curso é o plano de correção do
+[code review completo](code_review_completo_2026-09-07.md), cujas issues seguem o
+mesmo fluxo das stories.
 
 ---
 
@@ -243,6 +247,45 @@ gh pr create --base main --head develop \
 > O PR para a `main` **só é aceito a partir da `develop`** — há um job de CI que reprova qualquer
 > outra origem.
 
+### Migrações e janela de manutenção
+
+**O modelo de implantação deste projeto é janela de manutenção**, e as migrações
+são escritas para ele. Isso é uma escolha, não um descuido, e precisa estar dito
+porque as duas coisas se parecem quando ninguém escreveu qual é.
+
+O que a escolha significa na prática:
+
+- Uma migração pode **renomear uma coluna** ou **transformar JSON em lote**. As
+  duas exigem que código antigo e novo não estejam no ar ao mesmo tempo, e é
+  exatamente isso que a janela garante.
+- O procedimento é: parar a aplicação, migrar, subir a versão nova. Não é rolling
+  update, e uma migração que assuma coexistência de versões não seria segura aqui.
+
+Se zero downtime virar requisito, o modelo muda inteiro: *expand/contract*,
+compatibilidade temporária entre as duas versões e backfill em lotes. Não é uma
+adaptação de uma migração existente — é outra maneira de escrevê-las.
+
+#### O que `down` recupera, e o que não
+
+Uma migração reversível devolve o **esquema**, não necessariamente o **dado**.
+Onde a informação foi descartada de propósito, `down` recria a coluna vazia:
+
+| Migração | `down` devolve | Não devolve |
+|---|---|---|
+| `drop_options_from_question_results` | a chave `options` no JSON | o conteúdo dela, descartado na #118 |
+| `rename_question_text_on_snapshot` | o nome anterior da coluna | — |
+| `add_question_clock_to_snapshot` | o esquema sem as colunas | os instantes já registrados |
+| `add_question_totals_to_game_results` | o esquema sem os contadores | — |
+| `add_public_id_to_game_sessions` | o esquema sem o identificador | os identificadores emitidos, que eram os endereços duráveis |
+| `enforce_result_invariants_in_the_database` | as constraints anteriores | — |
+| `add_refresh_token_families_and_auth_version` | o esquema sem as famílias | as sessões de API abertas, que passam a valer de novo até expirar |
+| `record_email_send_intents` | o esquema sem a caixa de saída | as mensagens ainda não entregues, que somem com a tabela |
+
+Antes de qualquer migração que transforme dado: **backup, dry run em cópia da
+base, e contagem antes e depois**. Uma migração irreversível deve dizer que é
+irreversível, em vez de oferecer um `down` que dá a impressão de recuperar o que
+já não existe.
+
 ### Gravar a demonstração de uma versão
 
 ```bash
@@ -321,11 +364,20 @@ ou dentro do container com `docker compose exec app`.
 | Idioma do código | inglês (módulos, funções, tabelas, colunas, rotas, commits) |
 | Idioma da UI e das issues | pt-BR |
 | Locale | Gettext `pt_BR`; mensagens de erro do Ecto traduzidas em `errors.po` |
-| Datas | persistidas em UTC; exibidas na web em `America/Sao_Paulo`; API sempre em ISO 8601 UTC |
-| Contextos | `LiveQuiz.Accounts` (autenticação) e `LiveQuiz.Quizzes` (quiz, perguntas, alternativas) |
-| Autorização | toda função pública de contexto recebe `scope` e filtra por dono **na query**; não-dono recebe 404 |
+| Datas | persistidas em UTC; exibidas na web em `America/Sao_Paulo`; API sempre em ISO 8601 UTC. Um **filtro de dia** na web é lido no fuso da tela e convertido antes da consulta |
+| Contextos | `LiveQuiz.Accounts` (autenticação), `LiveQuiz.Quizzes` (quiz, perguntas, alternativas) e `LiveQuiz.Games` (sala, partida, pontuação e histórico) |
+| `Games` por dentro | `Games` é **fachada**: `Lobby` (entrar, sair, voltar, vagas), `Match` (orquestração da partida), `Scoring`, `History`, `Room` (consultas e transições de sala). Função nova entra no submódulo e é exposta por `defdelegate` — quem chama nunca aprende um nome novo |
+| Autorização | toda função pública de contexto recebe `scope` e filtra por dono **na query**; não-dono recebe 404. `owner_id` num struct que chegou do chamador não prova nada |
+| Identificadores | um id que nenhuma linha poderia ter é recurso ausente (404); filtro ou payload malformado é 422 |
 | Arquitetura | `LiveView → Context → Changeset → Repo` e `Controller → Context → Changeset → Repo` |
-| Integridade | validação no changeset **e** constraint no banco |
+| Integridade | validação no changeset **e** constraint no banco — as escritas em lote não passam por changeset |
+| Locks | ordem global única, declarada em `LiveQuiz.Games.Locks`: **identity → match → seats** |
+| Sessões | apagar `UserToken` encerra sessões web; desconectar sockets já montados exige `UserAuth.disconnect_sessions/1`. As sessões de API são revogadas em duas metades: a família em `refresh_tokens` (um dispositivo) e `users.auth_version` no claim `ver` (todos, na hora) |
+| E-mail | gravar a intenção e enviar são separados: `LiveQuiz.Mail.record/1` escreve na mesma transação do token e `LiveQuiz.Mail.Courier` entrega, com retry limitado. Uma mensagem para de ser tentada quando o link que ela carrega expira. Fora de `SMTP_MODE=demo`, a release exige host, usuário, senha e verifica o certificado |
+| CSS | Tailwind v4 + **daisyUI**, que é a stack aprovada e está no `mix.exs`. Isto **substitui** a diretriz gerada da seção 10, que manda escrever componentes só com Tailwind |
+| Scripts | um bundle (`app.js`), hooks colocados (`Phoenix.LiveView.ColocatedHook`) e **uma** exceção nomeada: o bootstrap de tema no `root.html.heex` |
+| Telemetria | evento novo entra em `LiveQuizWeb.Telemetry.metrics/0` no mesmo PR — emitir sem declarar é escrever um número que nenhum reporter recolhe. Etiqueta só de conjunto fixo, nunca sala, pessoa ou endereço. O que for silencioso e significar "alguém não recebeu algo" vai também para `Telemetry.Alerts`, que registra em log sem depender de coletor |
+| Limites | orçamentos por operação em `LiveQuiz.RateLimit`, gastos **antes** do trabalho caro. Chave por operação + identidade + origem, nunca só a origem; responder é contado por participação, para que ninguém trave a sala inteira. A origem depende de `TRUSTED_PROXY_HOPS`, que um deploy **tem** de declarar: `0` conta o par do socket, `N` conta a entrada N-ésima do fim de `X-Forwarded-For`. O começo da lista é do cliente e nunca é lido |
 
 ---
 
@@ -362,6 +414,26 @@ gh issue view 1 --repo jessicavalcanti/live_quiz
 A partir daqui estão as diretrizes de uso de Elixir, Phoenix, Ecto e LiveView instaladas pelo
 `mix phx.new` e mantidas por `mix usage_rules.sync`. Elas complementam — e nunca substituem — as
 regras de processo das seções anteriores.
+
+> **Duas delas não valem aqui, e a seção 8 é quem manda** (R42). O texto abaixo é
+> gerado e volta ao original a cada `mix usage_rules.sync`, então corrigi-lo no
+> lugar não adiantaria; o que vale está anotado aqui e na tabela da seção 8.
+>
+> - *"Always manually write your own tailwind-based components instead of using
+>   daisyUI"* — **daisyUI é a stack deste projeto**, está no `mix.exs` e é o que
+>   toda a interface usa. Arrancá-la seria reescrever a interface inteira para
+>   satisfazer uma diretriz genérica, e o review pede explicitamente para não
+>   apagar estilos em massa. Componentes novos usam daisyUI + Tailwind como os
+>   existentes.
+> - *"Never write inline `<script>` tags within templates"* — vale para tudo
+>   menos **um** script, o bootstrap de tema em `root.html.heex`. Ele existe
+>   porque o tema tem de estar no `<html>` antes do primeiro pixel: o bundle é
+>   `defer`, e a página pintaria clara antes de escurecer. Hooks colocados não
+>   são scripts inline para efeito desta regra, como o próprio review observa.
+>
+> Qualquer *outro* `<script>` inline continua proibido, e não há uma terceira
+> exceção esperando para ser criada: se um script novo precisar rodar antes da
+> pintura, ele entra aqui, com o motivo escrito.
 
 This is a web application written using the Phoenix web framework.
 

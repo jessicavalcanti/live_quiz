@@ -76,6 +76,18 @@ if config_env() == :prod do
 
   host = System.get_env("PHX_HOST") || "example.com"
 
+  # O endereço que a aplicação usa para montar links absolutos — o link de
+  # entrada e o QR code que ele vira. Produção fala https na 443 e não precisa
+  # dizer nada; uma demonstração local fala http numa porta alta, e sem poder
+  # dizê-lo o QR apontava para `https://localhost:443` (R51).
+  url_scheme = System.get_env("PHX_SCHEME") || "https"
+
+  url_port =
+    case System.get_env("PHX_URL_PORT") do
+      nil -> if url_scheme == "https", do: 443, else: 80
+      port -> String.to_integer(port)
+    end
+
   # O segredo dos JWTs da API é independente do `secret_key_base` do Phoenix:
   # comprometer um não deve comprometer o outro.
   guardian_secret_key =
@@ -90,7 +102,7 @@ if config_env() == :prod do
   config :live_quiz, :dns_cluster_query, System.get_env("DNS_CLUSTER_QUERY")
 
   config :live_quiz, LiveQuizWeb.Endpoint,
-    url: [host: host, port: 443, scheme: "https"],
+    url: [host: host, port: url_port, scheme: url_scheme],
     http: [
       # Enable IPv6 and bind on all interfaces.
       # Set it to  {0, 0, 0, 0, 0, 0, 0, 1} for local network only access.
@@ -150,12 +162,121 @@ if config_env() == :prod do
   #
   # See https://swoosh.hexdocs.pm/Swoosh.html#module-installation for details.
   #
-  # The demonstration environment (docker-compose.demo.yml) points SMTP_HOST at its own
-  # Mailpit container, so the release delivers mail without any external provider.
-  config :live_quiz, LiveQuiz.Mailer,
-    adapter: Swoosh.Adapters.SMTP,
-    relay: System.get_env("SMTP_HOST", "localhost"),
-    port: String.to_integer(System.get_env("SMTP_PORT", "1025")),
-    auth: :never,
-    tls: :never
+  # ## SMTP
+  #
+  # One adapter, two very different relays, and until now the configuration
+  # described only the easy one: Mailpit, on localhost, with authentication and
+  # TLS switched off. That is right for the demonstration and is not a contract
+  # a real provider can be plugged into — nothing said where credentials go,
+  # and nothing refused to start without them (R07).
+  #
+  # So the demo is now a *mode* rather than the default. `SMTP_MODE=demo`
+  # (which docker-compose.demo.yml sets) keeps the open relay next door;
+  # anything else is a real provider and has to say so: host, port, username,
+  # password, and how the connection is protected.
+  #
+  # `SMTP_TLS` is `always` by default, and `SMTP_AUTH` is `always`, because the
+  # safe value is the one you get by not thinking about it. Turning either off
+  # is possible and has to be typed.
+  smtp_mode = System.get_env("SMTP_MODE", "provider")
+
+  mailer_options =
+    if smtp_mode == "demo" do
+      [
+        relay: System.get_env("SMTP_HOST", "localhost"),
+        port: String.to_integer(System.get_env("SMTP_PORT", "1025")),
+        auth: :never,
+        tls: :never
+      ]
+    else
+      # An unrecognised value must not silently become something weaker. Naming
+      # the accepted set here is also the only documentation of it a deployment
+      # gets to read at the moment it is wrong.
+      smtp_choice = fn name, default, allowed ->
+        value = System.get_env(name, default)
+
+        Enum.find(allowed, fn option -> Atom.to_string(option) == value end) ||
+          raise """
+          environment variable #{name} is #{inspect(value)}, which is not one of
+          #{Enum.map_join(allowed, ", ", &Atom.to_string/1)}.
+          """
+      end
+
+      require_env = fn name ->
+        System.get_env(name) ||
+          raise """
+          environment variable #{name} is missing.
+
+          It is required to send email through an SMTP provider. Set SMTP_MODE=demo
+          to use a local relay with no authentication instead — which is what
+          docker-compose.demo.yml does, and what no production deployment should.
+          """
+      end
+
+      [
+        relay: require_env.("SMTP_HOST"),
+        port: String.to_integer(System.get_env("SMTP_PORT", "587")),
+        username: require_env.("SMTP_USERNAME"),
+        password: require_env.("SMTP_PASSWORD"),
+        auth: smtp_choice.("SMTP_AUTH", "always", [:always, :if_available, :never]),
+        # `always` demands STARTTLS on a plain connection; `if_available` takes
+        # it when offered, which is a downgrade anybody in the path can force.
+        tls: smtp_choice.("SMTP_TLS", "always", [:always, :if_available, :never]),
+        ssl: System.get_env("SMTP_SSL", "false") == "true",
+        # Without this, `:gen_smtp` accepts any certificate at all, and TLS
+        # protects against nothing but a passive reader.
+        tls_options: [
+          verify: :verify_peer,
+          cacerts: :public_key.cacerts_get(),
+          server_name_indication: String.to_charlist(require_env.("SMTP_HOST")),
+          depth: 3
+        ],
+        retries: 0
+      ]
+    end
+
+  config :live_quiz, LiveQuiz.Mailer, [{:adapter, Swoosh.Adapters.SMTP} | mailer_options]
+
+  # ## What is in front of the application
+  #
+  # `LiveQuizWeb.RateLimit` counts by origin, and what the origin *is* depends
+  # on the topology. Behind a balancer, the socket peer is the balancer, and
+  # every request in the world lands on one key — which is not a weak limiter
+  # but an outage, since a room of thirty people entering at once locks itself
+  # out of a budget of twenty.
+  #
+  # There is no safe default for this, so there is no default: a deployment says
+  # what it is. `0` for a direct connection; `N` for N trusted proxies in front,
+  # which makes the origin the entry N from the end of `X-Forwarded-For` — the
+  # one the nearest trusted proxy observed. The front of that list is written by
+  # the client and is never read.
+  trusted_proxy_hops =
+    case System.get_env("TRUSTED_PROXY_HOPS") do
+      nil ->
+        raise """
+        environment variable TRUSTED_PROXY_HOPS is missing.
+
+        Set it to 0 when the application takes connections directly, or to the
+        number of trusted proxies in front of it (a single load balancer is 1).
+        Getting this wrong silently either lets anybody spend anybody's rate
+        limit budget, or collapses every visitor into one budget and locks a
+        room out of its own game.
+        """
+
+      value ->
+        case Integer.parse(value) do
+          {hops, ""} when hops >= 0 ->
+            hops
+
+          _not_a_count ->
+            raise "environment variable TRUSTED_PROXY_HOPS is #{inspect(value)}, " <>
+                    "which is not a number of proxies."
+        end
+    end
+
+  config :live_quiz, LiveQuizWeb.RateLimit, trusted_proxy_hops: trusted_proxy_hops
+
+  # Retrying is the outbox's job, not the adapter's: `LiveQuiz.Mail` counts the
+  # attempts, backs them off, and stops at the life of the link it carries.
+  config :live_quiz, LiveQuiz.Mail, from: System.get_env("MAIL_FROM", "nao-responda@livequiz.dev")
 end

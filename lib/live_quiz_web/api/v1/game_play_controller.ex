@@ -39,13 +39,16 @@ defmodule LiveQuizWeb.Api.V1.GamePlayController do
   alias LiveQuiz.Games.GameSession
   alias LiveQuiz.Games.Participant
   alias LiveQuiz.Games.Presence
+  alias LiveQuiz.RateLimit
   alias LiveQuizWeb.Api.V1.Schemas.AnswerRequest
+  alias LiveQuizWeb.Api.V1.Schemas.CloseRequest
   alias LiveQuizWeb.Api.V1.Schemas.ErrorResponse
   alias LiveQuizWeb.Api.V1.Schemas.GameStateResponse
   alias LiveQuizWeb.Api.V1.Schemas.GameSummaryResponse
   alias LiveQuizWeb.Api.V1.Schemas.NextRequest
   alias LiveQuizWeb.Api.V1.Schemas.QuestionResultsResponse
   alias LiveQuizWeb.Api.V1.Schemas.SubmittedAnswerResponse
+  alias LiveQuizWeb.Api.Viewer
 
   action_fallback LiveQuizWeb.Api.FallbackController
 
@@ -131,6 +134,12 @@ defmodule LiveQuizWeb.Api.V1.GamePlayController do
     última pergunta espera o `finish`. Idempotente — encerrar de novo devolve
     `200` com o instante original, sem repetir a revelação.
 
+    O corpo aceita `expected_position`, a pergunta para a qual o comando foi
+    emitido. Informada e divergente da corrente, a resposta é `409` com o código
+    `stale`: um retry destinado à pergunta 1 que chegue depois de um avanço não
+    encerra a pergunta 2. Omitida ou nula, encerra a pergunta corrente — o
+    comportamento anterior, mantido para clientes existentes.
+
     **Recusas.**
 
     | Status | Motivo | `errors.code` |
@@ -140,8 +149,12 @@ defmodule LiveQuizWeb.Api.V1.GamePlayController do
     | 404 | sala inexistente ou código inválido — `not_found` | — |
     | 409 | a partida não está em andamento | `invalid_status` |
     | 409 | não há pergunta aberta para encerrar | `no_open_question` |
+    | 409 | a posição informada não é mais a corrente | `stale` |
+    | 422 | `expected_position` presente e inválida | `invalid_expected_position` |
     """,
     parameters: [code: @code_parameter],
+    request_body:
+      {"Posição esperada, opcional", "application/json", CloseRequest, required: false},
     responses: [
       ok: {"Pergunta encerrada", "application/json", GameStateResponse},
       unauthorized: {"Sem token de conta", "application/json", ErrorResponse},
@@ -149,14 +162,19 @@ defmodule LiveQuizWeb.Api.V1.GamePlayController do
         {"Autenticado, mas não é o host desta partida", "application/json", ErrorResponse},
       not_found: {"Sala inexistente ou código inválido", "application/json", ErrorResponse},
       conflict:
-        {"Partida fora de andamento ou sem pergunta aberta", "application/json", ErrorResponse}
+        {"Partida fora de andamento, sem pergunta aberta ou posição desatualizada",
+         "application/json", ErrorResponse},
+      unprocessable_entity:
+        {"`expected_position` presente e inválida", "application/json", ErrorResponse}
     ]
 
-  def close_question(conn, %{"code" => code}) do
+  def close_question(conn, %{"code" => code} = params) do
     scope = conn.assigns.current_scope
 
-    with {:ok, %GameSession{} = session} <- Games.get_match_by_code(code),
-         {:ok, %GameSession{} = closed} <- Games.close_question(scope, session),
+    with {:ok, expected} <- optional_expected_position(params),
+         {:ok, %GameSession{} = session} <- Games.get_match_by_code(code),
+         {:ok, %GameSession{} = closed} <-
+           Games.close_question(scope, session, expected_position: expected),
          {:ok, state} <- Games.game_state(closed, scope) do
       render(conn, :state, state: state)
     end
@@ -252,11 +270,28 @@ defmodule LiveQuizWeb.Api.V1.GamePlayController do
     with {:ok, option_id} <- answer_option_id(params),
          {:ok, %GameSession{} = session} <- Games.get_match_by_code(code),
          {:ok, %Participant{} = participant} <- playing_participant(conn, session),
+         :ok <- spend_answer_budget(participant),
          {:ok, recorded} <-
-           Games.answer_question(participant, option_id, Presence.connected_count(session.id)) do
+           Games.answer_question(
+             participant,
+             option_id,
+             Presence.connected_participant_ids(session.id)
+           ) do
       conn
       |> put_status(:created)
       |> render(:answer, answer: recorded.answer, closed?: recorded.closed?)
+    end
+  end
+
+  # Keyed on the participation and never on the room: recording an answer takes
+  # the lock of the match, and one participant leaning on the button must not be
+  # able to make the room slow for the twenty people playing with them. The
+  # budget is spent after the participation is resolved, so it costs one lookup
+  # — which is what identifies whose budget it is (R05).
+  defp spend_answer_budget(%Participant{id: id}) do
+    case RateLimit.hit(:answer_by_participation, id) do
+      :ok -> :ok
+      {:error, retry_after} -> {:error, {:rate_limited, retry_after}}
     end
   end
 
@@ -294,7 +329,7 @@ defmodule LiveQuizWeb.Api.V1.GamePlayController do
 
   def state(conn, %{"code" => code}) do
     with {:ok, %GameSession{} = session} <- Games.get_match_by_code(code),
-         {:ok, state} <- as_viewer(conn, &Games.game_state(session, &1)) do
+         {:ok, state} <- Viewer.read(conn, &Games.game_state(session, &1)) do
       render(conn, :state, state: state)
     end
   end
@@ -333,25 +368,9 @@ defmodule LiveQuizWeb.Api.V1.GamePlayController do
   def results(conn, %{"code" => code, "position" => position}) do
     with {:ok, position} <- question_position(position),
          {:ok, %GameSession{} = session} <- Games.get_match_by_code(code),
-         {:ok, results} <- as_viewer(conn, &Games.question_results(session, position, &1)) do
+         {:ok, results} <- Viewer.read(conn, &Games.question_results(session, position, &1)) do
       render(conn, :results, results: results)
     end
-  end
-
-  # A request may carry an account and a participation at once, and reading a
-  # match is something either of them may be entitled to. Both are offered to
-  # the context, which is the only place that decides; a refusal that is not
-  # about identity — a question still open, say — ends the search at once, so
-  # the caller reads why instead of a blanket 403.
-  defp as_viewer(conn, read) do
-    [conn.assigns[:current_scope], conn.assigns[:current_participant]]
-    |> Enum.reject(&is_nil/1)
-    |> Enum.reduce_while({:error, :unauthorized}, fn viewer, refusal ->
-      case read.(viewer) do
-        {:error, :unauthorized} -> {:cont, refusal}
-        answer -> {:halt, answer}
-      end
-    end)
   end
 
   # Only a participation answers, and only its own match. A request with no
@@ -374,6 +393,19 @@ defmodule LiveQuizWeb.Api.V1.GamePlayController do
       {:ok, nil} -> {:ok, nil}
       {:ok, position} when is_integer(position) and position > 0 -> {:ok, position}
       _absent_or_invalid -> {:error, :invalid_expected_position}
+    end
+  end
+
+  # Advancing requires the position; closing accepts it. A client written before
+  # closing carried one keeps working and keeps the old meaning — close whatever
+  # is current — and one that sends it gets the command refused when the match
+  # has moved on.
+  defp optional_expected_position(params) do
+    case Map.fetch(params, "expected_position") do
+      :error -> {:ok, nil}
+      {:ok, nil} -> {:ok, nil}
+      {:ok, position} when is_integer(position) and position > 0 -> {:ok, position}
+      _invalid -> {:error, :invalid_expected_position}
     end
   end
 

@@ -22,6 +22,7 @@ defmodule LiveQuiz.Games.Participant do
   import Ecto.Changeset
 
   alias LiveQuiz.Accounts.User
+  alias LiveQuiz.Changesets
   alias LiveQuiz.Games.Answer
   alias LiveQuiz.Games.GameSession
 
@@ -91,7 +92,7 @@ defmodule LiveQuiz.Games.Participant do
   @spec validate_nickname(Ecto.Changeset.t()) :: Ecto.Changeset.t()
   def validate_nickname(changeset) do
     changeset
-    |> update_change(:nickname, &trim/1)
+    |> update_change(:nickname, &Changesets.trim/1)
     |> validate_required([:nickname])
     |> validate_length(:nickname, min: @nickname_min_length, max: @nickname_max_length)
     |> validate_format(:nickname, @nickname_regex,
@@ -198,7 +199,4 @@ defmodule LiveQuiz.Games.Participant do
         )
     end
   end
-
-  defp trim(value) when is_binary(value), do: String.trim(value)
-  defp trim(value), do: value
 end

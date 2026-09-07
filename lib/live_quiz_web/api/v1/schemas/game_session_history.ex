@@ -11,10 +11,28 @@ defmodule LiveQuizWeb.Api.V1.Schemas.GameSessionHistory do
       type: :object,
       properties: %{
         id: %Schema{type: :integer},
-        code: %Schema{type: :string, description: "Código da partida"},
-        quiz_id: %Schema{type: :integer},
+        public_id: %Schema{
+          type: :string,
+          format: :uuid,
+          description:
+            "Identificador durável da partida. Use este, e não o código, em links guardados"
+        },
+        code: %Schema{
+          type: :string,
+          description: "Código de entrada. Volta a circular depois que a sala termina"
+        },
+        quiz_id: %Schema{
+          type: :integer,
+          nullable: true,
+          description: "Nulo quando o quiz de origem foi excluído"
+        },
         quiz_title: %Schema{type: :string},
-        status: %Schema{type: :string, enum: ["finished", "cancelled"]},
+        status: %Schema{
+          type: :string,
+          enum: ["finished"],
+          description:
+            "O histórico lista apenas partidas encerradas; uma sala cancelada não entra"
+        },
         finished_at: %Schema{type: :string, format: :"date-time", nullable: true},
         participants_count: %Schema{type: :integer},
         winner_nickname: %Schema{type: :string, nullable: true},
@@ -22,6 +40,7 @@ defmodule LiveQuizWeb.Api.V1.Schemas.GameSessionHistory do
       },
       required: [
         :id,
+        :public_id,
         :code,
         :quiz_id,
         :quiz_title,
@@ -33,6 +52,7 @@ defmodule LiveQuizWeb.Api.V1.Schemas.GameSessionHistory do
       ],
       example: %{
         "id" => 12,
+        "public_id" => "9f1c2b7e-4a3d-4f5e-8c6b-2d1e0f9a8b7c",
         "code" => "K7P4Q2",
         "quiz_id" => 7,
         "quiz_title" => "Geografia",

@@ -56,6 +56,63 @@ defmodule LiveQuiz.Games.ScoringTest do
     end
   end
 
+  describe "correct_answer?/2" do
+    setup :scoring_context
+
+    test "reads the frozen key, not the score", %{answer: answer, question: question} do
+      assert Games.Scoring.correct_answer?(answer, question)
+    end
+
+    test "a correct answer worth zero points is still correct", %{
+      answer: answer,
+      question: question,
+      session: session
+    } do
+      at_deadline = %{answer | answered_at: session.current_question_ends_at}
+
+      assert Games.calculate_answer_score(at_deadline, question, session) == 0
+      assert Games.Scoring.correct_answer?(at_deadline, question)
+    end
+
+    test "an option of the question that is not the key is not correct", %{question: question} do
+      wrong = Enum.find(question.answer_options, &(not &1.is_correct))
+
+      refute Games.Scoring.correct_answer?(
+               %Answer{game_session_answer_option_id: wrong.id},
+               question
+             )
+    end
+
+    test "an option that does not belong to the question is not correct", %{question: question} do
+      refute Games.Scoring.correct_answer?(
+               %Answer{game_session_answer_option_id: -1},
+               question
+             )
+    end
+
+    test "a missing answer is not correct", %{question: question} do
+      refute Games.Scoring.correct_answer?(nil, question)
+    end
+  end
+
+  describe "score_closed_question/2 query count" do
+    test "consolidates a full room without a write per participant" do
+      %{session: session, question: question} = closed_context()
+      correct = Enum.find(question.answer_options, & &1.is_correct)
+      participants = for _ <- 1..25, do: participant_fixture(session)
+
+      for participant <- participants do
+        answer_fixture(participant, correct, %{answered_at: session.current_question_started_at})
+      end
+
+      queries = count_queries(fn -> assert {:ok, _} = Games.score_closed_question(session, 1) end)
+
+      assert queries <= 12,
+             "consolidar 25 participantes custou #{queries} consultas; " <>
+               "um write por participante voltaria a passar de 50"
+    end
+  end
+
   describe "score_closed_question/2" do
     test "consolidates correct, incorrect and unanswered metrics and publishes after commit" do
       %{session: session, question: question} = closed_context()
@@ -74,7 +131,7 @@ defmodule LiveQuiz.Games.ScoringTest do
       assert reload_participant(first).score == 1_000
       assert reload_participant(second).incorrect_answers == 1
       assert reload_participant(third).score == 0
-      assert_receive {:question_scored, %GameSession{}, ^ranking}
+      assert_receive {:ranking_updated, ^ranking}
     end
 
     test "uses the last persisted answer after a choice change" do

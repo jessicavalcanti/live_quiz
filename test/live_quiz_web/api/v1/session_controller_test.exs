@@ -3,6 +3,7 @@ defmodule LiveQuizWeb.Api.V1.SessionControllerTest do
 
   import LiveQuiz.AccountsFixtures
 
+  alias LiveQuiz.Accounts
   alias LiveQuiz.Accounts.Guardian
 
   @unauthorized %{"errors" => %{"detail" => "Não autenticado"}}
@@ -53,6 +54,47 @@ defmodule LiveQuizWeb.Api.V1.SessionControllerTest do
 
       assert %{"data" => %{"id" => id}} = json_response(me_conn, 200)
       assert id == user.id
+    end
+
+    test "reissues the refresh token and spends the one presented", %{conn: conn} do
+      user = user_fixture()
+      first = api_refresh_token(user)
+
+      conn = post(conn, ~p"/api/v1/session/refresh", %{"refresh_token" => first})
+
+      assert %{"data" => %{"refresh_token" => second}} = json_response(conn, 200)
+      refute second == first
+
+      # O token novo renova; o gasto não. Uma sessão é uma corrente de elos de
+      # uso único, e é isso que deixa um replay visível (R03).
+      assert %{"data" => %{"refresh_token" => _third}} =
+               build_conn()
+               |> post(~p"/api/v1/session/refresh", %{"refresh_token" => second})
+               |> json_response(200)
+
+      assert build_conn()
+             |> post(~p"/api/v1/session/refresh", %{"refresh_token" => first})
+             |> json_response(401) == @invalid_refresh
+    end
+
+    test "encerra a sessão quando um token já gasto é reapresentado", %{conn: conn} do
+      user = user_fixture()
+      first = api_refresh_token(user)
+
+      assert %{"data" => %{"refresh_token" => second}} =
+               conn
+               |> post(~p"/api/v1/session/refresh", %{"refresh_token" => first})
+               |> json_response(200)
+
+      assert build_conn()
+             |> post(~p"/api/v1/session/refresh", %{"refresh_token" => first})
+             |> json_response(401) == @invalid_refresh
+
+      # O elo que estava em uso cai junto: dois portadores gastaram o mesmo
+      # token, e não há como saber qual deles é a pessoa.
+      assert build_conn()
+             |> post(~p"/api/v1/session/refresh", %{"refresh_token" => second})
+             |> json_response(401) == @invalid_refresh
     end
 
     test "returns 401 with a generic message when the password is wrong", %{conn: conn} do
@@ -210,7 +252,7 @@ defmodule LiveQuizWeb.Api.V1.SessionControllerTest do
   describe "POST /api/v1/session/refresh" do
     test "returns 200 with a new access token", %{conn: conn} do
       user = user_fixture()
-      refresh_token = api_token(user, token_type: "refresh", ttl: {30, :days})
+      refresh_token = api_refresh_token(user)
 
       conn = post(conn, ~p"/api/v1/session/refresh", %{"refresh_token" => refresh_token})
 
@@ -280,6 +322,96 @@ defmodule LiveQuizWeb.Api.V1.SessionControllerTest do
       conn = delete(conn, ~p"/api/v1/session")
 
       assert json_response(conn, 401) == @unauthorized
+    end
+
+    test "revoga a sessão do refresh token enviado no corpo", %{conn: conn} do
+      user = user_fixture()
+      refresh_token = api_refresh_token(user)
+
+      conn =
+        conn
+        |> log_in_api_user(user)
+        |> delete(~p"/api/v1/session", %{"refresh_token" => refresh_token})
+
+      assert response(conn, 204) == ""
+
+      assert build_conn()
+             |> post(~p"/api/v1/session/refresh", %{"refresh_token" => refresh_token})
+             |> json_response(401) == @invalid_refresh
+    end
+
+    test "deixa as outras sessões da conta em pé", %{conn: conn} do
+      user = user_fixture()
+      laptop = api_refresh_token(user)
+      phone = api_refresh_token(user)
+
+      conn
+      |> log_in_api_user(user)
+      |> delete(~p"/api/v1/session", %{"refresh_token" => laptop})
+      |> response(204)
+
+      # Sair de um dispositivo é um dispositivo: a família é por login, não por
+      # conta (R03).
+      assert %{"data" => _tokens} =
+               build_conn()
+               |> post(~p"/api/v1/session/refresh", %{"refresh_token" => phone})
+               |> json_response(200)
+    end
+
+    test "responde 204 mesmo com um refresh token que o servidor não conhece", %{conn: conn} do
+      user = user_fixture()
+
+      # Quem descarta uma credencial não deve aprender pelo status se o servidor
+      # a conhecia.
+      conn =
+        conn
+        |> log_in_api_user(user)
+        |> delete(~p"/api/v1/session", %{"refresh_token" => "nunca-emitido"})
+
+      assert response(conn, 204) == ""
+    end
+  end
+
+  describe "redefinição de senha e sessões de API" do
+    test "derruba os tokens de acesso e as renovações já emitidos", %{conn: conn} do
+      user = user_fixture()
+      {:ok, tokens} = Guardian.build_tokens(user)
+
+      assert %{"data" => _me} =
+               build_conn()
+               |> put_req_header("authorization", "Bearer " <> tokens.access_token)
+               |> get(~p"/api/v1/me")
+               |> json_response(200)
+
+      {:ok, {_user, _expired}} =
+        Accounts.reset_user_password(
+          extract_user_token(fn url ->
+            Accounts.deliver_user_reset_password_instructions(user, url)
+          end),
+          %{password: "uma senha nova bem longa"}
+        )
+
+      # "Acho que alguém está com a minha senha" precisa ser uma ação com
+      # efeito imediato: o acesso já emitido para de valer, e a renovação
+      # também (R03).
+      assert build_conn()
+             |> put_req_header("authorization", "Bearer " <> tokens.access_token)
+             |> get(~p"/api/v1/me")
+             |> json_response(401) == @unauthorized
+
+      assert conn
+             |> post(~p"/api/v1/session/refresh", %{"refresh_token" => tokens.refresh_token})
+             |> json_response(401) == @invalid_refresh
+
+      # E a conta volta a funcionar ao entrar de novo: o que foi derrubado são
+      # as credenciais antigas, não a conta.
+      {:ok, fresh} = Guardian.build_tokens(Accounts.get_user(user.id))
+
+      assert %{"data" => _me} =
+               build_conn()
+               |> put_req_header("authorization", "Bearer " <> fresh.access_token)
+               |> get(~p"/api/v1/me")
+               |> json_response(200)
     end
   end
 

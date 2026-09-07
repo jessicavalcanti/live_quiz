@@ -127,7 +127,13 @@ defmodule LiveQuizWeb.ApiSpecTest do
     {"/api/v1/game-sessions/{code}/rejoin", "post"} => ["401", "404", "409", "410"],
     {"/api/v1/game-sessions/{code}/leave", "delete"} => ["401", "404"],
     {"/api/v1/game-sessions/{code}/next", "post"} => ["401", "403", "404", "409", "422"],
-    {"/api/v1/game-sessions/{code}/close-question", "post"} => ["401", "403", "404", "409"],
+    {"/api/v1/game-sessions/{code}/close-question", "post"} => [
+      "401",
+      "403",
+      "404",
+      "409",
+      "422"
+    ],
     {"/api/v1/game-sessions/{code}/finish", "post"} => ["401", "403", "404", "409"],
     {"/api/v1/game-sessions/{code}/answers", "post"} => ["401", "403", "404", "409", "422"],
     {"/api/v1/game-sessions/{code}/state", "get"} => ["401", "403", "404"],
@@ -150,8 +156,14 @@ defmodule LiveQuizWeb.ApiSpecTest do
 
       assert String.starts_with?(spec["openapi"], "3.")
       assert spec["info"]["title"] == "Live Quiz API"
-      assert spec["info"]["version"] == "1.0.0"
       assert is_map(spec["paths"])
+
+      # A versão vem da aplicação, e é isto que o teste afirma — não o número
+      # de hoje. Escrito à mão, ele reprovava a cada `chore(release): bump` e
+      # não dizia nada sobre a única coisa que importa aqui: que o documento
+      # publica a versão que está rodando.
+      assert spec["info"]["version"] == to_string(Application.spec(:live_quiz, :vsn))
+      assert spec["info"]["version"] =~ ~r/^\d+\.\d+\.\d+/
     end
 
     test "does not require authentication", %{conn: conn} do
@@ -271,7 +283,7 @@ defmodule LiveQuizWeb.ApiSpecTest do
 
       schemas = spec["components"]["schemas"]
 
-      assert map_size(schemas) == 41
+      assert map_size(schemas) == 43
 
       for {name, schema} <- schemas do
         assert is_binary(schema["description"]), "schema #{name} está sem description"
@@ -357,10 +369,15 @@ defmodule LiveQuizWeb.ApiSpecTest do
 
       scheme = spec["components"]["securitySchemes"]["participantAuth"]
 
-      assert scheme["type"] == "http"
-      assert scheme["scheme"] == "Participant"
+      # Um cabeçalho próprio, e não `Authorization` repetido: uma conta e uma
+      # participação chegam na mesma requisição, e campos repetidos de
+      # `Authorization` não são um contrato interoperável.
+      assert scheme["type"] == "apiKey"
+      assert scheme["in"] == "header"
+      assert scheme["name"] == "X-Participant-Token"
       assert scheme["description"] =~ "uma única vez"
-      assert spec["components"]["securitySchemes"]["bearerAuth"]
+      assert scheme["description"] =~ "Depreciado"
+      assert spec["components"]["securitySchemes"]["bearerAuth"]["scheme"] == "bearer"
     end
 
     test "requires the participation credential where only it identifies", %{conn: conn} do
@@ -521,8 +538,18 @@ defmodule LiveQuizWeb.ApiSpecTest do
                },
                "/api/v1/game-sessions/{code}/answers" => %{
                  "$ref" => "#/components/schemas/AnswerRequest"
+               },
+               "/api/v1/game-sessions/{code}/close-question" => %{
+                 "$ref" => "#/components/schemas/CloseRequest"
                }
              }
+
+      # Encerrar aceita o corpo, mas não o exige: um cliente escrito antes de
+      # ele existir continua encerrando a pergunta corrente.
+      close = spec["paths"]["/api/v1/game-sessions/{code}/close-question"]["post"]
+
+      refute close["requestBody"]["required"]
+      assert spec["paths"]["/api/v1/game-sessions/{code}/next"]["post"]["requestBody"]["required"]
     end
 
     test "describes the order of the calls of a whole match in the tag", %{conn: conn} do

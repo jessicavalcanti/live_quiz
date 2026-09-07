@@ -19,6 +19,16 @@ config :live_quiz, LiveQuizWeb.Endpoint,
     ]
   ]
 
+# Every cookie this application writes carries a credential: the session, the
+# participation of a guest, and the fourteen day remember-me. `force_ssl` above
+# already keeps a browser on https, but the flag is the one protection that does
+# not depend on the rest being right — the first request a browser makes before
+# it has seen the HSTS header still sends the cookies it already holds.
+#
+# It is on here and nowhere else: over http, which is what development and the
+# test suite serve, a secure cookie is one the browser never sends back.
+config :live_quiz, :secure_cookies, true
+
 # Configure Swoosh API Client
 config :swoosh, api_client: Swoosh.ApiClient.Req
 

@@ -380,7 +380,19 @@ defmodule LiveQuiz.QuizzesTest do
     test "refuses a quiz that belongs to somebody else", %{scope: scope, other_scope: other} do
       quiz = quiz_fixture(other)
 
-      assert_raise MatchError, fn -> Quizzes.update_quiz(scope, quiz, %{title: "Invadido"}) end
+      # O mesmo 404 que uma leitura daquele quiz daria: o dono é resolvido na
+      # consulta, não conferido no struct que chegou.
+      assert_raise Ecto.NoResultsError, fn ->
+        Quizzes.update_quiz(scope, quiz, %{title: "Invadido"})
+      end
+    end
+
+    test "refuses a quiz whose owner was changed in memory", %{scope: scope, other_scope: other} do
+      forged = %{quiz_fixture(other) | owner_id: scope.user.id}
+
+      assert_raise Ecto.NoResultsError, fn ->
+        Quizzes.update_quiz(scope, forged, %{title: "Invadido"})
+      end
     end
   end
 
@@ -409,7 +421,20 @@ defmodule LiveQuiz.QuizzesTest do
     test "refuses a quiz that belongs to somebody else", %{scope: scope, other_scope: other} do
       quiz = quiz_fixture(other)
 
-      assert_raise MatchError, fn -> Quizzes.delete_quiz(scope, quiz) end
+      assert_raise Ecto.NoResultsError, fn -> Quizzes.delete_quiz(scope, quiz) end
+    end
+
+    test "refuses a quiz whose owner was changed in memory", %{scope: scope, other_scope: other} do
+      forged = %{quiz_fixture(other) | owner_id: scope.user.id}
+
+      assert_raise Ecto.NoResultsError, fn -> Quizzes.delete_quiz(scope, forged) end
+    end
+
+    test "refuses a quiz that no longer exists", %{scope: scope} do
+      quiz = quiz_fixture(scope)
+      {:ok, _deleted} = Quizzes.delete_quiz(scope, quiz)
+
+      assert_raise Ecto.NoResultsError, fn -> Quizzes.delete_quiz(scope, quiz) end
     end
   end
 
@@ -718,38 +743,5 @@ defmodule LiveQuiz.QuizzesTest do
       from(o in LiveQuiz.Quizzes.AnswerOption, where: o.question_id in ^ids),
       :count
     )
-  end
-
-  # Counts only the queries issued by this test process, so a concurrent async
-  # test cannot inflate the number.
-  defp count_queries(fun) do
-    parent = self()
-    ref = make_ref()
-    handler_id = {__MODULE__, ref}
-
-    :telemetry.attach(
-      handler_id,
-      [:live_quiz, :repo, :query],
-      fn _event, _measurements, _metadata, _config ->
-        if self() == parent, do: send(parent, {ref, :query})
-      end,
-      nil
-    )
-
-    try do
-      fun.()
-    after
-      :telemetry.detach(handler_id)
-    end
-
-    drain(ref, 0)
-  end
-
-  defp drain(ref, count) do
-    receive do
-      {^ref, :query} -> drain(ref, count + 1)
-    after
-      0 -> count
-    end
   end
 end

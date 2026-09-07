@@ -202,10 +202,17 @@ defmodule LiveQuiz.AccountsTest do
   describe "sudo_mode?/2" do
     test "validates the authenticated_at time" do
       now = DateTime.utc_now()
+      window = Accounts.sudo_window_minutes()
 
       assert Accounts.sudo_mode?(%User{authenticated_at: DateTime.utc_now()})
-      assert Accounts.sudo_mode?(%User{authenticated_at: DateTime.add(now, -19, :minute)})
-      refute Accounts.sudo_mode?(%User{authenticated_at: DateTime.add(now, -21, :minute)})
+
+      assert Accounts.sudo_mode?(%User{
+               authenticated_at: DateTime.add(now, -(window - 1), :minute)
+             })
+
+      refute Accounts.sudo_mode?(%User{
+               authenticated_at: DateTime.add(now, -(window + 1), :minute)
+             })
 
       # minute override
       refute Accounts.sudo_mode?(
@@ -215,6 +222,22 @@ defmodule LiveQuiz.AccountsTest do
 
       # not authenticated
       refute Accounts.sudo_mode?(%User{})
+    end
+
+    test "a janela é uma só, e é a que o mount e os eventos usam" do
+      # Duas janelas eram uma validade que ninguém conseguia prever: a tela de
+      # configurações era montada sob dez minutos e seus eventos conferidos
+      # contra vinte, então uma aba podia ser recusada na entrada e ainda assim
+      # conseguir agir (R06).
+      assert Accounts.sudo_window_minutes() == 10
+
+      borderline = %User{
+        authenticated_at:
+          DateTime.add(DateTime.utc_now(), -(Accounts.sudo_window_minutes() - 1), :minute)
+      }
+
+      assert Accounts.sudo_mode?(borderline)
+      assert Accounts.sudo_mode?(borderline, -Accounts.sudo_window_minutes())
     end
   end
 
@@ -538,12 +561,19 @@ defmodule LiveQuiz.AccountsTest do
 
   describe "reset_user_password/2" do
     setup do
-      %{user: user_fixture()}
+      user = user_fixture()
+
+      token =
+        extract_user_token(fn url ->
+          Accounts.deliver_user_reset_password_instructions(user, url)
+        end)
+
+      %{user: user, token: token}
     end
 
-    test "validates password", %{user: user} do
+    test "validates password", %{token: token} do
       {:error, changeset} =
-        Accounts.reset_user_password(user, %{
+        Accounts.reset_user_password(token, %{
           password: "not valid",
           password_confirmation: "another"
         })
@@ -554,35 +584,79 @@ defmodule LiveQuiz.AccountsTest do
              } = errors_on(changeset)
     end
 
-    test "updates the password", %{user: user} do
+    test "updates the password", %{user: user, token: token} do
       {:ok, {updated_user, _}} =
-        Accounts.reset_user_password(user, %{password: "new valid password"})
+        Accounts.reset_user_password(token, %{password: "new valid password"})
 
       assert is_nil(updated_user.password)
       assert Accounts.get_user_by_email_and_password(user.email, "new valid password")
       refute Accounts.get_user_by_email_and_password(user.email, valid_user_password())
     end
 
-    test "expires the reset token after it is used", %{user: user} do
-      token =
-        extract_user_token(fn url ->
-          Accounts.deliver_user_reset_password_instructions(user, url)
-        end)
-
-      {:ok, {_user, _}} = Accounts.reset_user_password(user, %{password: "new valid password"})
+    test "expires the reset token after it is used", %{token: token} do
+      {:ok, {_user, _}} = Accounts.reset_user_password(token, %{password: "new valid password"})
 
       refute Accounts.get_user_by_reset_password_token(token)
     end
 
-    test "invalidates the active sessions", %{user: user} do
+    test "invalidates the active sessions", %{user: user, token: token} do
       session_token = Accounts.generate_user_session_token(user)
 
       {:ok, {_user, expired_tokens}} =
-        Accounts.reset_user_password(user, %{password: "new valid password"})
+        Accounts.reset_user_password(token, %{password: "new valid password"})
 
       assert session_token in Enum.map(expired_tokens, & &1.token)
       refute Accounts.get_user_by_session_token(session_token)
       refute Repo.get_by(UserToken, user_id: user.id)
+    end
+
+    test "refuses a token that another reset already consumed", %{user: user, token: token} do
+      {:ok, _} = Accounts.reset_user_password(token, %{password: "first valid password"})
+
+      assert {:error, :invalid_token} =
+               Accounts.reset_user_password(token, %{password: "second valid password"})
+
+      assert Accounts.get_user_by_email_and_password(user.email, "first valid password")
+      refute Accounts.get_user_by_email_and_password(user.email, "second valid password")
+    end
+
+    test "refuses a token that expired after the link was opened", %{user: user, token: token} do
+      assert Accounts.get_user_by_reset_password_token(token)
+
+      {1, nil} =
+        Repo.update_all(
+          from(t in UserToken, where: t.context == "reset_password"),
+          set: [inserted_at: ~N[2020-01-01 00:00:00]]
+        )
+
+      assert {:error, :invalid_token} =
+               Accounts.reset_user_password(token, %{password: "new valid password"})
+
+      assert Accounts.get_user_by_email_and_password(user.email, valid_user_password())
+    end
+
+    test "refuses a token whose user changed the email it was sent to", %{token: token} do
+      {1, nil} =
+        Repo.update_all(
+          from(t in UserToken, where: t.context == "reset_password"),
+          set: [sent_to: "someone-else@example.com"]
+        )
+
+      assert {:error, :invalid_token} =
+               Accounts.reset_user_password(token, %{password: "new valid password"})
+    end
+
+    test "refuses a malformed token" do
+      assert {:error, :invalid_token} =
+               Accounts.reset_user_password("not base64 url!", %{password: "new valid password"})
+    end
+
+    test "does not spend the token when the password is invalid", %{token: token} do
+      {:error, %Ecto.Changeset{}} = Accounts.reset_user_password(token, %{password: "short"})
+
+      assert Accounts.get_user_by_reset_password_token(token)
+
+      assert {:ok, _} = Accounts.reset_user_password(token, %{password: "new valid password"})
     end
   end
 

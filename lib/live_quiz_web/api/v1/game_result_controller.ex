@@ -9,12 +9,19 @@ defmodule LiveQuizWeb.Api.V1.GameResultController do
   use LiveQuizWeb, :controller
   use OpenApiSpex.ControllerSpecs
 
+  alias LiveQuiz.Accounts.Scope
   alias LiveQuiz.Games
+  alias LiveQuiz.Games.ResultFilters
+  alias LiveQuiz.Pagination
+  alias LiveQuiz.Quizzes
+  alias LiveQuiz.ResourceId
   alias LiveQuizWeb.Api.V1.Schemas.ErrorResponse
   alias LiveQuizWeb.Api.V1.Schemas.GameHistoryResponse
   alias LiveQuizWeb.Api.V1.Schemas.GameResultListResponse
   alias LiveQuizWeb.Api.V1.Schemas.GameResultResponse
+  alias LiveQuizWeb.Api.V1.Schemas.GameSessionResultsResponse
   alias LiveQuizWeb.Api.V1.Schemas.RankingResponse
+  alias LiveQuizWeb.Api.Viewer
 
   action_fallback LiveQuizWeb.Api.FallbackController
   tags ["Resultados"]
@@ -60,7 +67,7 @@ defmodule LiveQuizWeb.Api.V1.GameResultController do
 
   def ranking(conn, %{"code" => code}) do
     with {:ok, session} <- Games.get_match_by_code(code),
-         {:ok, ranking} <- Games.current_ranking(session, viewer(conn)) do
+         {:ok, ranking} <- Viewer.read(conn, &Games.current_ranking(session, &1)) do
       render(conn, :ranking, ranking: ranking)
     end
   end
@@ -68,18 +75,25 @@ defmodule LiveQuizWeb.Api.V1.GameResultController do
   @doc "Returns the complete immutable result to the host."
   operation :results,
     summary: "Consulta o resultado completo da partida",
-    description:
-      "Retorna a partida encerrada e todos os resultados. Operação restrita ao host autenticado; participantes devem usar o resultado individual.",
+    description: """
+    Retorna a partida encerrada e todos os resultados. Operação restrita ao host
+    autenticado; participantes devem usar o resultado individual.
+
+    O caminho aceita o `public_id` da partida ou o código de entrada. **Use o
+    `public_id` em links guardados**: o código é reutilizável depois que a sala
+    termina, então um endereço construído com ele passa a responder sobre outra
+    partida. O `public_id` vem no corpo desta resposta, em `data.session`.
+    """,
     security: [%{"bearerAuth" => []}],
     parameters: [code: @code],
     responses: [
-      ok: {"Resultado completo", "application/json", GameResultListResponse},
+      ok: {"Resultado completo", "application/json", GameSessionResultsResponse},
       unauthorized: {"Não autenticado", "application/json", ErrorResponse},
       not_found: {"Partida inexistente ou sem acesso", "application/json", ErrorResponse}
     ]
 
   def results(conn, %{"code" => code}) do
-    with {:ok, session} <- Games.get_match_by_code(code),
+    with {:ok, session} <- Games.get_match_by_reference(code),
          {:ok, session} <- Games.get_host_game_history(scope(conn), session.id) do
       render(conn, :results, session: session)
     end
@@ -88,7 +102,12 @@ defmodule LiveQuizWeb.Api.V1.GameResultController do
   @doc "Returns only the authenticated participant's immutable result."
   operation :my_result,
     summary: "Consulta o próprio resultado",
-    description: "Retorna somente o resultado do participante autenticado na partida encerrada.",
+    description: """
+    Retorna somente o resultado do participante autenticado na partida encerrada.
+
+    O caminho aceita o `public_id` da partida ou o código de entrada; guarde o
+    `public_id`, porque o código volta a circular quando a sala termina.
+    """,
     security: [%{"bearerAuth" => []}],
     parameters: [code: @code],
     responses: [
@@ -98,7 +117,7 @@ defmodule LiveQuizWeb.Api.V1.GameResultController do
     ]
 
   def my_result(conn, %{"code" => code}) do
-    with {:ok, session} <- Games.get_match_by_code(code),
+    with {:ok, session} <- Games.get_match_by_reference(code),
          {:ok, result} <- Games.get_my_game_result_for_session(scope(conn), session.id) do
       render(conn, :result, result: result)
     end
@@ -118,8 +137,8 @@ defmodule LiveQuizWeb.Api.V1.GameResultController do
     ]
 
   def my_history(conn, params) do
-    with {:ok, filters} <- filters(params),
-         {:ok, pagination} <- pagination(params) do
+    with {:ok, filters} <- ResultFilters.parse(params),
+         {:ok, pagination} <- Pagination.parse(params) do
       page = Games.list_game_results(scope(conn), filters, pagination)
       render(conn, :history, page: page)
     end
@@ -140,61 +159,39 @@ defmodule LiveQuizWeb.Api.V1.GameResultController do
     ]
 
   def quiz_history(conn, %{"quiz_id" => quiz_id} = params) do
-    with {:ok, quiz_id} <- positive_integer(quiz_id),
-         {:ok, filters} <- filters(params),
-         {:ok, pagination} <- pagination(params) do
-      page = Games.list_quiz_game_history(scope(conn), quiz_id, filters, pagination)
+    scope = scope(conn)
+
+    # The quiz is named in the *path*, so an id nobody could have is a resource
+    # that is not there rather than a filter the caller got wrong — the same
+    # rule `LiveQuiz.ResourceId` settles for every other path id.
+    with {:ok, quiz_id} <- path_quiz_id(quiz_id),
+         # And a quiz that does not exist, or belongs to somebody else, is a
+         # missing resource too — not a quiz with no matches. Both used to
+         # answer `200` with an empty page, which is the operation documenting a
+         # `404` it never returned and a client unable to tell "you have never
+         # played this" from "this is not yours" (R34).
+         :ok <- ensure_owned_quiz(scope, quiz_id),
+         {:ok, filters} <- ResultFilters.parse(params),
+         {:ok, pagination} <- Pagination.parse(params) do
+      page = Games.list_quiz_game_history(scope, quiz_id, filters, pagination)
       render(conn, :quiz_history, page: page)
     end
   end
 
-  defp viewer(conn), do: conn.assigns[:current_scope] || conn.assigns[:current_participant]
+  defp path_quiz_id(value) do
+    case ResourceId.cast(value) do
+      {:ok, quiz_id} -> {:ok, quiz_id}
+      :error -> {:error, :not_found}
+    end
+  end
+
+  defp ensure_owned_quiz(%Scope{} = scope, quiz_id) do
+    Quizzes.get_quiz!(scope, quiz_id)
+
+    :ok
+  rescue
+    Ecto.NoResultsError -> {:error, :not_found}
+  end
+
   defp scope(conn), do: conn.assigns.current_scope
-
-  defp pagination(params) do
-    with {:ok, page} <- optional_positive_integer(params["page"]),
-         {:ok, per_page} <- optional_positive_integer(params["per_page"]),
-         :ok <- valid_per_page(per_page) do
-      {:ok, %{page: page, per_page: per_page}}
-    end
-  end
-
-  defp valid_per_page(nil), do: :ok
-  defp valid_per_page(value) when value in 1..100, do: :ok
-  defp valid_per_page(_value), do: {:error, :invalid_filter}
-
-  defp filters(params) do
-    with {:ok, quiz_id} <- optional_positive_integer(params["quiz_id"]),
-         {:ok, from} <- optional_date(params["from"]),
-         {:ok, to} <- optional_date(params["to"]) do
-      {:ok, %{quiz_id: quiz_id, from: from, to: to}}
-    end
-  end
-
-  defp optional_positive_integer(nil), do: {:ok, nil}
-  defp optional_positive_integer(""), do: {:ok, nil}
-  defp optional_positive_integer(value), do: positive_integer(value)
-
-  defp positive_integer(value) when is_integer(value) and value > 0, do: {:ok, value}
-
-  defp positive_integer(value) when is_binary(value) do
-    case Integer.parse(value) do
-      {integer, ""} when integer > 0 -> {:ok, integer}
-      _ -> {:error, :invalid_filter}
-    end
-  end
-
-  defp positive_integer(_value), do: {:error, :invalid_filter}
-
-  defp optional_date(nil), do: {:ok, nil}
-  defp optional_date(""), do: {:ok, nil}
-
-  defp optional_date(value) when is_binary(value) do
-    case Date.from_iso8601(value) do
-      {:ok, date} -> {:ok, DateTime.new!(date, ~T[00:00:00], "Etc/UTC")}
-      _ -> {:error, :invalid_filter}
-    end
-  end
-
-  defp optional_date(_value), do: {:error, :invalid_filter}
 end

@@ -23,6 +23,8 @@ defmodule LiveQuiz.Games.GameResultTest do
       incorrect_answers: 0,
       unanswered_questions: 2,
       answered_questions: 1,
+      played_questions: 3,
+      total_questions: 3,
       total_response_time_ms: 1_200,
       average_response_time_ms: 1_200,
       final_position: 1,
@@ -57,6 +59,24 @@ defmodule LiveQuiz.Games.GameResultTest do
     refute changeset.valid?
     assert "can't be blank" in errors_on(changeset).game_session_id
     assert "can't be blank" in errors_on(changeset).score
+  end
+
+  test "refuses counts that do not add up", %{session: session, participant: participant} do
+    changeset =
+      GameResult.changeset(%GameResult{}, attrs(session, participant, %{played_questions: 5}))
+
+    refute changeset.valid?
+
+    assert "deve ser a soma das respondidas com as não respondidas" in errors_on(changeset).played_questions
+  end
+
+  test "refuses fewer questions than were played", %{session: session, participant: participant} do
+    changeset =
+      GameResult.changeset(%GameResult{}, attrs(session, participant, %{total_questions: 2}))
+
+    refute changeset.valid?
+
+    assert "não pode ser menor que as perguntas aplicadas" in errors_on(changeset).total_questions
   end
 
   test "rejects non-JSON question details", %{session: session, participant: participant} do

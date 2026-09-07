@@ -32,9 +32,11 @@ defmodule LiveQuizWeb.Api.V1.ParticipantController do
   alias LiveQuiz.Games.JoinCode
   alias LiveQuiz.Games.Participant
   alias LiveQuiz.Games.Presence
+  alias LiveQuizWeb.Api.ParticipantAuth
   alias LiveQuizWeb.Api.V1.Schemas.ErrorResponse
   alias LiveQuizWeb.Api.V1.Schemas.ParticipantListResponse
   alias LiveQuizWeb.Api.V1.Schemas.ParticipantResponse
+  alias LiveQuizWeb.Api.Viewer
 
   action_fallback LiveQuizWeb.Api.FallbackController
 
@@ -72,7 +74,8 @@ defmodule LiveQuizWeb.Api.V1.ParticipantController do
 
   def index(conn, %{"code" => code}) do
     with {:ok, %GameSession{} = session} <- Games.get_game_session_by_code(code),
-         {:ok, participants} <- list_participants(session, conn) do
+         {:ok, participants} <-
+           Viewer.read(conn, &Games.list_participants_with_presence(session, &1)) do
       render(conn, :index, participants: participants)
     end
   end
@@ -129,8 +132,15 @@ defmodule LiveQuizWeb.Api.V1.ParticipantController do
 
   def rejoin(conn, %{"code" => code}) do
     with {:ok, %Participant{}, token} <- participation(conn, code),
+         # Every credential the client presented, not just the one this room
+         # was resolved from. Exclusivity is a question about the *other*
+         # rooms a guest is holding, and answering it from a single token is
+         # answering it with the one identity that cannot conflict with
+         # itself (R27).
          {:ok, %Participant{} = participant} <-
-           Games.rejoin_game_session(token, known_tokens: [token]) do
+           Games.rejoin_game_session(token,
+             known_tokens: ParticipantAuth.presented_tokens(conn)
+           ) do
       render(conn, :show, participant: with_presence(participant))
     end
   end
@@ -164,14 +174,31 @@ defmodule LiveQuizWeb.Api.V1.ParticipantController do
   # found whether it is live or already over — which is what lets coming back to
   # a cancelled room be answered as an ending instead of as an unknown token.
   # The address still has to name that same room.
+  # The credential of *this* room, chosen among the ones presented. The plug
+  # resolves the first one that names any participation, which is the right
+  # answer for an endpoint about "you" and the wrong one here: a client holding
+  # two credentials would have the room picked by the order of its headers
+  # (R27).
   defp participation(conn, code) do
-    with {:ok, token} <- credential(conn),
-         {:ok, %GameSession{} = session} <- Games.get_session_by_participant_token(token),
-         true <- session.join_code == JoinCode.normalize(code) do
-      {:ok, conn.assigns.current_participant, token}
-    else
-      false -> {:error, :not_found}
-      {:error, _reason} = error -> error
+    with {:ok, _any} <- credential(conn) do
+      credential_for_room(conn, JoinCode.normalize(code))
+    end
+  end
+
+  defp credential_for_room(conn, code) do
+    conn
+    |> ParticipantAuth.presented_tokens()
+    |> Enum.find_value(fn token ->
+      with {:ok, %GameSession{join_code: ^code}} <- Games.get_session_by_participant_token(token),
+           {:ok, participant} <- Games.get_participation_by_token(token) do
+        {:ok, participant, token}
+      else
+        _another_room_or_invalid -> nil
+      end
+    end)
+    |> case do
+      nil -> {:error, :not_found}
+      found -> found
     end
   end
 
@@ -180,20 +207,6 @@ defmodule LiveQuizWeb.Api.V1.ParticipantController do
       token when is_binary(token) -> {:ok, token}
       nil -> {:error, :unauthenticated}
     end
-  end
-
-  # A request may carry an account and a participation at once, and the two are
-  # allowed to read the lobby for different reasons. Both are offered to the
-  # context, which is the only place that decides.
-  defp list_participants(%GameSession{} = session, conn) do
-    [conn.assigns[:current_scope], conn.assigns[:current_participant]]
-    |> Enum.reject(&is_nil/1)
-    |> Enum.reduce_while({:error, :unauthorized}, fn viewer, refusal ->
-      case Games.list_participants_with_presence(session, viewer) do
-        {:ok, participants} -> {:halt, {:ok, participants}}
-        {:error, :unauthorized} -> {:cont, refusal}
-      end
-    end)
   end
 
   # A REST client is never itself connected to a room — there is no socket to

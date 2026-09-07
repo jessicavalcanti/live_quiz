@@ -147,12 +147,20 @@ defmodule LiveQuiz.Games.QuestionTimerTest do
       :ok = Games.subscribe(session.id)
 
       assert QuestionTimer.fire_now(session.id) == :ok
-      await_stop(pid)
 
       current = reload(session)
       assert current.current_question_position == 2
       assert is_nil(current.current_question_closed_at)
       refute_receive {:question_closed, _nothing}, 100
+
+      # Ele não morre ao descobrir que ficou para trás: este processo é o timer
+      # da sala, e desistir aqui deixava a pergunta 2 sem prazo nenhum até o
+      # próximo boot. Ele passa a cronometrar a pergunta que a linha aponta.
+      assert Process.alive?(pid)
+      assert QuestionTimer.whereis(session.id) == pid
+      assert QuestionTimer.timing(session.id) == 2
+
+      :ok = QuestionTimer.stop(session.id)
     end
 
     test "a partida encerrada apaga o timer sem tocar em nada", %{
@@ -250,6 +258,16 @@ defmodule LiveQuiz.Games.QuestionTimerTest do
     test "é um no-op, para o processo nunca esperar o próprio desligamento" do
       %{session: session} = running_match(%{})
 
+      # A simulação precisa da chave livre. O registro e o supervisor de timers
+      # são globais da aplicação, então um timer que sobrou de outro teste a
+      # ocuparia — é a intermitência da #139, e o `assert` abaixo nomeia quem a
+      # segura em vez de reprovar com um `MatchError` sem contexto.
+      :ok = QuestionTimer.stop(session.id)
+
+      assert is_nil(QuestionTimer.whereis(session.id)),
+             "a chave do timer da partida #{session.id} está ocupada por " <>
+               inspect(QuestionTimer.whereis(session.id))
+
       {:ok, _owner} =
         Registry.register(
           LiveQuiz.Games.QuestionTimerRegistry,
@@ -297,7 +315,8 @@ defmodule LiveQuiz.Games.QuestionTimerTest do
       option = option_at(questions, 1, 1)
       pid = QuestionTimer.whereis(session.id)
 
-      assert {:ok, %{closed?: true}} = Games.answer_question(participant, option.id, 1)
+      assert {:ok, %{closed?: true}} =
+               Games.answer_question(participant, option.id, [participant.id])
 
       refute Process.alive?(pid)
       assert is_nil(QuestionTimer.whereis(session.id))
@@ -324,7 +343,7 @@ defmodule LiveQuiz.Games.QuestionTimerTest do
     test "expirar a sala desliga o timer", %{session: session} do
       pid = QuestionTimer.whereis(session.id)
 
-      assert {:ok, _expired} = Games.expire_game_session(session)
+      assert {:ok, _expired} = session |> overdue_host_absence() |> Games.expire_game_session()
 
       refute Process.alive?(pid)
       assert is_nil(QuestionTimer.whereis(session.id))
@@ -394,7 +413,7 @@ defmodule LiveQuiz.Games.QuestionTimerTest do
       assert [{:ok, %GameSession{}}, {:error, reason}] =
                in_parallel([:timer, :answer], fn
                  :timer -> Games.close_question_by_timeout(session.id)
-                 :answer -> Games.answer_question(participant, option.id, 1)
+                 :answer -> Games.answer_question(participant, option.id, [participant.id])
                end)
 
       # A resposta chegou depois do prazo, então o encerramento é do timer.
@@ -416,7 +435,7 @@ defmodule LiveQuiz.Games.QuestionTimerTest do
       assert [timer_result, {:ok, %{closed?: true}}] =
                in_parallel([:timer, :answer], fn
                  :timer -> Games.close_question_by_timeout(session.id)
-                 :answer -> Games.answer_question(participant, option.id, 1)
+                 :answer -> Games.answer_question(participant, option.id, [participant.id])
                end)
 
       # As duas ordens da mesma corrida são legítimas: o timer que chega com a

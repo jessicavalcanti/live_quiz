@@ -24,23 +24,30 @@ config :live_quiz, LiveQuizWeb.Endpoint,
   secret_key_base: "qYDwZYcRKTuPkH+vHHzYiVzKDqD/SsmyDKW+9gT3mfWtOVAwBOFM/+A+298LlXCY",
   server: false
 
-# Segredo dos JWTs da API na suíte de testes.
+# Secret for the API JWTs in the test suite.
 config :live_quiz, LiveQuiz.Accounts.Guardian,
   secret_key: "1fTLJh9jj4MBtLmE5jCO5ujxW7NT8DYsoplU0tivequcjlouqSKDMhmgE3Luw609"
 
-# O sweeper de expiracao nao roda sozinho na suite: os testes chamam
-# `ExpirationSweeper.sweep_now/0` quando querem uma varredura.
+# The expiration sweeper does not run on its own in the suite: a test that wants
+# a sweep calls `ExpirationSweeper.sweep_now/0`.
 config :live_quiz, LiveQuiz.Games.ExpirationSweeper, enabled: false
 
-# Os timers de pergunta nao se agendam sozinhos na suite nem varrem o banco na
-# subida: quem quer o prazo vencido chama `QuestionTimer.fire_now/1`, e quem
-# quer um prazo de verdade sobe um timer proprio com `enabled: true`.
+# Question timers neither schedule themselves in the suite nor sweep the database
+# on boot: a test that wants the deadline to have passed calls
+# `QuestionTimer.fire_now/1`, and one that wants a real deadline starts a timer of
+# its own with `enabled: true`.
 config :live_quiz, LiveQuiz.Games.QuestionTimer, enabled: false
 
-# A carencia do monitor da aplicacao fica longa de proposito: quem testa
-# temporizacao sobe um monitor proprio, com janela curta, e nenhuma espera
-# solta sobra de um teste para o outro.
-config :live_quiz, LiveQuiz.Games.HostMonitor, grace_period: 60_000
+# Nor does the reconciler run on its own: a test that wants a lost timer put
+# back calls `QuestionTimerReconciler.reconcile_now/0`.
+config :live_quiz, LiveQuiz.Games.QuestionTimerReconciler, enabled: false
+
+# The grace period of the application's monitor is long on purpose: a test that
+# cares about timing starts a monitor of its own with a short window, so no stray
+# wait leaks from one test into the next. The reconciliation of presence against
+# the database is off for the same reason — a test that wants that pass calls
+# `HostMonitor.reconcile_now/1`.
+config :live_quiz, LiveQuiz.Games.HostMonitor, grace_period: 60_000, enabled: false
 
 # In test we don't send emails
 config :live_quiz, LiveQuiz.Mailer, adapter: Swoosh.Adapters.Test
@@ -61,3 +68,14 @@ config :phoenix_live_view,
 # Sort query params output of verified routes for robust url comparisons
 config :phoenix,
   sort_verified_routes_query_params: true
+
+# Rate limiting is off by default in tests: a shared budget across async cases
+# would make one case fail because of another. The cases that exercise it turn
+# it on with `LiveQuiz.RateLimitCase`.
+config :live_quiz, LiveQuiz.RateLimit, enabled: false
+
+# E-mail: gravar a intenção e entregar acontecem na mesma chamada, para que um
+# teste que dispara um envio possa afirmar sobre ele sem correr atrás de um
+# processo. O carteiro existe, mas não drena sozinho.
+config :live_quiz, LiveQuiz.Mail, mode: :inline
+config :live_quiz, LiveQuiz.Mail.Courier, enabled: false

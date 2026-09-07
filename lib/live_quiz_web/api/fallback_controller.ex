@@ -24,6 +24,8 @@ defmodule LiveQuizWeb.Api.FallbackController do
 
   use Phoenix.Controller, formats: [:json]
 
+  require Logger
+
   alias LiveQuiz.Quizzes
   alias LiveQuizWeb.Api.ErrorJSON
 
@@ -51,6 +53,13 @@ defmodule LiveQuizWeb.Api.FallbackController do
 
   def call(conn, {:error, :invalid_filter}) do
     error(conn, :unprocessable_entity, "Filtros e paginação inválidos", "invalid_filter")
+  end
+
+  # A budget spent. `Retry-After` is part of the refusal rather than a courtesy:
+  # without it a client backs off by guessing, and guessing means retrying too
+  # soon (R05).
+  def call(conn, {:error, {:rate_limited, retry_after}}) do
+    LiveQuizWeb.RateLimit.refuse(conn, retry_after)
   end
 
   def call(conn, {:error, :invalid_credentials}) do
@@ -194,6 +203,18 @@ defmodule LiveQuizWeb.Api.FallbackController do
     conn
     |> put_status(:not_found)
     |> json(ErrorJSON.render("404.json", %{}))
+  end
+
+  # Every refusal the contexts can produce has a clause above; this is the net
+  # under that claim. Without it an atom nobody mapped leaves as a
+  # `FunctionClauseError`, which the client still reads as `500` but which says
+  # nothing in the log about which refusal went unmapped.
+  def call(conn, {:error, reason}) do
+    Logger.error("unmapped API refusal: #{inspect(reason)}")
+
+    conn
+    |> put_status(:internal_server_error)
+    |> json(ErrorJSON.render("500.json", %{}))
   end
 
   defp error(conn, status, detail) do

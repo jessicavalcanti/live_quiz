@@ -12,6 +12,12 @@ defmodule LiveQuiz.Application do
       LiveQuiz.Repo,
       {DNSCluster, query: Application.get_env(:live_quiz, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: LiveQuiz.PubSub},
+      # The budgets of the open endpoints. Early, and before the endpoint, so
+      # the first request of a boot is already counted (R05).
+      LiveQuiz.RateLimit,
+      # The outbox. Recording a message and sending it are separate so that a
+      # provider that is slow does not make the interface slow (R07).
+      LiveQuiz.Mail.Courier,
       # Who is connected to a room, the grace period of an absent host and the
       # sweep that closes the rooms whose deadline ran out. All three come
       # after the PubSub they use and before the endpoint, so a browser never
@@ -23,6 +29,11 @@ defmodule LiveQuiz.Application do
       # match (AD-40), found through a registry so a match never has two.
       {Registry, keys: :unique, name: LiveQuiz.Games.QuestionTimerRegistry},
       LiveQuiz.Games.QuestionTimerSupervisor,
+      # Timers are temporary on purpose — one that dies for a question that is
+      # over must not come back — so something has to notice the ones that died
+      # for a question that is not. The reconciler is that something, and it is
+      # why a lost timer costs a tick instead of a restart (R19).
+      LiveQuiz.Games.QuestionTimerReconciler,
       # Start to serve requests, typically the last entry
       LiveQuizWeb.Endpoint
     ]
@@ -38,10 +49,15 @@ defmodule LiveQuiz.Application do
   end
 
   # The questions whose deadline ran out while the application was down are
-  # settled before anything can connect, and the ones still running get a timer
-  # for what is left of their deadline — never for a full new duration (AD-39).
-  # It is switched off with the timers themselves, which is what keeps the test
-  # suite from sweeping a shared database on every boot.
+  # settled here, and the ones still running get a timer for what is left of
+  # their deadline — never for a full new duration (AD-39).
+  #
+  # This runs after the whole tree, endpoint included, so the server is already
+  # answering while it works. The reconciler above would settle the same matches
+  # on its next tick; doing it at boot is what keeps a question that ran out
+  # overnight from waiting for one. It is switched off with the timers
+  # themselves, which is what keeps the test suite from sweeping a shared
+  # database on every boot.
   defp recover_question_timers do
     if LiveQuiz.Games.QuestionTimer.enabled?() do
       LiveQuiz.Games.QuestionTimerSupervisor.recover()

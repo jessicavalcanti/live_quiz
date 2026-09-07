@@ -8,6 +8,7 @@ defmodule LiveQuiz.Games.ResultsTest do
   alias LiveQuiz.Games
   alias LiveQuiz.Games.GameResult
   alias LiveQuiz.Games.GameSession
+  alias LiveQuiz.Games.GameSessionQuestion
   alias LiveQuiz.Games.Participant
   alias LiveQuiz.Quizzes.Quiz
   alias LiveQuiz.Repo
@@ -16,7 +17,7 @@ defmodule LiveQuiz.Games.ResultsTest do
     host = user_fixture()
     participant_user = user_fixture()
     session = game_session_fixture(%{host: host, status: :in_progress})
-    [question] = snapshot_fixture(session, count: 1)
+    [question] = snapshot_fixture(session, count: 1, played: 1)
     participant = participant_fixture(session, %{user: participant_user})
     option = hd(question.answer_options)
     answer_fixture(participant, option)
@@ -28,7 +29,11 @@ defmodule LiveQuiz.Games.ResultsTest do
 
     assert {:ok, result} = Games.get_game_result(Scope.for_user(host), session.id, participant.id)
     assert result.quiz_title == session.quiz_title
-    assert result.question_results["1"]["question"] == question.question_text
+    assert result.question_results["1"]["question"] == question.text
+
+    # As alternativas congeladas vivem uma vez em game_session_answer_options,
+    # não replicadas dentro do resultado de cada participação.
+    refute Map.has_key?(result.question_results["1"], "options")
     assert result.question_results["1"]["answer"] == option.text
   end
 
@@ -89,6 +94,9 @@ defmodule LiveQuiz.Games.ResultsTest do
     started_at = ~U[2026-09-06 12:00:00.000000Z]
     ends_at = DateTime.add(started_at, session.question_duration_seconds, :second)
 
+    # The room's clock and the question's own, written together the way the
+    # transition that opens a question writes them. Scoring reads the
+    # question's, which is what keeps it right after the match moves on.
     Repo.update_all(from(s in GameSession, where: s.id == ^session.id),
       set: [
         current_question_position: 1,
@@ -96,6 +104,10 @@ defmodule LiveQuiz.Games.ResultsTest do
         current_question_ends_at: ends_at,
         current_question_closed_at: ends_at
       ]
+    )
+
+    Repo.update_all(from(q in GameSessionQuestion, where: q.id == ^question.id),
+      set: [started_at: started_at, ends_at: ends_at, closed_at: ends_at]
     )
 
     answer_fixture(answered, correct, %{

@@ -461,6 +461,10 @@ defmodule LiveQuizWeb.CoreComponents do
     """
   end
 
+  def translate_errors(errors, field) when is_list(errors) do
+    for {^field, {msg, opts}} <- errors, do: translate_error({msg, opts})
+  end
+
   @doc """
   Renders a table with generic styling.
 
@@ -625,7 +629,4 @@ defmodule LiveQuizWeb.CoreComponents do
   @doc """
   Translates the errors for a field from a keyword list of errors.
   """
-  def translate_errors(errors, field) when is_list(errors) do
-    for {^field, {msg, opts}} <- errors, do: translate_error({msg, opts})
-  end
 end

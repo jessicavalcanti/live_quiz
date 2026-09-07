@@ -3,7 +3,8 @@ defmodule LiveQuiz.Release do
   Tasks that run inside the assembled release, where Mix is not available.
 
   The demonstration container calls `migrate/0` and `seed/0` on boot instead of
-  `mix ecto.migrate` and `mix run priv/repo/seeds.exs`.
+  `mix ecto.migrate` and `mix run priv/repo/seeds.exs`. Nothing here may reach
+  for Mix, directly or through a script it evaluates.
   """
 
   @app :live_quiz
@@ -22,22 +23,36 @@ defmodule LiveQuiz.Release do
   end
 
   @doc """
-  Evaluates `priv/repo/seeds.exs` when it is shipped with the release.
+  Writes the demonstration data, when this environment asked for it.
 
-  Seeding must stay idempotent: running it twice cannot duplicate data.
-  It is a no-op when the file is absent.
+  It used to evaluate `priv/repo/seeds.exs`, and that script called `Mix.env/0`
+  — a build tool that an assembled release does not carry. The demo container
+  runs this on boot, so it raised before the server came up; and had Mix been
+  there, the script's `:dev` gate would have written nothing into a demo built
+  in `:prod`, leaving the documented account missing (R47).
+
+  The data now lives in `LiveQuiz.DemoSeed`, compiled like everything else, and
+  what decides whether it runs is `DEMO_SEED` read at boot. Answers `:disabled`
+  when the variable does not ask for it, which is the ordinary answer
+  everywhere that is not the demonstration: those accounts have published
+  passwords.
+
+  Idempotent: running it twice leaves the same data, never a duplicate.
   """
-  @spec seed() :: :ok
+  @spec seed() :: :ok | :disabled
   def seed do
     load_app()
 
-    with path when is_binary(path) <- seeds_path(),
-         [repo | _rest] <- repos() do
-      {:ok, _result, _apps} =
-        Ecto.Migrator.with_repo(repo, fn _repo -> Code.eval_file(path) end)
-    end
+    if LiveQuiz.DemoSeed.enabled?() do
+      [repo | _rest] = repos()
 
-    :ok
+      {:ok, result, _apps} =
+        Ecto.Migrator.with_repo(repo, fn _repo -> LiveQuiz.DemoSeed.run!() end)
+
+      result
+    else
+      :disabled
+    end
   end
 
   @doc "Rolls `repo` back down to `version`."
@@ -49,11 +64,6 @@ defmodule LiveQuiz.Release do
       Ecto.Migrator.with_repo(repo, &Ecto.Migrator.run(&1, :down, to: version))
 
     :ok
-  end
-
-  defp seeds_path do
-    path = Path.join([:code.priv_dir(@app), "repo", "seeds.exs"])
-    if File.exists?(path), do: path
   end
 
   defp repos do

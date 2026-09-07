@@ -42,6 +42,7 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
   alias LiveQuiz.Games.Presence
   alias LiveQuizWeb.Formatters
   alias LiveQuizWeb.GameOver
+  alias LiveQuizWeb.GameSessionLive.MatchAssigns
   alias LiveQuizWeb.QuestionResults
   alias LiveQuizWeb.Ranking
   alias LiveQuizWeb.ShareSession
@@ -135,56 +136,19 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
     end
   end
 
-  # The tally is only ever asked for once the question is done with: while it is
-  # open the context refuses it (AD-46), and the screen has no answer key to
-  # draw until the reveal. A refusal is read as "nothing to reveal yet" rather
-  # than as an error, because the very question this screen believed was closed
-  # may have been reopened by nobody but a race with the timer.
-  defp load_results(socket, %{question_state: :closed, question_number: position}) do
-    %{current_scope: scope, session: session} = socket.assigns
+  # Who this screen is watching as. It is the whole difference between the host
+  # and the player when it comes to reading the match, which is why everything
+  # else lives in `MatchAssigns`.
+  defp viewer(socket), do: socket.assigns.current_scope
 
-    case Games.question_results(session, position, scope) do
-      {:ok, results} -> assign(socket, :results, results)
-      {:error, _nothing_to_reveal} -> assign(socket, :results, nil)
-    end
-  end
+  defp load_results(socket, state), do: MatchAssigns.assign_results(socket, viewer(socket), state)
 
-  defp load_results(socket, _open_or_pending), do: assign(socket, :results, nil)
+  defp load_ranking(socket, state), do: MatchAssigns.assign_ranking(socket, viewer(socket), state)
 
-  defp load_ranking(socket, %{question_state: :closed}) do
-    %{current_scope: scope, session: session} = socket.assigns
+  defp load_final_ranking(socket, session),
+    do: MatchAssigns.assign_ranking(socket, viewer(socket), session)
 
-    case Games.current_ranking(session, scope) do
-      {:ok, ranking} -> assign(socket, :ranking, ranking)
-      {:error, :unauthorized} -> assign(socket, :ranking, nil)
-    end
-  end
-
-  defp load_ranking(socket, _state), do: assign(socket, :ranking, nil)
-
-  defp load_final_ranking(socket, %GameSession{status: :finished} = session) do
-    case Games.current_ranking(session, socket.assigns.current_scope) do
-      {:ok, ranking} -> assign(socket, :ranking, ranking)
-      {:error, :unauthorized} -> assign(socket, :ranking, nil)
-    end
-  end
-
-  defp load_final_ranking(socket, _session), do: assign(socket, :ranking, nil)
-
-  # What the match added up to, read only when the room is over: asking for it
-  # while it is running would cost a query per event for a number no screen of
-  # this phase shows before the ending.
-  defp load_summary(socket) do
-    %{current_scope: scope, session: session} = socket.assigns
-
-    if GameSession.active?(session) do
-      assign(socket, :summary, nil)
-    else
-      {:ok, summary} = Games.game_summary(session, scope)
-
-      assign(socket, :summary, summary)
-    end
-  end
+  defp load_summary(socket), do: MatchAssigns.assign_summary(socket, viewer(socket))
 
   @impl true
   def handle_event("start", _params, socket) do
@@ -204,8 +168,14 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
     end
   end
 
-  def handle_event("close_question", _params, socket) do
-    command(socket, &Games.close_question(&1, &2))
+  # The position travels with this click too. The lock serializes two commands
+  # but says nothing about which question each one meant: a retry aimed at
+  # question 1 that arrives after the host advanced used to close question 2
+  # (R25).
+  def handle_event("close_question", params, socket) do
+    expected = expected_position(params)
+
+    command(socket, &Games.close_question/3, expected_position: expected)
   end
 
   # The position travels with the click (AD-44): it is what the screen believed
@@ -215,7 +185,7 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
   def handle_event("advance_question", params, socket) do
     expected = expected_position(params)
 
-    command(socket, &Games.advance_question(&1, &2, expected))
+    command(socket, &Games.advance_question(&1, &2, expected, &3))
   end
 
   def handle_event("open_finish", _params, socket) do
@@ -229,7 +199,7 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
   def handle_event("confirm_finish", _params, socket) do
     socket
     |> assign(:show_finish_modal?, false)
-    |> command(&Games.finish_game_session(&1, &2))
+    |> command(&Games.finish_game_session/3)
   end
 
   def handle_event("open_cancel", _params, socket) do
@@ -243,13 +213,19 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
   def handle_event("confirm_cancel", _params, socket) do
     socket
     |> assign(:show_cancel_modal?, false)
-    |> command(&Games.cancel_game_session(&1, &2))
+    |> command(&Games.cancel_game_session/3)
   end
 
   # The clipboard write itself is the hook's job; the server only confirms it,
   # so the host projecting the screen sees that the click did something.
   def handle_event("copy_code", _params, socket) do
     {:noreply, put_flash(socket, :info, "Código copiado")}
+  end
+
+  # O hook só chega aqui quando a escrita na área de transferência falhou ou a
+  # API não existe. Ele já selecionou o texto; a tela diz o que fazer com ele.
+  def handle_event("copy_failed", _params, socket) do
+    {:noreply, put_flash(socket, :error, "Não foi possível copiar. O texto está selecionado.")}
   end
 
   def handle_event("copy_link", _params, socket) do
@@ -259,13 +235,19 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
   # Every command of the match is the same gesture: a screen that lost the
   # access commands nothing, the context is what judges the click, and what
   # comes back is read again instead of being patched into the assigns.
-  defp command(socket, run) do
+  # `access_lost?` is what this tab believes; the lease the context checks is
+  # what the database holds. Believing the assign alone let a tab command a room
+  # another device had taken over, for as long as the revocation event had not
+  # been processed — or forever, if it arrived out of order (R22). The command
+  # carries the lease so the refusal comes from the row.
+  defp command(socket, run, opts \\ []) do
     if socket.assigns.access_lost? do
       {:noreply, socket}
     else
-      %{current_scope: scope, session: session} = socket.assigns
+      %{current_scope: scope, session: session, connection_id: connection_id} = socket.assigns
+      opts = Keyword.put(opts, :connection_id, connection_id)
 
-      case run.(scope, session) do
+      case run.(scope, session, opts) do
         {:ok, %GameSession{status: :in_progress} = running} ->
           {:noreply, socket |> assign(:session, running) |> load_match()}
 
@@ -277,6 +259,11 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
         # nothing to say about it beyond redrawing itself.
         {:error, :stale} ->
           {:noreply, load_match(socket)}
+
+        # The row says another connection holds the room. Whatever this tab
+        # believed, it is not the host any more.
+        {:error, :access_lost} ->
+          {:noreply, assign(socket, :access_lost?, true)}
 
         {:error, reason} ->
           {:noreply, put_flash(socket, :error, refusal(reason))}
@@ -295,6 +282,15 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
   end
 
   defp expected_position(_params), do: nil
+
+  defp still_in_control?(socket) do
+    %{session: session, connection_id: connection_id} = socket.assigns
+
+    case Games.get_live_game_session(session.id) do
+      nil -> false
+      current -> Games.host_connection_current?(current, connection_id)
+    end
+  end
 
   # `Phoenix.Presence` publishes its raw diff on the same topic. The nudge this
   # screen reacts to is `{:presence_changed, id}`, announced by
@@ -331,7 +327,11 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
     if connection_id == socket.assigns.connection_id do
       {:noreply, socket}
     else
-      {:noreply, assign(socket, :access_lost?, true)}
+      # Not "somebody else claimed it", but "does the room still say I hold it".
+      # Two claims in quick succession can reach this tab in either order, and
+      # believing the last message alone let the winner conclude it had lost
+      # (R22). The row is the only thing that knows.
+      {:noreply, assign(socket, :access_lost?, not still_in_control?(socket))}
     end
   end
 
@@ -349,8 +349,6 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
 
   def handle_info({:ranking_updated, ranking}, socket),
     do: {:noreply, assign(socket, :ranking, ranking)}
-
-  def handle_info({:question_scored, _session, _ranking}, socket), do: {:noreply, socket}
 
   # The one event of the match that carries no struct (AD-45): with twenty-five
   # people answering, all this screen does with it is redraw a number.
@@ -475,6 +473,7 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
                 phx-hook=".Countdown"
                 phx-update="ignore"
                 data-ends-at={DateTime.to_iso8601(@game_state.ends_at)}
+                data-server-now={DateTime.to_iso8601(@game_state.server_now)}
                 role="timer"
                 aria-live="polite"
                 aria-atomic="true"
@@ -484,7 +483,7 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
               </span>
             </p>
 
-            <p :if={closed?(@game_state)} id="question-closed-badge" class="text-lg text-warning">
+            <p :if={revealed?(@game_state)} id="question-closed-badge" class="text-lg text-warning">
               Pergunta encerrada
             </p>
           </header>
@@ -493,7 +492,7 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
             {@game_state.question_text}
           </p>
 
-          <ul :if={not closed?(@game_state)} id="question-options" class="mt-6 space-y-3">
+          <ul :if={not revealed?(@game_state)} id="question-options" class="mt-6 space-y-3">
             <li
               :for={option <- @game_state.options}
               id={"option-#{option.id}"}
@@ -506,7 +505,7 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
                 aria-hidden="true"
                 class="flex size-9 shrink-0 items-center justify-center rounded-lg bg-base-200 font-bold"
               >
-                {option_letter(option.position)}
+                {Formatters.option_letter(option.position)}
               </span>
 
               <span class="min-w-0 break-words">{option.text}</span>
@@ -522,7 +521,7 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
 
           <QuestionResults.question_results :if={@results} results={@results} viewer={:host} />
 
-          <Ranking.ranking :if={closed?(@game_state) and @ranking} ranking={@ranking} />
+          <Ranking.ranking :if={revealed?(@game_state) and @ranking} ranking={@ranking} />
 
           <p
             id="answers-count"
@@ -593,19 +592,30 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
             mounted() { this.start() },
             updated() { this.start() },
             destroyed() { this.stop() },
+            // O prazo e o instante em que o servidor o mediu chegam juntos, e a
+            // conta é entre os dois: o relógio de quem lê nunca entra. Um
+            // navegador com a hora minutos fora mostrava um tempo diferente do
+            // que o servidor aceita (R40).
             start() {
               this.stop()
-              this.endsAt = Date.parse(this.el.dataset.endsAt)
+
+              const endsAt = Date.parse(this.el.dataset.endsAt)
+              const serverNow = Date.parse(this.el.dataset.serverNow)
+
+              this.remainingAtSync = endsAt - serverNow
+              // Monotônico: imune a acertos de hora e a suspensão da aba, que é
+              // o que faz um contador voltar no tempo quando a máquina dorme.
+              this.syncedAt = performance.now()
+
               this.draw()
-              // Recomputed against the clock on every tick, never decremented:
-              // a background tab has its interval throttled and would drift.
               this.timer = setInterval(() => this.draw(), 200)
             },
             stop() {
               if (this.timer) { clearInterval(this.timer); this.timer = null }
             },
             draw() {
-              const left = Math.max(0, Math.ceil((this.endsAt - Date.now()) / 1000))
+              const elapsed = performance.now() - this.syncedAt
+              const left = Math.max(0, Math.ceil((this.remainingAtSync - elapsed) / 1000))
               const seconds = String(left % 60).padStart(2, "0")
               this.el.textContent = `${Math.floor(left / 60)}:${seconds}`
               if (left === 0) { this.stop() }
@@ -778,7 +788,9 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
   # make the screen jump in the middle of the presentation.
   defp pending?(%{question_state: state}), do: state == :pending
 
-  defp closed?(%{question_state: state}), do: state == :closed
+  # The server said the question is over and the answer key is on screen. Not
+  # the same question the player screen asks — see `answers_closed?/1` there.
+  defp revealed?(%{question_state: state}), do: state == :closed
 
   defp counting?(%{question_state: :open, ends_at: %DateTime{}}), do: true
   defp counting?(%{}), do: false
@@ -799,7 +811,6 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
 
   # A question always freezes exactly four alternatives, so the letters the host
   # reads out loud never run past the beginning of the alphabet.
-  defp option_letter(position), do: <<?A + position - 1>>
 
   defp hint(%{access_lost?: true}), do: nil
 

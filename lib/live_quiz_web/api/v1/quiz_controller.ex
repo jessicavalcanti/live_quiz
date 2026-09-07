@@ -12,6 +12,7 @@ defmodule LiveQuizWeb.Api.V1.QuizController do
   use OpenApiSpex.ControllerSpecs
 
   alias LiveQuiz.Accounts.Scope
+  alias LiveQuiz.Pagination
   alias LiveQuiz.Quizzes
   alias LiveQuiz.Quizzes.Quiz
   alias LiveQuizWeb.Api.V1.Schemas.ErrorResponse
@@ -36,13 +37,14 @@ defmodule LiveQuizWeb.Api.V1.QuizController do
   @doc """
   Lists the quizzes of the authenticated user.
 
-  Accepts `page`, `per_page` and `search`; invalid or missing values fall back
-  to the defaults of the context instead of failing.
+  Accepts `page`, `per_page` and `search`. A missing value is the default; a
+  present one that is not a page anybody could have is refused with `422`,
+  the same as every other listing of the API.
   """
   operation :index,
     summary: "Lista os quizzes do usuário autenticado",
     description:
-      "Página os quizzes do dono do token. Valores inválidos de paginação caem no padrão em vez de falhar.",
+      "Página os quizzes do dono do token. Paginação ausente cai no padrão; paginação inválida é recusada com 422.",
     parameters: [
       page: [in: :query, type: :integer, description: "Página (padrão 1)", example: 1],
       per_page: [
@@ -55,13 +57,16 @@ defmodule LiveQuizWeb.Api.V1.QuizController do
     ],
     responses: [
       ok: {"Página de quizzes", "application/json", QuizListResponse},
-      unauthorized: {"Não autenticado", "application/json", ErrorResponse}
+      unauthorized: {"Não autenticado", "application/json", ErrorResponse},
+      unprocessable_entity: {"Paginação inválida", "application/json", ErrorResponse}
     ]
 
   def index(conn, params) do
-    page = Quizzes.list_quizzes(scope(conn), list_opts(params))
+    with {:ok, pagination} <- Pagination.parse(params) do
+      page = Quizzes.list_quizzes(scope(conn), list_opts(pagination, params))
 
-    render(conn, :index, page: page)
+      render(conn, :index, page: page)
+    end
   end
 
   @doc """
@@ -127,8 +132,12 @@ defmodule LiveQuizWeb.Api.V1.QuizController do
     scope = scope(conn)
 
     with {:ok, %Quiz{} = quiz} <- fetch_quiz_with_questions(scope, id),
-         {:ok, %Quiz{} = quiz} <- Quizzes.update_quiz(scope, quiz, quiz_params(params)) do
-      render(conn, :show, quiz: quiz)
+         {:ok, %Quiz{}} <- Quizzes.update_quiz(scope, quiz, quiz_params(params)),
+         # Read back for the render rather than serializing what the write
+         # returned: the context answers with the quiz it wrote, and this
+         # representation carries the questions alongside it.
+         {:ok, %Quiz{} = updated} <- fetch_quiz_with_questions(scope, id) do
+      render(conn, :show, quiz: updated)
     end
   end
 
@@ -158,12 +167,8 @@ defmodule LiveQuizWeb.Api.V1.QuizController do
 
   defp scope(conn), do: conn.assigns.current_scope
 
-  defp list_opts(params) do
-    [
-      page: Map.get(params, "page"),
-      per_page: Map.get(params, "per_page"),
-      search: Map.get(params, "search")
-    ]
+  defp list_opts(%{page: page, per_page: per_page}, params) do
+    [page: page, per_page: per_page, search: Map.get(params, "search")]
   end
 
   # Anything outside the `quiz` envelope is ignored, and a body without it is

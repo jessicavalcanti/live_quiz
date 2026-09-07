@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [main, develop]
 
+permissions:
+  contents: read
+
 env:
   MIX_ENV: test
 
@@ -13,15 +16,32 @@ jobs:
   guard-main:
     name: Proteção da main
     runs-on: ubuntu-latest
+    permissions: {}
     if: github.event_name == 'pull_request' && github.base_ref == 'main'
     steps:
-      - name: Somente a develop pode ser mergeada na main
+      # A origem precisa ser a develop do próprio repositório: um fork pode ter
+      # uma branch homônima e não é origem de integração autorizada.
+      #
+      # Nome de branch e nome de repositório do PR são entrada não confiável e
+      # nunca são interpolados no script: o Actions substituiria a expressão
+      # antes do shell existir, e aspas não protegem texto já inserido. Os
+      # valores chegam por variável de ambiente e são expandidos entre aspas.
+      # https://docs.github.com/en/actions/concepts/security/script-injections
+      - name: Somente a develop deste repositório pode ser mergeada na main
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          BASE_REPO: ${{ github.repository }}
         run: |
-          if [ "${{ github.head_ref }}" != "develop" ]; then
-            echo "::error::PRs para a main só são aceitos a partir da branch develop (recebido: ${{ github.head_ref }})."
+          if [ "$HEAD_REPO" != "$BASE_REPO" ]; then
+            echo "::error::PRs para a main só são aceitos a partir deste repositório (recebido: $HEAD_REPO)."
             exit 1
           fi
-          echo "Origem válida: develop -> main"
+          if [ "$HEAD_REF" != "develop" ]; then
+            echo "::error::PRs para a main só são aceitos a partir da branch develop (recebido: $HEAD_REF)."
+            exit 1
+          fi
+          echo "Origem válida: $BASE_REPO develop -> main"
 
   quality:
     name: Lint e cobertura
@@ -69,3 +89,128 @@ jobs:
 
       - name: Testes com cobertura mínima de 80%
         run: mix coveralls
+
+  release-smoke:
+    name: Smoke da release empacotada
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: ecto://postgres:postgres@localhost/live_quiz_smoke
+      SECRET_KEY_BASE: smoke-secret-key-base-com-no-minimo-64-caracteres-para-o-teste-de-empacotamento
+      GUARDIAN_SECRET_KEY: smoke-guardian-secret-key-apenas-para-o-teste-de-empacotamento
+      PHX_HOST: localhost
+      # A smoke não manda e-mail, mas a release agora exige um contrato de SMTP
+      # completo fora do modo de demonstração (R07). Declarar o modo aqui é o
+      # que uma demonstração faz; a etapa "Sem credenciais de SMTP" abaixo é o
+      # que prova que qualquer outra coisa precisa das credenciais.
+      SMTP_MODE: demo
+      # A smoke fala direto com a release, sem proxy nenhum na frente. A release
+      # exige que o deploy diga qual é a topologia, e esta é a resposta dela.
+      TRUSTED_PROXY_HOPS: "0"
+    services:
+      db:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: live_quiz_smoke
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s
+          --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      # Lint and tests run under MIX_ENV=test, which compiles neither the
+      # production assets nor the release. An application they approve can still
+      # reach for Mix at runtime, ship without its bundle, or fail its first
+      # migration — none of which the suite can see (R48). This builds the very
+      # artifact the demo runs and makes it serve a request.
+      - name: Imagem final
+        run: docker build --target app -t live-quiz-smoke .
+
+      # `DEMO_SEED` is set here on purpose: the seed reaching for Mix is what
+      # R47 was, and the only way to notice it is to run it in a release.
+      - name: Migrações e seed da demonstração
+        run: |
+          docker run --rm --network host \
+            -e DATABASE_URL -e SECRET_KEY_BASE -e GUARDIAN_SECRET_KEY -e SMTP_MODE -e TRUSTED_PROXY_HOPS \
+            -e DEMO_SEED=true \
+            live-quiz-smoke bin/live_quiz eval 'LiveQuiz.Release.migrate(); LiveQuiz.Release.seed()'
+
+      # Um provedor real sem credenciais tem de ser um erro de partida, e não um
+      # relay aberto por engano: a configuração antiga não pedia nada e mandava
+      # e-mail para localhost sem TLS (R07).
+      - name: Sem credenciais de SMTP, a release não sobe
+        run: |
+          if docker run --rm --network host \
+            -e DATABASE_URL -e SECRET_KEY_BASE -e GUARDIAN_SECRET_KEY -e PHX_HOST \
+            -e TRUSTED_PROXY_HOPS \
+            live-quiz-smoke bin/live_quiz eval 'IO.puts("subiu")' > smtp.log 2>&1; then
+            echo "::error::A release subiu sem SMTP_HOST, SMTP_USERNAME e SMTP_PASSWORD"
+            cat smtp.log
+            exit 1
+          fi
+
+          grep -q "SMTP_HOST" smtp.log || {
+            echo "::error::A release falhou por outro motivo que não a configuração de SMTP"
+            cat smtp.log
+            exit 1
+          }
+
+      - name: A aplicação sobe e responde
+        run: |
+          docker run -d --name smoke --network host \
+            -e DATABASE_URL -e SECRET_KEY_BASE -e GUARDIAN_SECRET_KEY -e PHX_HOST \
+            -e SMTP_MODE -e TRUSTED_PROXY_HOPS \
+            live-quiz-smoke
+
+          for attempt in $(seq 1 60); do
+            if curl -fsS http://localhost:4000/ >/dev/null; then
+              echo "A aplicação respondeu na tentativa $attempt"
+              exit 0
+            fi
+            sleep 2
+          done
+
+          echo "::error::A release não respondeu em 120s"
+          docker logs smoke
+          exit 1
+
+      # O bundle de produção tem de estar dentro da imagem: um asset ausente é
+      # exatamente o que `MIX_ENV=test` não enxerga.
+      - name: O bundle de produção foi servido
+        run: |
+          curl -fsS http://localhost:4000/ > page.html
+
+          for asset in "/assets/js/app" "/assets/css/app"; do
+            grep -q "$asset" page.html || {
+              echo "::error::A página não referencia $asset — o bundle de produção não está na imagem"
+              docker logs smoke
+              exit 1
+            }
+          done
+
+      - name: Encerra o contêiner
+        if: always()
+        run: docker rm -f smoke || true
+
+  audit:
+    name: Auditoria de advisories
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: erlef/setup-beam@v1
+        id: beam
+        with:
+          elixir-version: "1.20"
+          otp-version: "29"
+
+      - name: Dependências
+        run: mix deps.get --check-locked
+
+      # Verifica advisories de segurança e pacotes aposentados das dependências
+      # travadas no mix.lock. É diferente de `mix hex.outdated`, que só compara
+      # versões: aqui a build reprova apenas quando há vulnerabilidade publicada.
+      - name: Advisories das dependências (mix hex.audit)
+        run: mix hex.audit

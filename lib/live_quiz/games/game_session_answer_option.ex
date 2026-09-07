@@ -15,6 +15,7 @@ defmodule LiveQuiz.Games.GameSessionAnswerOption do
 
   import Ecto.Changeset
 
+  alias LiveQuiz.Changesets
   alias LiveQuiz.Games.GameSessionQuestion
   alias LiveQuiz.Quizzes.AnswerOption
 
@@ -48,7 +49,7 @@ defmodule LiveQuiz.Games.GameSessionAnswerOption do
   def changeset(answer_option, attrs) do
     answer_option
     |> cast(attrs, [:text, :position, :is_correct, :original_answer_option_id])
-    |> update_change(:text, &trim/1)
+    |> update_change(:text, &Changesets.trim/1)
     |> validate_required([:text, :position, :is_correct])
     |> validate_length(:text, min: 1, max: @text_max_length)
     |> validate_number(:position, greater_than: 0)
@@ -63,7 +64,4 @@ defmodule LiveQuiz.Games.GameSessionAnswerOption do
       message: "deve ser maior que zero"
     )
   end
-
-  defp trim(value) when is_binary(value), do: String.trim(value)
-  defp trim(value), do: value
 end

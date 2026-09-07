@@ -192,16 +192,35 @@ defmodule LiveQuizWeb.GameSessionLive.HostTest do
       assert lv |> element("#reserved-count") |> render() =~ "2"
     end
 
-    test "confirma a cópia do código", %{conn: conn, session: session} do
+    test "confirma a cópia do código quando o hook diz que ela funcionou", %{
+      conn: conn,
+      session: session
+    } do
       {:ok, lv, _html} = live(conn, ~p"/game-sessions/#{session.join_code}/host")
 
-      assert lv |> element("#copy-code") |> render_click() =~ "Código copiado"
+      # O evento vem do hook, depois de a escrita resolver — não do clique.
+      assert render_hook(lv, "copy_code", %{}) =~ "Código copiado"
     end
 
-    test "confirma a cópia do link", %{conn: conn, session: session} do
+    test "confirma a cópia do link quando o hook diz que ela funcionou", %{
+      conn: conn,
+      session: session
+    } do
       {:ok, lv, _html} = live(conn, ~p"/game-sessions/#{session.join_code}/host")
 
-      assert lv |> element("#copy-link") |> render_click() =~ "Link copiado"
+      assert render_hook(lv, "copy_link", %{}) =~ "Link copiado"
+    end
+
+    test "diz que não copiou quando a área de transferência recusa", %{
+      conn: conn,
+      session: session
+    } do
+      {:ok, lv, _html} = live(conn, ~p"/game-sessions/#{session.join_code}/host")
+
+      html = render_hook(lv, "copy_failed", %{})
+
+      assert html =~ "Não foi possível copiar"
+      refute html =~ "Código copiado"
     end
 
     test "mostra código, link e QR code de entrada", %{conn: conn, session: session} do
@@ -624,10 +643,10 @@ defmodule LiveQuizWeb.GameSessionLive.HostTest do
 
       assert answers_counter(lv) == "Respostas: 0 / 3"
 
-      {:ok, _answer} = Games.answer_question(one, option.id, 3)
+      {:ok, _answer} = Games.answer_question(one, option.id, [])
       assert answers_counter(lv) == "Respostas: 1 / 3"
 
-      {:ok, _answer} = Games.answer_question(two, option.id, 3)
+      {:ok, _answer} = Games.answer_question(two, option.id, [])
       assert answers_counter(lv) == "Respostas: 2 / 3"
     end
 
@@ -920,6 +939,24 @@ defmodule LiveQuizWeb.GameSessionLive.HostTest do
   describe "eventos da partida" do
     setup [:register_and_log_in_user, :running_room]
 
+    test "o contador recebe o prazo e o instante em que o servidor o mediu", %{
+      conn: conn,
+      scope: scope,
+      session: session
+    } do
+      {:ok, open} = Games.advance_question(scope, session, nil)
+      Games.QuestionTimer.stop(open.id)
+
+      {:ok, lv, _html} = live(conn, ~p"/game-sessions/#{session.join_code}/host")
+      html = render(lv)
+
+      # Os dois juntos são o que faz a conta ser entre instantes do servidor. Só
+      # o prazo obrigaria o navegador a usar o próprio relógio, que pode estar
+      # minutos fora do que o servidor aceita (R40).
+      assert html =~ "data-ends-at="
+      assert html =~ "data-server-now="
+    end
+
     test "o encerramento pelo prazo chega sozinho à tela", %{
       conn: conn,
       scope: scope,
@@ -951,8 +988,10 @@ defmodule LiveQuizWeb.GameSessionLive.HostTest do
 
       {:ok, lv, _html} = live(conn, ~p"/game-sessions/#{session.join_code}/host")
 
+      connected = Enum.map(participants, & &1.id)
+
       for participant <- participants do
-        {:ok, _answer} = Games.answer_question(participant, option.id, 3)
+        {:ok, _answer} = Games.answer_question(participant, option.id, connected)
       end
 
       assert has_element?(lv, "#question-closed-badge")
@@ -1012,7 +1051,7 @@ defmodule LiveQuizWeb.GameSessionLive.HostTest do
 
       {:ok, lv, _html} = live(conn, ~p"/game-sessions/#{session.join_code}/host")
 
-      {:ok, _expired} = Games.expire_game_session(session)
+      {:ok, _expired} = session |> overdue_host_absence() |> Games.expire_game_session()
 
       assert has_element?(lv, "#room-closed")
       assert render(lv) =~ "Sala encerrada por ausência"
@@ -1309,7 +1348,7 @@ defmodule LiveQuizWeb.GameSessionLive.HostTest do
     test "a expiração aparece com o motivo da ausência", %{conn: conn, session: session} do
       {:ok, lv, _html} = live(conn, ~p"/game-sessions/#{session.join_code}/host")
 
-      {:ok, _expired} = Games.expire_game_session(session)
+      {:ok, _expired} = session |> overdue_host_absence() |> Games.expire_game_session()
 
       assert has_element?(lv, "#room-closed")
       assert render(lv) =~ "Sala encerrada por ausência"
@@ -1396,14 +1435,34 @@ defmodule LiveQuizWeb.GameSessionLive.HostTest do
     test "a tela sem acesso recusa iniciar e cancelar", %{conn: conn, session: session} do
       session |> participant_fixture() |> connect_participant()
 
-      {:ok, lv, _html} = live(conn, ~p"/game-sessions/#{session.join_code}/host")
+      {:ok, first, _html} = live(conn, ~p"/game-sessions/#{session.join_code}/host")
+      {:ok, _second, _html} = live(conn, ~p"/game-sessions/#{session.join_code}/host")
 
-      send(lv.pid, {:host_access_transferred, Ecto.UUID.generate()})
-
-      render_click(lv, "start", %{})
-      render_click(lv, "confirm_cancel", %{})
+      render_click(first, "start", %{})
+      render_click(first, "confirm_cancel", %{})
 
       assert Repo.get!(GameSession, session.id).status == :waiting
+    end
+
+    test "um evento de transferência forjado não tira o controle de quem o tem", %{
+      conn: conn,
+      session: session
+    } do
+      session |> participant_fixture() |> connect_participant()
+
+      {:ok, lv, _html} = live(conn, ~p"/game-sessions/#{session.join_code}/host")
+
+      # O evento diz que outra conexão assumiu; a linha diz que esta aba ainda
+      # tem a sala. Só a linha decide — dois claims em sequência podem chegar em
+      # qualquer ordem, e acreditar na última mensagem fazia a vencedora concluir
+      # que tinha perdido.
+      send(lv.pid, {:host_access_transferred, Ecto.UUID.generate()})
+
+      refute has_element?(lv, "#access-lost-notice")
+
+      render_click(lv, "start", %{})
+
+      assert Repo.get!(GameSession, session.id).status == :in_progress
     end
   end
 

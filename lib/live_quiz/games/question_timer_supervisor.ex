@@ -18,11 +18,17 @@ defmodule LiveQuiz.Games.QuestionTimerSupervisor do
   One match failing does not take the sweep down: the failure is logged and the
   rest is still processed, exactly like the `LiveQuiz.Games.ExpirationSweeper`.
 
-  It runs from `LiveQuiz.Application.start/2`, right after the tree is up and
-  before anything can connect, so no subscriber hears the broadcasts it
-  produces. That is expected: the first `mount` reads the state from the
-  database anyway. In `:test` it does not run at all — a sweep of a shared
-  database at the start of every test would be a fine way to lose a suite.
+  It runs from `LiveQuiz.Application.start/2`, once the supervision tree is up.
+  The endpoint is the last child of that tree, so it is already accepting
+  connections by then — this used to claim the recovery happened before
+  anything could connect, and it does not (R43). The consequence is small and
+  worth naming: for the moment between the endpoint opening and this finishing,
+  a match may be read with its question open and no timer behind it. The first
+  `mount` reads the state from the database either way, and
+  `LiveQuiz.Games.QuestionTimerReconciler` closes that window on its next tick.
+
+  In `:test` it does not run at all — a sweep of a shared database at the start
+  of every test would be a fine way to lose a suite.
 
   ## Test seam
 
@@ -85,7 +91,7 @@ defmodule LiveQuiz.Games.QuestionTimerSupervisor do
   end
 
   defp settle(%GameSession{} = session, acc) do
-    if due?(session), do: close(session, acc), else: rearm(session, acc)
+    if GameSession.question_due?(session), do: close(session, acc), else: rearm(session, acc)
   rescue
     error -> log_failure("recovering match #{inspect(session.id)}", error, __STACKTRACE__, acc)
   end
@@ -102,12 +108,6 @@ defmodule LiveQuiz.Games.QuestionTimerSupervisor do
       {:ok, _pid} -> Map.update!(acc, :scheduled, &(&1 + 1))
       {:error, _reason} -> acc
     end
-  end
-
-  defp due?(%GameSession{current_question_ends_at: nil}), do: false
-
-  defp due?(%GameSession{current_question_ends_at: ends_at}) do
-    DateTime.compare(DateTime.utc_now(), ends_at) != :lt
   end
 
   defp log_failure(what, error, stacktrace, acc \\ @empty) do

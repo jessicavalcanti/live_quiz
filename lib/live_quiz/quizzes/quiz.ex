@@ -12,6 +12,7 @@ defmodule LiveQuiz.Quizzes.Quiz do
   import Ecto.Changeset
 
   alias LiveQuiz.Accounts.User
+  alias LiveQuiz.Changesets
   alias LiveQuiz.Games.GameResult
   alias LiveQuiz.Games.GameSession
   alias LiveQuiz.Quizzes.Question
@@ -46,13 +47,10 @@ defmodule LiveQuiz.Quizzes.Quiz do
   def changeset(quiz, attrs) do
     quiz
     |> cast(attrs, [:title, :description])
-    |> update_change(:title, &trim/1)
+    |> update_change(:title, &Changesets.trim/1)
     |> validate_required([:title])
     |> validate_length(:title, min: 3, max: 120)
     |> validate_length(:description, max: 500)
     |> assoc_constraint(:owner)
   end
-
-  defp trim(value) when is_binary(value), do: String.trim(value)
-  defp trim(value), do: value
 end

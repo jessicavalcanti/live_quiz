@@ -151,6 +151,8 @@ defmodule LiveQuizWeb.GameOverTest do
             correct_answers: 2,
             incorrect_answers: 1,
             unanswered_questions: 0,
+            played_questions: 3,
+            total_questions: 3,
             average_response_time_ms: 850
           }
         )

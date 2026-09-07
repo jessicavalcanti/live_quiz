@@ -74,7 +74,10 @@ defmodule LiveQuiz.Games.QuestionTimer do
   end
 
   @doc """
-  Stops the timer of the match, if it has one.
+  Stops the timer of the match, whatever it is timing.
+
+  For the transitions that end a room — finishing, cancelling, expiring — where
+  there is no question left to name and nothing should keep ticking.
 
   Always `:ok`: a match that never had a timer, or whose timer has already
   fired and terminated, is not an error — it is the ordinary state of a match
@@ -89,6 +92,49 @@ defmodule LiveQuiz.Games.QuestionTimer do
       nil -> :ok
       pid when pid == self() -> :ok
       pid -> terminate(pid)
+    end
+  end
+
+  @doc """
+  Stops the timer only if it is the one armed for `position`.
+
+  Closing a question schedules this, and by the time it runs the host may have
+  advanced and armed the next question. Naming only the room meant a `stop` for
+  question 1 could reach — and kill — the timer of question 2, leaving it with
+  no deadline at all until the next reconciliation (R18). The position is the
+  generation: a stop that names an older one is a no-op.
+  """
+  @spec stop(integer(), pos_integer() | nil) :: :ok
+  def stop(session_id, nil) when is_integer(session_id), do: stop(session_id)
+
+  def stop(session_id, position) when is_integer(session_id) and is_integer(position) do
+    case whereis(session_id) do
+      nil -> :ok
+      pid when pid == self() -> :ok
+      pid -> stop_if_timing(pid, position)
+    end
+  end
+
+  defp stop_if_timing(pid, position) do
+    if GenServer.call(pid, {:timing?, position}), do: terminate(pid), else: :ok
+  catch
+    # It went away between the lookup and the question; either way there is no
+    # timer left to stop.
+    :exit, _reason -> :ok
+  end
+
+  @doc """
+  The position the timer of the match is currently timing, or `nil`.
+
+  The seam the tests read the generation through: it is what `stop/2` compares
+  against, and what tells apart a timer that followed the match from one that
+  stayed behind.
+  """
+  @spec timing(integer()) :: pos_integer() | nil
+  def timing(session_id) when is_integer(session_id) do
+    case whereis(session_id) do
+      nil -> nil
+      pid -> GenServer.call(pid, :timing)
     end
   end
 
@@ -160,9 +206,23 @@ defmodule LiveQuiz.Games.QuestionTimer do
   end
 
   @impl GenServer
+  # A re-arm that names a position the timer has already moved past is a message
+  # that took too long: honouring it would point the timer at a question the
+  # match has left, and the next check would find the mismatch and give up —
+  # leaving the current question with no deadline (R18).
   def handle_call({:rearm, position, ends_at}, _from, state) do
-    {:reply, :ok, schedule(%{state | position: position, ends_at: ends_at})}
+    if stale_rearm?(state.position, position) do
+      {:reply, :ok, state}
+    else
+      {:reply, :ok, schedule(%{state | position: position, ends_at: ends_at})}
+    end
   end
+
+  def handle_call({:timing?, position}, _from, state) do
+    {:reply, state.position == position, state}
+  end
+
+  def handle_call(:timing, _from, state), do: {:reply, state.position, state}
 
   def handle_call(:check, _from, state) do
     case check(state) do
@@ -210,15 +270,43 @@ defmodule LiveQuiz.Games.QuestionTimer do
 
   defp act_on(state, %GameSession{} = session) do
     cond do
-      not GameSession.question_open?(session) -> :done
-      session.current_question_position != state.position -> :done
-      due?(session) -> close(state)
-      true -> {:wait, schedule(%{state | ends_at: session.current_question_ends_at})}
+      not GameSession.question_open?(session) ->
+        :done
+
+      # The match moved on while this message was in flight. Terminating here is
+      # what used to leave the current question with no timer at all: this
+      # process is the room's timer, so it follows the position the row holds
+      # rather than dying on the one it remembered (R18).
+      session.current_question_position != state.position ->
+        {:wait, follow(state, session)}
+
+      GameSession.question_due?(session) ->
+        close(state)
+
+      true ->
+        {:wait, schedule(%{state | ends_at: session.current_question_ends_at})}
     end
   end
 
+  defp follow(state, %GameSession{} = session) do
+    schedule(%{
+      state
+      | position: session.current_question_position,
+        ends_at: session.current_question_ends_at
+    })
+  end
+
+  defp stale_rearm?(current, presented) when is_integer(current) and is_integer(presented),
+    do: presented < current
+
+  # A timer with no position yet, or a re-arm that names none, has no
+  # generations to compare and is honoured.
+  defp stale_rearm?(_current, _presented), do: false
+
+  # The position travels with the closing, so a message that waited on the lock
+  # while the host advanced closes nothing instead of closing the new question.
   defp close(state) do
-    Games.close_question_by_timeout(state.session_id)
+    Games.close_question_by_timeout(state.session_id, state.position)
 
     :done
   rescue
@@ -229,12 +317,6 @@ defmodule LiveQuiz.Games.QuestionTimer do
       )
 
       :done
-  end
-
-  defp due?(%GameSession{current_question_ends_at: nil}), do: false
-
-  defp due?(%GameSession{current_question_ends_at: ends_at}) do
-    DateTime.compare(DateTime.utc_now(), ends_at) != :lt
   end
 
   # A deadline already in the past becomes `0` instead of a negative interval,

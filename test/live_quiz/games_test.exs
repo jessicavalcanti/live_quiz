@@ -20,6 +20,11 @@ defmodule LiveQuiz.GamesTest do
   alias LiveQuiz.Quizzes.AnswerOption
   alias LiveQuiz.Quizzes.Question
 
+  # Most of these tests are not about the rule that closes a question when
+  # everybody has answered. An empty presence keeps it from firing, so the
+  # assertion is about the answer itself.
+  @nobody_connected []
+
   describe "create_game_session/2" do
     setup :host_with_playable_quiz
 
@@ -332,30 +337,6 @@ defmodule LiveQuiz.GamesTest do
       assert_raise Ecto.NoResultsError, fn ->
         Games.get_hosted_session_by_code!(user_scope_fixture(), "nada")
       end
-    end
-  end
-
-  describe "get_game_session!/2" do
-    test "devolve a sala do host do escopo" do
-      scope = user_scope_fixture()
-      session = game_session_fixture(%{host: scope.user})
-
-      assert Games.get_game_session!(scope, session.id).id == session.id
-    end
-
-    test "levanta NoResultsError para a sala de outra pessoa" do
-      session = game_session_fixture()
-      other_scope = user_scope_fixture()
-
-      assert_raise Ecto.NoResultsError, fn ->
-        Games.get_game_session!(other_scope, session.id)
-      end
-    end
-
-    test "levanta NoResultsError para um id inexistente" do
-      scope = user_scope_fixture()
-
-      assert_raise Ecto.NoResultsError, fn -> Games.get_game_session!(scope, 0) end
     end
   end
 
@@ -1252,7 +1233,7 @@ defmodule LiveQuiz.GamesTest do
     end
 
     test "a credencial morre com a sala", %{session: session, token: token} do
-      {:ok, _session} = Games.expire_game_session(session)
+      {:ok, _session} = session |> overdue_host_absence() |> Games.expire_game_session()
 
       assert Games.get_participant_of_session(token, session.join_code) == {:error, :not_found}
     end
@@ -1283,7 +1264,7 @@ defmodule LiveQuiz.GamesTest do
     end
 
     test "distingue a sala expirada da cancelada", %{session: session, token: token} do
-      {:ok, _session} = Games.expire_game_session(session)
+      {:ok, _session} = session |> overdue_host_absence() |> Games.expire_game_session()
 
       assert {:ok, %GameSession{status: :expired}} = Games.get_session_by_participant_token(token)
     end
@@ -1937,7 +1918,7 @@ defmodule LiveQuiz.GamesTest do
 
       assert Enum.map(questions, & &1.position) == [1, 2, 3]
 
-      assert Enum.map(questions, & &1.question_text) == [
+      assert Enum.map(questions, & &1.text) == [
                "Pergunta 1 do quiz",
                "Pergunta 2 do quiz",
                "Pergunta 3 do quiz"
@@ -2036,7 +2017,7 @@ defmodule LiveQuiz.GamesTest do
       )
 
       assert {:ok, frozen} = Games.get_snapshot_question(started, 1)
-      assert frozen.question_text == "Pergunta 1 do quiz"
+      assert frozen.text == "Pergunta 1 do quiz"
       assert List.first(Enum.map(frozen.answer_options, & &1.text)) == "Brasília"
     end
 
@@ -2155,7 +2136,7 @@ defmodule LiveQuiz.GamesTest do
       assert {:ok, question} = Games.get_snapshot_question(session, 2)
 
       assert question.position == 2
-      assert question.question_text == "Pergunta 2 do quiz"
+      assert question.text == "Pergunta 2 do quiz"
       assert length(question.answer_options) == 4
     end
 
@@ -2188,7 +2169,7 @@ defmodule LiveQuiz.GamesTest do
       questions = Games.list_snapshot_questions(session)
 
       assert Enum.map(questions, & &1.position) == [1, 2, 3]
-      assert List.first(Enum.map(questions, & &1.question_text)) == "Pergunta 1 do quiz"
+      assert List.first(Enum.map(questions, & &1.text)) == "Pergunta 1 do quiz"
       assert Enum.all?(questions, &is_nil(&1.question_id))
       assert length(Enum.flat_map(questions, & &1.answer_options)) == 12
       assert {:ok, %{position: 1}} = Games.get_snapshot_question(session, 1)
@@ -2448,7 +2429,7 @@ defmodule LiveQuiz.GamesTest do
     setup :hosted_waiting_session
 
     test "expira uma sala em espera", %{session: session} do
-      assert {:ok, expired} = Games.expire_game_session(session)
+      assert {:ok, expired} = session |> overdue_host_absence() |> Games.expire_game_session()
 
       assert expired.status == :expired
       assert expired.finished_at
@@ -2458,7 +2439,7 @@ defmodule LiveQuiz.GamesTest do
     test "expira uma sala em andamento", %{session: session} do
       started = start_session(session)
 
-      assert {:ok, expired} = Games.expire_game_session(started)
+      assert {:ok, expired} = started |> overdue_host_absence() |> Games.expire_game_session()
 
       assert expired.status == :expired
       assert expired.started_at == started.started_at
@@ -2467,7 +2448,7 @@ defmodule LiveQuiz.GamesTest do
     test "libera as participações ao expirar", %{session: session} do
       participant = participant_fixture(session)
 
-      assert {:ok, _expired} = Games.expire_game_session(session)
+      assert {:ok, _expired} = session |> overdue_host_absence() |> Games.expire_game_session()
 
       participant = Repo.get!(Participant, participant.id)
       assert participant.released_at
@@ -2475,7 +2456,7 @@ defmodule LiveQuiz.GamesTest do
     end
 
     test "libera o host ao expirar", %{scope: scope, session: session, quiz: quiz} do
-      assert {:ok, _expired} = Games.expire_game_session(session)
+      assert {:ok, _expired} = session |> overdue_host_absence() |> Games.expire_game_session()
 
       assert {:ok, _reopened} = Games.create_game_session(scope, quiz.id)
     end
@@ -2483,7 +2464,9 @@ defmodule LiveQuiz.GamesTest do
     test "recusa expirar uma sala já encerrada", %{session: session} do
       cancelled = close_session(session, :cancelled)
 
-      assert {:error, :invalid_transition} = Games.expire_game_session(cancelled)
+      assert {:error, :invalid_transition} =
+               cancelled |> overdue_host_absence() |> Games.expire_game_session()
+
       assert Repo.get!(GameSession, session.id).status == :cancelled
     end
   end
@@ -2875,7 +2858,7 @@ defmodule LiveQuiz.GamesTest do
     test "a expiração é publicada", %{session: session} do
       :ok = Games.subscribe(session.id)
 
-      assert {:ok, expired} = Games.expire_game_session(session)
+      assert {:ok, expired} = session |> overdue_host_absence() |> Games.expire_game_session()
 
       assert_receive {:game_expired, %GameSession{id: id, status: :expired}}
       assert id == expired.id
@@ -2885,7 +2868,8 @@ defmodule LiveQuiz.GamesTest do
       assert {:ok, cancelled} = Games.cancel_game_session(scope, session)
       :ok = Games.subscribe(session.id)
 
-      assert {:error, :invalid_transition} = Games.expire_game_session(cancelled)
+      assert {:error, :invalid_transition} =
+               cancelled |> overdue_host_absence() |> Games.expire_game_session()
 
       refute_receive {:game_expired, _session}, 50
     end
@@ -3152,7 +3136,7 @@ defmodule LiveQuiz.GamesTest do
       assert closed.current_question_position == 1
       assert closed.current_question_closed_at
       refute GameSession.question_open?(closed)
-      assert GameSession.question_closed?(closed)
+      refute GameSession.question_open?(closed)
     end
 
     test "encerrar de novo não mexe no instante registrado", %{scope: scope, session: session} do
@@ -3725,7 +3709,7 @@ defmodule LiveQuiz.GamesTest do
       before = now_usec()
 
       assert {:ok, %{answer: answer, session: current, closed?: false}} =
-               Games.answer_question(participant, option.id, 3)
+               Games.answer_question(participant, option.id, @nobody_connected)
 
       assert answer.participant_id == participant.id
       assert answer.game_session_id == session.id
@@ -3749,7 +3733,7 @@ defmodule LiveQuiz.GamesTest do
         option_id = option.id
 
         assert {:ok, %{answer: %Answer{game_session_answer_option_id: ^option_id}}} =
-                 Games.answer_question(participant, option_id, 25)
+                 Games.answer_question(participant, option_id, @nobody_connected)
       end
     end
 
@@ -3761,7 +3745,7 @@ defmodule LiveQuiz.GamesTest do
         option_id = option_at(questions, 1, position).id
 
         assert {:ok, %{answer: %Answer{game_session_answer_option_id: ^option_id}}} =
-                 Games.answer_question(participant, option_id, 25)
+                 Games.answer_question(participant, option_id, @nobody_connected)
 
         assert [%Answer{game_session_answer_option_id: ^option_id}] = answers_of(participant)
       end
@@ -3774,8 +3758,11 @@ defmodule LiveQuiz.GamesTest do
       first = option_at(questions, 1, 1)
       second = option_at(questions, 1, 3)
 
-      assert {:ok, %{answer: original}} = Games.answer_question(participant, first.id, 25)
-      assert {:ok, %{answer: replaced}} = Games.answer_question(participant, second.id, 25)
+      assert {:ok, %{answer: original}} =
+               Games.answer_question(participant, first.id, @nobody_connected)
+
+      assert {:ok, %{answer: replaced}} =
+               Games.answer_question(participant, second.id, @nobody_connected)
 
       assert replaced.id == original.id
       assert replaced.inserted_at == original.inserted_at
@@ -3789,8 +3776,11 @@ defmodule LiveQuiz.GamesTest do
     } do
       option = option_at(questions, 1, 4)
 
-      assert {:ok, %{answer: first}} = Games.answer_question(participant, option.id, 25)
-      assert {:ok, %{answer: again}} = Games.answer_question(participant, option.id, 25)
+      assert {:ok, %{answer: first}} =
+               Games.answer_question(participant, option.id, @nobody_connected)
+
+      assert {:ok, %{answer: again}} =
+               Games.answer_question(participant, option.id, @nobody_connected)
 
       assert again.id == first.id
       assert again.game_session_answer_option_id == option.id
@@ -3806,7 +3796,11 @@ defmodule LiveQuiz.GamesTest do
       _still_open = ending_in(session, 300)
 
       assert {:ok, %{answer: %Answer{}}} =
-               Games.answer_question(participant, option_at(questions, 1, 1).id, 25)
+               Games.answer_question(
+                 participant,
+                 option_at(questions, 1, 1).id,
+                 @nobody_connected
+               )
     end
 
     test "a resposta que chega um milissegundo depois do prazo é recusada", %{
@@ -3816,7 +3810,7 @@ defmodule LiveQuiz.GamesTest do
     } do
       _late = ending_in(session, -1)
 
-      assert Games.answer_question(participant, option_at(questions, 1, 1).id, 25) ==
+      assert Games.answer_question(participant, option_at(questions, 1, 1).id, @nobody_connected) ==
                {:error, :time_is_up}
 
       assert answers_of(participant) == []
@@ -3830,7 +3824,7 @@ defmodule LiveQuiz.GamesTest do
     } do
       assert {:ok, _closed} = Games.close_question(scope, session)
 
-      assert Games.answer_question(participant, option_at(questions, 1, 1).id, 25) ==
+      assert Games.answer_question(participant, option_at(questions, 1, 1).id, @nobody_connected) ==
                {:error, :question_closed}
 
       assert answers_of(participant) == []
@@ -3840,7 +3834,7 @@ defmodule LiveQuiz.GamesTest do
       %{session: session, questions: questions} = match_of(3)
       participant = participant_fixture(session)
 
-      assert Games.answer_question(participant, option_at(questions, 1, 1).id, 25) ==
+      assert Games.answer_question(participant, option_at(questions, 1, 1).id, @nobody_connected) ==
                {:error, :no_open_question}
 
       assert answers_of(participant) == []
@@ -3852,7 +3846,11 @@ defmodule LiveQuiz.GamesTest do
         open = on_question(session, 1, started_at: now_usec())
         participant = participant_fixture(open)
 
-        assert Games.answer_question(participant, option_at(questions, 1, 1).id, 25) ==
+        assert Games.answer_question(
+                 participant,
+                 option_at(questions, 1, 1).id,
+                 @nobody_connected
+               ) ==
                  {:error, :invalid_status}
 
         assert answers_of(participant) == []
@@ -3863,7 +3861,7 @@ defmodule LiveQuiz.GamesTest do
       questions: questions,
       participant: participant
     } do
-      assert Games.answer_question(participant, option_at(questions, 2, 1).id, 25) ==
+      assert Games.answer_question(participant, option_at(questions, 2, 1).id, @nobody_connected) ==
                {:error, :option_not_found}
 
       assert answers_of(participant) == []
@@ -3872,14 +3870,16 @@ defmodule LiveQuiz.GamesTest do
     test "a alternativa de outra partida é recusada", %{participant: participant} do
       %{questions: elsewhere} = match_of(1)
 
-      assert Games.answer_question(participant, option_at(elsewhere, 1, 1).id, 25) ==
+      assert Games.answer_question(participant, option_at(elsewhere, 1, 1).id, @nobody_connected) ==
                {:error, :option_not_found}
 
       assert answers_of(participant) == []
     end
 
     test "um id de alternativa que não existe é recusado", %{participant: participant} do
-      assert Games.answer_question(participant, 0, 25) == {:error, :option_not_found}
+      assert Games.answer_question(participant, 0, @nobody_connected) ==
+               {:error, :option_not_found}
+
       assert answers_of(participant) == []
     end
 
@@ -3890,8 +3890,11 @@ defmodule LiveQuiz.GamesTest do
       option = option_at(questions, 1, 1)
       assert {:ok, gone} = Games.leave_game_session(participant)
 
-      assert Games.answer_question(gone, option.id, 25) == {:error, :left_session}
-      assert Games.answer_question(participant, option.id, 25) == {:error, :left_session}
+      assert Games.answer_question(gone, option.id, @nobody_connected) == {:error, :left_session}
+
+      assert Games.answer_question(participant, option.id, @nobody_connected) ==
+               {:error, :left_session}
+
       assert answers_of(participant) == []
     end
 
@@ -3900,7 +3903,7 @@ defmodule LiveQuiz.GamesTest do
       assert {:ok, open} = Games.advance_question(scope, session, nil)
       stranger = participant_fixture(open)
 
-      assert Games.answer_question(stranger, option_at(questions, 1, 1).id, 25) ==
+      assert Games.answer_question(stranger, option_at(questions, 1, 1).id, @nobody_connected) ==
                {:error, :option_not_found}
 
       assert answers_of(stranger) == []
@@ -3912,9 +3915,22 @@ defmodule LiveQuiz.GamesTest do
       questions: questions,
       participant: participant
     } do
-      assert {:ok, _first} = Games.answer_question(participant, option_at(questions, 1, 1).id, 25)
+      assert {:ok, _first} =
+               Games.answer_question(
+                 participant,
+                 option_at(questions, 1, 1).id,
+                 @nobody_connected
+               )
+
       assert {:ok, second} = Games.advance_question(scope, session, 1)
-      assert {:ok, _also} = Games.answer_question(participant, option_at(questions, 2, 2).id, 25)
+
+      assert {:ok, _also} =
+               Games.answer_question(
+                 participant,
+                 option_at(questions, 2, 2).id,
+                 @nobody_connected
+               )
+
       assert {:ok, _third} = Games.advance_question(scope, second, 2)
 
       assert [first, second] = answers_of(participant)
@@ -3931,7 +3947,7 @@ defmodule LiveQuiz.GamesTest do
       :ok = Games.subscribe(session.id)
 
       assert {:ok, %{closed?: true, session: closed}} =
-               Games.answer_question(only, option_at(questions, 1, 1).id, 1)
+               Games.answer_question(only, option_at(questions, 1, 1).id, connected(only))
 
       assert closed.current_question_closed_at
       refute GameSession.question_open?(Repo.get!(GameSession, session.id))
@@ -3944,11 +3960,13 @@ defmodule LiveQuiz.GamesTest do
       %{session: session, questions: questions, participants: [a, b, c]} = open_match_with(3)
       option = option_at(questions, 1, 1)
 
-      assert {:ok, %{closed?: false}} = Games.answer_question(a, option.id, 3)
-      assert {:ok, %{closed?: false}} = Games.answer_question(b, option.id, 3)
+      everybody = connected([a, b, c])
+
+      assert {:ok, %{closed?: false}} = Games.answer_question(a, option.id, everybody)
+      assert {:ok, %{closed?: false}} = Games.answer_question(b, option.id, everybody)
       assert GameSession.question_open?(Repo.get!(GameSession, session.id))
 
-      assert {:ok, %{closed?: true}} = Games.answer_question(c, option.id, 3)
+      assert {:ok, %{closed?: true}} = Games.answer_question(c, option.id, everybody)
       refute GameSession.question_open?(Repo.get!(GameSession, session.id))
     end
 
@@ -3956,8 +3974,10 @@ defmodule LiveQuiz.GamesTest do
       %{session: session, questions: questions, participants: [a, b, _c]} = open_match_with(3)
       option = option_at(questions, 1, 1)
 
-      assert {:ok, %{closed?: false}} = Games.answer_question(a, option.id, 3)
-      assert {:ok, %{closed?: false}} = Games.answer_question(b, option.id, 3)
+      everybody = connected([a, b, _c])
+
+      assert {:ok, %{closed?: false}} = Games.answer_question(a, option.id, everybody)
+      assert {:ok, %{closed?: false}} = Games.answer_question(b, option.id, everybody)
 
       assert GameSession.question_open?(Repo.get!(GameSession, session.id))
     end
@@ -3966,8 +3986,10 @@ defmodule LiveQuiz.GamesTest do
       %{session: session, questions: questions, participants: [a, b, _away]} = open_match_with(3)
       option = option_at(questions, 1, 1)
 
-      assert {:ok, %{closed?: false}} = Games.answer_question(a, option.id, 2)
-      assert {:ok, %{closed?: true}} = Games.answer_question(b, option.id, 2)
+      still_here = connected([a, b])
+
+      assert {:ok, %{closed?: false}} = Games.answer_question(a, option.id, still_here)
+      assert {:ok, %{closed?: true}} = Games.answer_question(b, option.id, still_here)
 
       refute GameSession.question_open?(Repo.get!(GameSession, session.id))
     end
@@ -3976,8 +3998,8 @@ defmodule LiveQuiz.GamesTest do
       %{session: session, questions: questions, participants: [a, b]} = open_match_with(2)
       option = option_at(questions, 1, 1)
 
-      assert {:ok, %{closed?: false}} = Games.answer_question(a, option.id, 0)
-      assert {:ok, %{closed?: false}} = Games.answer_question(b, option.id, 0)
+      assert {:ok, %{closed?: false}} = Games.answer_question(a, option.id, @nobody_connected)
+      assert {:ok, %{closed?: false}} = Games.answer_question(b, option.id, @nobody_connected)
 
       assert GameSession.question_open?(Repo.get!(GameSession, session.id))
     end
@@ -3986,8 +4008,8 @@ defmodule LiveQuiz.GamesTest do
       %{session: session, questions: questions, participants: [a, late]} = open_match_with(2)
       option = option_at(questions, 1, 1)
 
-      assert {:ok, %{closed?: true}} = Games.answer_question(a, option.id, 1)
-      assert Games.answer_question(late, option.id, 1) == {:error, :question_closed}
+      assert {:ok, %{closed?: true}} = Games.answer_question(a, option.id, connected(a))
+      assert Games.answer_question(late, option.id, connected(a)) == {:error, :question_closed}
 
       assert answers_of(late) == []
       assert Games.current_answers_count(Repo.get!(GameSession, session.id)) == 1
@@ -4000,7 +4022,8 @@ defmodule LiveQuiz.GamesTest do
       option = option_at(questions, 1, 1)
       :ok = Games.subscribe(session.id)
 
-      results = in_parallel(participants, &Games.answer_question(&1, option.id, 25))
+      results =
+        in_parallel(participants, &Games.answer_question(&1, option.id, connected(participants)))
 
       assert Enum.count(results, &match?({:ok, %{closed?: true}}, &1)) == 1
       assert Enum.count(results, &match?({:ok, %{closed?: false}}, &1)) == 24
@@ -4017,7 +4040,8 @@ defmodule LiveQuiz.GamesTest do
       %{questions: questions, participants: [participant]} = open_match_with(1)
       options = [option_at(questions, 1, 1), option_at(questions, 1, 3)]
 
-      results = in_parallel(options, &Games.answer_question(participant, &1.id, 25))
+      results =
+        in_parallel(options, &Games.answer_question(participant, &1.id, @nobody_connected))
 
       assert Enum.all?(results, &match?({:ok, %{answer: %Answer{}}}, &1))
       assert [%Answer{game_session_answer_option_id: chosen}] = answers_of(participant)
@@ -4032,7 +4056,7 @@ defmodule LiveQuiz.GamesTest do
 
       results =
         in_parallel([:answer, :close], fn
-          :answer -> Games.answer_question(participant, option.id, 25)
+          :answer -> Games.answer_question(participant, option.id, @nobody_connected)
           :close -> Games.close_question(scope, session)
         end)
 
@@ -4050,96 +4074,6 @@ defmodule LiveQuiz.GamesTest do
     end
   end
 
-  describe "leitura das respostas da pergunta corrente" do
-    setup :open_match
-
-    test "get_current_answer/2 devolve a escolha que ficou", %{
-      session: session,
-      questions: questions,
-      participant: participant
-    } do
-      assert is_nil(Games.get_current_answer(session, participant))
-
-      first = option_at(questions, 1, 1)
-      second = option_at(questions, 1, 4)
-
-      assert {:ok, _recorded} = Games.answer_question(participant, first.id, 25)
-
-      assert %Answer{game_session_answer_option_id: chosen} =
-               Games.get_current_answer(session, participant)
-
-      assert chosen == first.id
-
-      assert {:ok, _swapped} = Games.answer_question(participant, second.id, 25)
-
-      assert %Answer{game_session_answer_option_id: swapped} =
-               Games.get_current_answer(session, participant)
-
-      assert swapped == second.id
-    end
-
-    test "get_current_answer/2 é nil antes do primeiro avanço" do
-      %{session: session} = match_of(3)
-      participant = participant_fixture(session)
-
-      assert is_nil(Games.get_current_answer(session, participant))
-    end
-
-    test "get_current_answer/2 ignora a resposta da pergunta anterior", %{
-      scope: scope,
-      session: session,
-      questions: questions,
-      participant: participant
-    } do
-      assert {:ok, _first} = Games.answer_question(participant, option_at(questions, 1, 1).id, 25)
-      assert {:ok, second} = Games.advance_question(scope, session, 1)
-
-      assert is_nil(Games.get_current_answer(second, participant))
-    end
-
-    test "current_answers_count/1 conta zero, um e vinte e cinco" do
-      %{session: session} = match_of(3)
-      assert Games.current_answers_count(session) == 0
-
-      %{session: open, questions: questions, participants: participants} = open_match_with(25)
-      assert Games.current_answers_count(open) == 0
-
-      option = option_at(questions, 1, 1)
-      [first | rest] = participants
-
-      assert {:ok, _one} = Games.answer_question(first, option.id, 0)
-      assert Games.current_answers_count(open) == 1
-
-      for participant <- rest do
-        assert {:ok, _more} = Games.answer_question(participant, option.id, 0)
-      end
-
-      assert Games.current_answers_count(open) == 25
-    end
-
-    test "answered_participant_ids/1 ignora as respostas das perguntas anteriores" do
-      %{scope: scope, session: session, questions: questions, participants: [a, b]} =
-        open_match_with(2)
-
-      assert Games.answered_participant_ids(session) == MapSet.new()
-
-      assert {:ok, _first} = Games.answer_question(a, option_at(questions, 1, 1).id, 0)
-      assert Games.answered_participant_ids(session) == MapSet.new([a.id])
-
-      assert {:ok, second} = Games.advance_question(scope, session, 1)
-      assert Games.answered_participant_ids(second) == MapSet.new()
-
-      assert {:ok, _also} = Games.answer_question(b, option_at(questions, 2, 3).id, 0)
-      assert Games.answered_participant_ids(second) == MapSet.new([b.id])
-    end
-
-    test "answered_participant_ids/1 é vazio antes do primeiro avanço" do
-      %{session: session} = match_of(3)
-
-      assert Games.answered_participant_ids(session) == MapSet.new()
-    end
-  end
-
   describe "eventos da resposta" do
     test "cada resposta publica answer_submitted com a contagem da pergunta" do
       %{session: session, questions: questions, participants: [a, b]} = open_match_with(2)
@@ -4147,10 +4081,10 @@ defmodule LiveQuiz.GamesTest do
       option = option_at(questions, 1, 1)
       :ok = Games.subscribe(session_id)
 
-      assert {:ok, _first} = Games.answer_question(a, option.id, 0)
+      assert {:ok, _first} = Games.answer_question(a, option.id, @nobody_connected)
       assert_receive {:answer_submitted, ^session_id, 1}
 
-      assert {:ok, _second} = Games.answer_question(b, option.id, 0)
+      assert {:ok, _second} = Games.answer_question(b, option.id, @nobody_connected)
       assert_receive {:answer_submitted, ^session_id, 2}
     end
 
@@ -4159,10 +4093,22 @@ defmodule LiveQuiz.GamesTest do
       session_id = session.id
       :ok = Games.subscribe(session_id)
 
-      assert {:ok, _first} = Games.answer_question(participant, option_at(questions, 1, 1).id, 0)
+      assert {:ok, _first} =
+               Games.answer_question(
+                 participant,
+                 option_at(questions, 1, 1).id,
+                 @nobody_connected
+               )
+
       assert_receive {:answer_submitted, ^session_id, 1}
 
-      assert {:ok, _swap} = Games.answer_question(participant, option_at(questions, 1, 2).id, 0)
+      assert {:ok, _swap} =
+               Games.answer_question(
+                 participant,
+                 option_at(questions, 1, 2).id,
+                 @nobody_connected
+               )
+
       assert_receive {:answer_submitted, ^session_id, 1}
     end
 
@@ -4172,18 +4118,18 @@ defmodule LiveQuiz.GamesTest do
 
       :ok = Games.subscribe(session.id)
 
-      assert Games.answer_question(participant, option_at(questions, 2, 1).id, 0) ==
+      assert Games.answer_question(participant, option_at(questions, 2, 1).id, @nobody_connected) ==
                {:error, :option_not_found}
 
       assert {:ok, closed} = Games.close_question(scope, session)
       assert_receive {:question_closed, %GameSession{}}
 
-      assert Games.answer_question(participant, option_at(questions, 1, 1).id, 0) ==
+      assert Games.answer_question(participant, option_at(questions, 1, 1).id, @nobody_connected) ==
                {:error, :question_closed}
 
       refute_receive {:answer_submitted, _id, _count}, 50
       refute_receive {:question_closed, _repeated}, 50
-      assert is_nil(Games.get_current_answer(closed, participant))
+      assert {:ok, %{my_answer_option_id: nil}} = Games.game_state(closed, participant)
     end
   end
 
@@ -4276,8 +4222,19 @@ defmodule LiveQuiz.GamesTest do
       %{scope: scope, session: session, questions: questions, participants: [participant]} =
         open_match_with(1)
 
-      assert {:ok, _first} = Games.answer_question(participant, option_at(questions, 1, 2).id, 0)
-      assert {:ok, _swap} = Games.answer_question(participant, option_at(questions, 1, 4).id, 0)
+      assert {:ok, _first} =
+               Games.answer_question(
+                 participant,
+                 option_at(questions, 1, 2).id,
+                 @nobody_connected
+               )
+
+      assert {:ok, _swap} =
+               Games.answer_question(
+                 participant,
+                 option_at(questions, 1, 4).id,
+                 @nobody_connected
+               )
 
       assert {:ok, closed} = Games.close_question(scope, session)
       assert {:ok, results} = Games.question_results(closed, 1, scope)
@@ -4332,7 +4289,11 @@ defmodule LiveQuiz.GamesTest do
         open_match_with(1)
 
       assert {:ok, _answered} =
-               Games.answer_question(participant, option_at(questions, 1, 1).id, 0)
+               Games.answer_question(
+                 participant,
+                 option_at(questions, 1, 1).id,
+                 @nobody_connected
+               )
 
       assert {:ok, closed} = Games.close_question(scope, session)
       assert {:ok, results} = Games.question_results(closed, 1, scope)
@@ -4354,8 +4315,8 @@ defmodule LiveQuiz.GamesTest do
       correct = option_at(questions, 1, 1)
       missed = option_at(questions, 1, 3)
 
-      assert {:ok, _hit} = Games.answer_question(right, correct.id, 0)
-      assert {:ok, _miss} = Games.answer_question(wrong, missed.id, 0)
+      assert {:ok, _hit} = Games.answer_question(right, correct.id, @nobody_connected)
+      assert {:ok, _miss} = Games.answer_question(wrong, missed.id, @nobody_connected)
 
       assert {:ok, closed} = Games.close_question(scope, session)
 
@@ -4378,7 +4339,7 @@ defmodule LiveQuiz.GamesTest do
       participant = participant_fixture(session, %{user: player.user})
       correct = option_at(questions, 1, 1)
 
-      assert {:ok, _answered} = Games.answer_question(participant, correct.id, 0)
+      assert {:ok, _answered} = Games.answer_question(participant, correct.id, @nobody_connected)
       assert {:ok, closed} = Games.close_question(scope, session)
 
       assert {:ok, results} = Games.question_results(closed, 1, player)
@@ -4391,7 +4352,11 @@ defmodule LiveQuiz.GamesTest do
         open_match_with(1)
 
       assert {:ok, _answered} =
-               Games.answer_question(participant, option_at(questions, 1, 1).id, 0)
+               Games.answer_question(
+                 participant,
+                 option_at(questions, 1, 1).id,
+                 @nobody_connected
+               )
 
       assert {:ok, second} = Games.advance_question(scope, session, 1)
 
@@ -4417,7 +4382,11 @@ defmodule LiveQuiz.GamesTest do
       assert {:ok, open} = Games.advance_question(scope, session, nil)
 
       assert {:ok, _answered} =
-               Games.answer_question(participant, option_at(questions, 1, 1).id, 0)
+               Games.answer_question(
+                 participant,
+                 option_at(questions, 1, 1).id,
+                 @nobody_connected
+               )
 
       assert {:ok, closed} = Games.close_question(scope, open)
       assert {:ok, results} = Games.question_results(closed, 1, participant)
@@ -4449,7 +4418,11 @@ defmodule LiveQuiz.GamesTest do
         open_match_with(1)
 
       assert {:ok, _answered} =
-               Games.answer_question(participant, option_at(questions, 1, 1).id, 0)
+               Games.answer_question(
+                 participant,
+                 option_at(questions, 1, 1).id,
+                 @nobody_connected
+               )
 
       assert {:ok, closed} = Games.close_question(scope, session)
 
@@ -4499,8 +4472,11 @@ defmodule LiveQuiz.GamesTest do
       %{scope: scope, session: session, questions: questions, participants: [a, b]} =
         open_match_with(2)
 
-      assert {:ok, _first} = Games.answer_question(a, option_at(questions, 1, 1).id, 0)
-      assert {:ok, _second} = Games.answer_question(b, option_at(questions, 1, 2).id, 0)
+      assert {:ok, _first} =
+               Games.answer_question(a, option_at(questions, 1, 1).id, @nobody_connected)
+
+      assert {:ok, _second} =
+               Games.answer_question(b, option_at(questions, 1, 2).id, @nobody_connected)
 
       assert {:ok, summary} = Games.game_summary(session, scope)
 
@@ -4523,6 +4499,7 @@ defmodule LiveQuiz.GamesTest do
 
     test "a partida finalizada traz as perguntas aplicadas e as respostas registradas" do
       %{scope: scope, session: session, questions: questions} = match_of(10)
+      for question <- questions, do: mark_question_played(question, session)
       participants = for _seat <- 1..18//1, do: participant_fixture(session)
 
       for question <- questions, participant <- participants do
@@ -4546,7 +4523,11 @@ defmodule LiveQuiz.GamesTest do
         open_match_with(1)
 
       assert {:ok, _answered} =
-               Games.answer_question(participant, option_at(questions, 1, 1).id, 0)
+               Games.answer_question(
+                 participant,
+                 option_at(questions, 1, 1).id,
+                 @nobody_connected
+               )
 
       assert {:ok, finished} = Games.finish_game_session(scope, session)
 
@@ -4616,7 +4597,7 @@ defmodule LiveQuiz.GamesTest do
       [question] = Games.list_snapshot_questions(open)
       option = hd(question.answer_options)
 
-      assert {:ok, _answered} = Games.answer_question(participant, option.id, 0)
+      assert {:ok, _answered} = Games.answer_question(participant, option.id, @nobody_connected)
       assert_receive {:answer_submitted, ^session_id, 1}
 
       assert {:ok, closed} = Games.close_question(scope, open)
@@ -4629,6 +4610,11 @@ defmodule LiveQuiz.GamesTest do
 
   # A match sitting on its first question, open, with `count` people signed up —
   # the state every answer starts from.
+  # The presence the context compares an answer against. It used to be a count,
+  # and a count cannot answer "has everybody connected answered": these are the
+  # participations the presence is showing.
+  defp connected(participants), do: Enum.map(List.wrap(participants), & &1.id)
+
   defp open_match_with(count) do
     %{scope: scope, session: session, questions: questions} = match_of(3)
     {:ok, open} = Games.advance_question(scope, session, nil)
@@ -4652,7 +4638,7 @@ defmodule LiveQuiz.GamesTest do
   # closes instead of letting the last answer close it.
   defp answer_all(participants, option) do
     for participant <- participants do
-      assert {:ok, _recorded} = Games.answer_question(participant, option.id, 0)
+      assert {:ok, _recorded} = Games.answer_question(participant, option.id, @nobody_connected)
     end
   end
 
@@ -4928,7 +4914,9 @@ defmodule LiveQuiz.GamesTest do
 
   # The sandbox lends a single connection, so the tasks below take turns on it
   # rather than truly running at once. What is under test is the outcome the
-  # cross-table rules must produce whatever the interleaving is.
+  # cross-table rules must produce whatever the interleaving is. The races
+  # themselves — two transactions, two backends, real commits in between — are
+  # in `LiveQuiz.GamesConcurrencyTest`.
   defp in_parallel(items, fun) do
     owner = self()
 

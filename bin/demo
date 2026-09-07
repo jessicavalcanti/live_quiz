@@ -13,8 +13,19 @@ WORKTREE_DIR=".demo"
 # Portas do host; ajuste quando a 4000 ou a 8025 já estiverem ocupadas.
 DEMO_PORT="${DEMO_PORT:-4000}"
 MAILPIT_UI_PORT="${MAILPIT_UI_PORT:-8025}"
-export DEMO_PORT MAILPIT_UI_PORT
-APP_URL="http://localhost:${DEMO_PORT}"
+
+# Por padrão a demonstração é local: os serviços escutam só no loopback e os
+# links que ela gera apontam para `localhost`. Para mostrar numa rede — outro
+# aparelho lendo o QR code — as duas coisas têm de mudar juntas, porque um bind
+# aberto com `PHX_HOST=localhost` produziria um QR que só funciona na máquina
+# que o desenhou (R51):
+#
+#   DEMO_BIND=0.0.0.0 PHX_HOST=192.168.0.10 bin/demo v1.0.0
+DEMO_BIND="${DEMO_BIND:-127.0.0.1}"
+PHX_HOST="${PHX_HOST:-localhost}"
+PHX_SCHEME="${PHX_SCHEME:-http}"
+export DEMO_PORT MAILPIT_UI_PORT DEMO_BIND PHX_HOST PHX_SCHEME
+APP_URL="${PHX_SCHEME}://${PHX_HOST}:${DEMO_PORT}"
 MAIL_URL="http://localhost:${MAILPIT_UI_PORT}"
 DEMO_LOGIN="demo@livequiz.dev / demo123456789"
 BOOT_TIMEOUT_SECONDS=300
@@ -25,8 +36,12 @@ die() { printf '%s✗ %s%s\n' "$RED" "$1" "$RESET" >&2; exit 1; }
 info() { printf '%s%s%s\n' "$DIM" "$1" "$RESET"; }
 
 require_tools() {
-  command -v git >/dev/null 2>&1 || die "git não encontrado no PATH."
-  command -v docker >/dev/null 2>&1 || die "docker não encontrado no PATH."
+  # Toda ferramenta que este script chama, e não só as óbvias: descobrir que
+  # falta `curl` no meio da espera pelo boot é descobrir tarde (R52).
+  for tool in git docker curl; do
+    command -v "$tool" >/dev/null 2>&1 || die "$tool não encontrado no PATH."
+  done
+
   docker compose version >/dev/null 2>&1 || die "docker compose (v2) não está disponível."
 }
 
@@ -126,6 +141,7 @@ cmd_up() {
   local worktree="${root}/${WORKTREE_DIR}/${tag}"
 
   if [ -d "$worktree" ]; then
+    verify_worktree "$root" "$worktree" "$tag"
     info "reaproveitando o worktree em ${WORKTREE_DIR}/${tag}"
   else
     info "materializando ${tag} em ${WORKTREE_DIR}/${tag} (sua branch não é alterada)"
@@ -144,6 +160,8 @@ cmd_up() {
     exit 1
   }
 
+  verify_serving "$project" "$worktree" "$tag"
+
   local phase; phase="$(phase_of "$tag")"
   printf '\n%s✓ Live Quiz %s%s' "$GREEN" "$tag" "$RESET"
   [ -n "$phase" ] && printf ' %s(%s)%s' "$DIM" "$phase" "$RESET"
@@ -152,6 +170,36 @@ cmd_up() {
   printf '  E-mails   : %s\n' "$MAIL_URL"
   printf '  Login demo: %s\n' "$DEMO_LOGIN"
   printf '  Encerrar  : bin/demo stop\n'
+}
+
+# Um diretório que existe não é um diretório que continua sendo aquela versão.
+# Reaproveitá-lo sem conferir é anunciar uma versão e executar outra, que é
+# exatamente o que uma demonstração não pode fazer (R52). Nada é apagado nem
+# resetado aqui: o trabalho de quem mexeu no worktree é dele.
+verify_worktree() {
+  local root="$1" worktree="$2" tag="$3"
+
+  git -C "$worktree" rev-parse --git-dir >/dev/null 2>&1 \
+    || die "${WORKTREE_DIR}/${tag} existe mas não é um worktree git. Apague-o e rode de novo."
+
+  local expected actual
+  expected="$(git -C "$root" rev-list -n1 "refs/tags/${tag}")"
+  actual="$(git -C "$worktree" rev-parse HEAD)"
+
+  if [ "$expected" != "$actual" ]; then
+    printf '%s✗ %s/%s está em %s, e a tag %s aponta para %s.%s\n' \
+      "$RED" "$WORKTREE_DIR" "$tag" "${actual:0:12}" "$tag" "${expected:0:12}" "$RESET" >&2
+    printf 'Apague o diretório e rode de novo: git worktree remove --force %s/%s\n' \
+      "$WORKTREE_DIR" "$tag" >&2
+    exit 1
+  fi
+
+  if [ -n "$(git -C "$worktree" status --porcelain)" ]; then
+    printf '%s✗ %s/%s tem alterações locais.%s\n' "$RED" "$WORKTREE_DIR" "$tag" "$RESET" >&2
+    printf 'A demonstração anunciaria %s e executaria outra coisa. Reveja ou descarte:\n' "$tag" >&2
+    printf '  git -C %s/%s status\n' "$WORKTREE_DIR" "$tag" >&2
+    exit 1
+  fi
 }
 
 wait_for_app() {
@@ -172,12 +220,53 @@ wait_for_app() {
   return 1
 }
 
+# Uma resposta HTTP naquela URL prova que *alguma coisa* atende ali, não que é
+# a demonstração desta versão: outro projeto compose, um servidor esquecido de
+# ontem, o ambiente de desenvolvimento na mesma porta. O contêiner que responde
+# tem de ser o que este script subiu.
+verify_serving() {
+  local project="$1" worktree="$2" tag="$3"
+
+  local container
+  container="$(docker compose --project-directory "$worktree" -f "${worktree}/${COMPOSE_FILE}" \
+                 --project-name "$project" ps --quiet app 2>/dev/null | head -n1)"
+
+  [ -n "$container" ] || die "o contêiner da aplicação de ${tag} não está em execução."
+
+  local listening
+  listening="$(docker inspect "$container" \
+                 --format '{{range $p, $c := .NetworkSettings.Ports}}{{range $c}}{{.HostIp}}:{{.HostPort}} {{end}}{{end}}' \
+                 2>/dev/null)"
+
+  case "$listening" in
+    *":${DEMO_PORT} "*) : ;;
+    *)
+      printf '%s✗ Algo responde em %s, mas não é o contêiner desta demonstração.%s\n' \
+        "$RED" "$APP_URL" "$RESET" >&2
+      printf 'Portas publicadas por ele: %s\n' "${listening:-nenhuma}" >&2
+      printf 'Encerre o que estiver na porta e rode de novo, ou use DEMO_PORT=outra.\n' >&2
+      exit 1
+      ;;
+  esac
+}
+
 usage() {
   cat <<'USAGE'
 Uso:
   bin/demo <tag>   sobe a aplicação naquela versão em http://localhost:4000
   bin/demo list    lista as versões disponíveis
   bin/demo stop    derruba a demonstração em execução
+
+Variáveis:
+  DEMO_PORT        porta da aplicação no host (padrão 4000)
+  MAILPIT_UI_PORT  porta da caixa de entrada no host (padrão 8025)
+  DEMO_BIND        interface em que a aplicação escuta (padrão 127.0.0.1)
+  PHX_HOST         host dos links e do QR code (padrão localhost)
+
+Para demonstrar numa rede, as duas últimas mudam juntas — um bind aberto com
+PHX_HOST=localhost gera um QR que só funciona na máquina que o desenhou:
+
+  DEMO_BIND=0.0.0.0 PHX_HOST=192.168.0.10 bin/demo v1.0.0
 USAGE
 }
 
