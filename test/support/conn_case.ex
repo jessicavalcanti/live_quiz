@@ -150,6 +150,20 @@ defmodule LiveQuizWeb.ConnCase do
     token
   end
 
+  @doc """
+  Builds a refresh token that the server actually issued.
+
+  Rotation only honours a refresh token whose family it recorded when the
+  session opened (R03), so a test that means to *spend* one has to open a
+  session rather than mint a signed string. `api_token/2` still serves the
+  tests about tokens the server never issued.
+  """
+  def api_refresh_token(user) do
+    {:ok, %{refresh_token: refresh_token}} = LiveQuiz.Accounts.Guardian.build_tokens(user)
+
+    refresh_token
+  end
+
   defp maybe_set_token_authenticated_at(_token, nil), do: nil
 
   defp maybe_set_token_authenticated_at(token, authenticated_at) do

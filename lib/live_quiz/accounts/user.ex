@@ -14,6 +14,11 @@ defmodule LiveQuiz.Accounts.User do
     field :confirmed_at, :utc_datetime
     field :authenticated_at, :utc_datetime, virtual: true
 
+    # Moves when every API session of this account has to stop being valid.
+    # The access token carries it, so a token issued before the move is
+    # rejected on its next request instead of living out its fifteen minutes.
+    field :auth_version, :integer, default: 0
+
     has_many :hosted_game_sessions, GameSession, foreign_key: :host_id
     has_many :participations, Participant
     has_many :game_results, GameResult

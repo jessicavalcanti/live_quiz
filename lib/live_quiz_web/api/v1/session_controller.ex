@@ -44,14 +44,25 @@ defmodule LiveQuizWeb.Api.V1.SessionController do
     end
   end
 
+  @doc """
+  Renews the session, rotating the refresh token along with the access token.
+
+  Each refresh token is spent once. Presenting a spent one is what a replay
+  looks like from here, and the answer is to end the family: two holders spent
+  one link, and there is no telling which of them logged in (R03).
+  """
   operation :refresh,
-    summary: "Renova o token de acesso",
-    description:
-      "Troca um refresh token válido por um novo token de acesso. Não exige autenticação.",
+    summary: "Renova os tokens da sessão",
+    description: """
+    Troca um refresh token válido por um novo par de tokens. Não exige autenticação.
+
+    O refresh token enviado é **gasto**: guarde o novo, porque reapresentar o
+    antigo encerra a sessão em todos os dispositivos que a compartilham.
+    """,
     security: [],
     request_body: {"Refresh token", "application/json", RefreshRequest, required: true},
     responses: [
-      ok: {"Novo token de acesso", "application/json", RefreshResponse},
+      ok: {"Novo par de tokens", "application/json", RefreshResponse},
       unauthorized: {"Refresh token inválido ou expirado", "application/json", ErrorResponse}
     ]
 
@@ -64,22 +75,41 @@ defmodule LiveQuizWeb.Api.V1.SessionController do
   def refresh(_conn, _params), do: {:error, :invalid_refresh_token}
 
   @doc """
-  Ends the session on the client side.
+  Ends the session, on the server as well as on the client.
 
-  Without `Guardian.DB` there is nothing to invalidate on the server: the answer
-  is `204` and the client is expected to discard both tokens.
+  The refresh family goes with it, so the chain stops — the next link is exactly
+  what a rotation would have issued, and revoking the row alone would leave it
+  usable. The access token is not revoked and expires on its own within fifteen
+  minutes; ending every session at once, immediately, is what a password reset
+  does.
+
+  Answers `204` whether or not a refresh token came with the request: a client
+  discarding a credential should not learn from the status code whether the
+  server had heard of it.
   """
   operation :delete,
     summary: "Encerra a sessão",
-    description:
-      "Responde 204 e espera que o cliente descarte os dois tokens. Não há revogação no servidor.",
+    description: """
+    Encerra a sessão. Envie o `refresh_token` no corpo para revogá-la no
+    servidor: sem ele, o token de renovação continua valendo até expirar.
+
+    O token de acesso não é revogado e expira sozinho em quinze minutos.
+    Encerrar **todas** as sessões de uma vez é o que a redefinição de senha faz.
+
+    Responde `204` com ou sem corpo: um cliente descartando credencial não deve
+    aprender pelo status se o servidor as conhecia.
+    """,
     security: [%{"bearerAuth" => []}],
     responses: [
       no_content: "Sessão encerrada",
       unauthorized: {"Não autenticado", "application/json", ErrorResponse}
     ]
 
-  def delete(conn, _params), do: send_resp(conn, :no_content, "")
+  def delete(conn, params) do
+    Guardian.revoke_session(params["refresh_token"])
+
+    send_resp(conn, :no_content, "")
+  end
 
   operation :me,
     summary: "Dados do usuário autenticado",
