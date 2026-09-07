@@ -18,11 +18,17 @@ defmodule LiveQuiz.Games.QuestionTimerSupervisor do
   One match failing does not take the sweep down: the failure is logged and the
   rest is still processed, exactly like the `LiveQuiz.Games.ExpirationSweeper`.
 
-  It runs from `LiveQuiz.Application.start/2`, right after the tree is up and
-  before anything can connect, so no subscriber hears the broadcasts it
-  produces. That is expected: the first `mount` reads the state from the
-  database anyway. In `:test` it does not run at all — a sweep of a shared
-  database at the start of every test would be a fine way to lose a suite.
+  It runs from `LiveQuiz.Application.start/2`, once the supervision tree is up.
+  The endpoint is the last child of that tree, so it is already accepting
+  connections by then — this used to claim the recovery happened before
+  anything could connect, and it does not (R43). The consequence is small and
+  worth naming: for the moment between the endpoint opening and this finishing,
+  a match may be read with its question open and no timer behind it. The first
+  `mount` reads the state from the database either way, and
+  `LiveQuiz.Games.QuestionTimerReconciler` closes that window on its next tick.
+
+  In `:test` it does not run at all — a sweep of a shared database at the start
+  of every test would be a fine way to lose a suite.
 
   ## Test seam
 

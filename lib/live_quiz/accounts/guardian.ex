@@ -9,9 +9,16 @@ defmodule LiveQuiz.Accounts.Guardian do
       `LiveQuizWeb.Api.AuthPipeline`;
     * `"refresh"` — long lived (30 days), accepted only by `refresh_access_token/1`.
 
-  There is no `Guardian.DB`: nothing is persisted and no query runs per request.
-  The trade-off is that a leaked token stays valid until it expires — there is no
-  server side revocation in this phase.
+  There is no `Guardian.DB`: no *token* is persisted, and a token is not looked
+  up to be verified — the signature is what proves it. `resource_from_claims/1`
+  does read the account the `sub` names, on every authenticated request, because
+  an account that was deleted must stop working immediately; saying that no
+  query runs per request was simply wrong (R43).
+
+  The trade-off that remains is revocation: a leaked or logged-out refresh token
+  stays valid until it expires, because nothing records that it should not.
+  Deleting a `UserToken` ends web sessions and says nothing about JWTs. That is
+  the debt #14 accepted deliberately and the subject of R03.
   """
 
   use Guardian, otp_app: :live_quiz

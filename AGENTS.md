@@ -13,12 +13,16 @@ LiveView + PostgreSQL**, com uma **API JSON** paralela para consumo futuro por a
 O projeto é entregue em **4 fases**, cada uma equivalente a uma sprint com funcionalidade de negócio
 completa. O plano completo está em [`plataforma_quiz_4_fases.md`](plataforma_quiz_4_fases.md).
 
-| Fase | Entrega |
-|---|---|
-| 1 | Criação e gerenciamento de quizzes (**em andamento**) |
-| 2 | Sala de quiz e lobby em tempo real |
-| 3 | Execução do quiz em tempo real |
-| 4 | Pontuação, ranking e histórico |
+| Fase | Entrega | Estado |
+|---|---|---|
+| 1 | Criação e gerenciamento de quizzes | entregue em `v0.1.0` |
+| 2 | Sala de quiz e lobby em tempo real | entregue em `v0.2.0` |
+| 3 | Execução do quiz em tempo real | entregue em `v0.3.0` |
+| 4 | Pontuação, ranking e histórico | entregue em `v1.0.0` |
+
+As quatro fases estão entregues. O trabalho em curso é o plano de correção do
+[code review completo](code_review_completo_2026-09-07.md), cujas issues seguem o
+mesmo fluxo das stories.
 
 ---
 
@@ -358,11 +362,14 @@ ou dentro do container com `docker compose exec app`.
 | Idioma do código | inglês (módulos, funções, tabelas, colunas, rotas, commits) |
 | Idioma da UI e das issues | pt-BR |
 | Locale | Gettext `pt_BR`; mensagens de erro do Ecto traduzidas em `errors.po` |
-| Datas | persistidas em UTC; exibidas na web em `America/Sao_Paulo`; API sempre em ISO 8601 UTC |
-| Contextos | `LiveQuiz.Accounts` (autenticação) e `LiveQuiz.Quizzes` (quiz, perguntas, alternativas) |
-| Autorização | toda função pública de contexto recebe `scope` e filtra por dono **na query**; não-dono recebe 404 |
+| Datas | persistidas em UTC; exibidas na web em `America/Sao_Paulo`; API sempre em ISO 8601 UTC. Um **filtro de dia** na web é lido no fuso da tela e convertido antes da consulta |
+| Contextos | `LiveQuiz.Accounts` (autenticação), `LiveQuiz.Quizzes` (quiz, perguntas, alternativas) e `LiveQuiz.Games` (sala, partida, pontuação e histórico) |
+| Autorização | toda função pública de contexto recebe `scope` e filtra por dono **na query**; não-dono recebe 404. `owner_id` num struct que chegou do chamador não prova nada |
+| Identificadores | um id que nenhuma linha poderia ter é recurso ausente (404); filtro ou payload malformado é 422 |
 | Arquitetura | `LiveView → Context → Changeset → Repo` e `Controller → Context → Changeset → Repo` |
-| Integridade | validação no changeset **e** constraint no banco |
+| Integridade | validação no changeset **e** constraint no banco — as escritas em lote não passam por changeset |
+| Locks | ordem global única, declarada em `LiveQuiz.Games.Locks`: **identity → match → seats** |
+| Sessões | apagar `UserToken` encerra sessões web e **não** invalida JWT; desconectar sockets já montados exige `UserAuth.disconnect_sessions/1` |
 
 ---
 
