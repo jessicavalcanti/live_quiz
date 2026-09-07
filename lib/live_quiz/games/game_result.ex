@@ -5,6 +5,12 @@ defmodule LiveQuiz.Games.GameResult do
   The references are retained for lookup and authorization. The copied text and
   metrics are the historical source of truth, so callers should only insert
   this schema once.
+
+  `quiz_id` and `user_id` are nullified when what they point at is deleted:
+  the result outlives the quiz, which is why the title and the statements were
+  copied into it. `game_session_id` and `participant_id` cascade instead, so a
+  result does not outlive the match or the participation it belongs to. See
+  `LiveQuiz.Games.History` for what that means for retention.
   """
 
   use Ecto.Schema

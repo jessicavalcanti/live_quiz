@@ -4,9 +4,27 @@ defmodule LiveQuiz.Games.History do
 
   Finishing a room freezes one `LiveQuiz.Games.GameResult` per participation —
   score, counts, position and the questions as they were played — and from then
-  on nothing here reads the live tables. That is the point: a result has to keep
-  answering after the quiz has been edited, after it has been deleted and after
-  the room itself is gone, so it carries its own copy of everything it shows.
+  on nothing here reads the live tables. That is the point: a result keeps
+  answering after the quiz has been edited and after it has been deleted,
+  because it carries its own copy of everything it shows.
+
+  ## What durability means here, exactly
+
+  It is durability against **editing and deleting the quiz**, and that is what
+  the schema buys: `quiz_id` is nullified and the title, the statements and the
+  alternatives were copied at the time.
+
+  It is *not* durability against deleting the match or the participation. Those
+  two references cascade, so removing a `game_sessions` or a `participants` row
+  removes the results hanging from it — and removing an account removes the
+  rooms it hosted, and with them everybody else's results from those rooms.
+
+  Nothing in the application deletes any of those today: there is no purge and
+  no account deletion. The reason to write it down is that the first feature to
+  do either will decide, by accident, what happens to history — and it should
+  decide it on purpose. Retention and anonymisation are the question, not
+  whether a foreign key cascades, and blocking the deletion of personal data in
+  the name of history is not the answer either.
 
   Who may read what is decided per row rather than per endpoint, because the
   same result is legitimately readable by three different people: the host of
