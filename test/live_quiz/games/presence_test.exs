@@ -234,7 +234,11 @@ defmodule LiveQuiz.Games.PresenceTest do
 
       log =
         capture_log(fn ->
-          send(monitor, {:confirm_absence, "sala inexistente"})
+          # A referência do ciclo tem de ser a registrada, senão a mensagem é
+          # descartada antes de chegar ao banco — que é o que R21 acrescenta.
+          HostMonitor.host_disconnected("sala inexistente", monitor)
+          {cycle, _timer} = :sys.get_state(monitor).pending["sala inexistente"]
+          send(monitor, {:confirm_absence, "sala inexistente", cycle})
           _state = :sys.get_state(monitor)
         end)
 

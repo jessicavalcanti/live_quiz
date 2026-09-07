@@ -258,6 +258,16 @@ defmodule LiveQuiz.Games.QuestionTimerTest do
     test "é um no-op, para o processo nunca esperar o próprio desligamento" do
       %{session: session} = running_match(%{})
 
+      # A simulação precisa da chave livre. O registro e o supervisor de timers
+      # são globais da aplicação, então um timer que sobrou de outro teste a
+      # ocuparia — é a intermitência da #139, e o `assert` abaixo nomeia quem a
+      # segura em vez de reprovar com um `MatchError` sem contexto.
+      :ok = QuestionTimer.stop(session.id)
+
+      assert is_nil(QuestionTimer.whereis(session.id)),
+             "a chave do timer da partida #{session.id} está ocupada por " <>
+               inspect(QuestionTimer.whereis(session.id))
+
       {:ok, _owner} =
         Registry.register(
           LiveQuiz.Games.QuestionTimerRegistry,
