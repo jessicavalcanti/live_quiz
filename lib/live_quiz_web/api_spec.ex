@@ -34,7 +34,9 @@ defmodule LiveQuizWeb.ApiSpec do
     %OpenApi{
       info: %Info{
         title: "Live Quiz API",
-        version: "1.0.0",
+        # Read from the application rather than written down again: the version
+        # lives in `mix.exs` and a second copy is a copy that goes stale (R33).
+        version: to_string(Application.spec(:live_quiz, :vsn)),
         description: "API da plataforma de quizzes em tempo real"
       },
       servers: [Server.from_endpoint(Endpoint)],

@@ -14,7 +14,11 @@ defmodule LiveQuizWeb.Api.V1.Schemas.GameResult do
         game_session_id: %Schema{type: :integer},
         participant_id: %Schema{type: :integer},
         user_id: %Schema{type: :integer, nullable: true},
-        quiz_id: %Schema{type: :integer},
+        quiz_id: %Schema{
+          type: :integer,
+          nullable: true,
+          description: "Nulo quando o quiz de origem foi excluído — o resultado sobrevive a ele"
+        },
         quiz_title: %Schema{type: :string},
         nickname: %Schema{type: :string},
         score: %Schema{type: :integer},
@@ -40,7 +44,24 @@ defmodule LiveQuizWeb.Api.V1.Schemas.GameResult do
         total_response_time_ms: %Schema{type: :integer},
         average_response_time_ms: %Schema{type: :number, nullable: true},
         final_position: %Schema{type: :integer},
-        question_results: %Schema{type: :array, items: %Schema{type: :object}},
+        question_results: %Schema{
+          type: :object,
+          description:
+            ~s|Detalhe por pergunta, indexado pela posição em texto ("1", "2", …). | <>
+              "Só as perguntas que a partida chegou a aplicar aparecem",
+          additionalProperties: %Schema{
+            type: :object,
+            properties: %{
+              question: %Schema{type: :string},
+              answer_option_id: %Schema{type: :integer, nullable: true},
+              answer: %Schema{type: :string, nullable: true},
+              correct: %Schema{type: :boolean, nullable: true},
+              answered_at: %Schema{type: :string, format: :"date-time", nullable: true},
+              response_time_ms: %Schema{type: :integer}
+            },
+            required: [:question]
+          }
+        },
         inserted_at: %Schema{type: :string, format: :"date-time"}
       },
       required: [
@@ -80,7 +101,16 @@ defmodule LiveQuizWeb.Api.V1.Schemas.GameResult do
         "total_response_time_ms" => 12_400,
         "average_response_time_ms" => 1240,
         "final_position" => 1,
-        "question_results" => [],
+        "question_results" => %{
+          "1" => %{
+            "question" => "Qual é a capital do Brasil?",
+            "answer_option_id" => 41,
+            "answer" => "Brasília",
+            "correct" => true,
+            "answered_at" => "2026-09-05T18:19:12Z",
+            "response_time_ms" => 1240
+          }
+        },
         "inserted_at" => "2026-09-05T18:20:00Z"
       }
     },

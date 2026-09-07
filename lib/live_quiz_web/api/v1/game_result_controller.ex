@@ -9,13 +9,17 @@ defmodule LiveQuizWeb.Api.V1.GameResultController do
   use LiveQuizWeb, :controller
   use OpenApiSpex.ControllerSpecs
 
+  alias LiveQuiz.Accounts.Scope
   alias LiveQuiz.Games
   alias LiveQuiz.Games.ResultFilters
   alias LiveQuiz.Pagination
+  alias LiveQuiz.Quizzes
+  alias LiveQuiz.ResourceId
   alias LiveQuizWeb.Api.V1.Schemas.ErrorResponse
   alias LiveQuizWeb.Api.V1.Schemas.GameHistoryResponse
   alias LiveQuizWeb.Api.V1.Schemas.GameResultListResponse
   alias LiveQuizWeb.Api.V1.Schemas.GameResultResponse
+  alias LiveQuizWeb.Api.V1.Schemas.GameSessionResultsResponse
   alias LiveQuizWeb.Api.V1.Schemas.RankingResponse
   alias LiveQuizWeb.Api.Viewer
 
@@ -76,7 +80,7 @@ defmodule LiveQuizWeb.Api.V1.GameResultController do
     security: [%{"bearerAuth" => []}],
     parameters: [code: @code],
     responses: [
-      ok: {"Resultado completo", "application/json", GameResultListResponse},
+      ok: {"Resultado completo", "application/json", GameSessionResultsResponse},
       unauthorized: {"Não autenticado", "application/json", ErrorResponse},
       not_found: {"Partida inexistente ou sem acesso", "application/json", ErrorResponse}
     ]
@@ -143,12 +147,38 @@ defmodule LiveQuizWeb.Api.V1.GameResultController do
     ]
 
   def quiz_history(conn, %{"quiz_id" => quiz_id} = params) do
-    with {:ok, quiz_id} <- ResultFilters.required_quiz_id(quiz_id),
+    scope = scope(conn)
+
+    # The quiz is named in the *path*, so an id nobody could have is a resource
+    # that is not there rather than a filter the caller got wrong — the same
+    # rule `LiveQuiz.ResourceId` settles for every other path id.
+    with {:ok, quiz_id} <- path_quiz_id(quiz_id),
+         # And a quiz that does not exist, or belongs to somebody else, is a
+         # missing resource too — not a quiz with no matches. Both used to
+         # answer `200` with an empty page, which is the operation documenting a
+         # `404` it never returned and a client unable to tell "you have never
+         # played this" from "this is not yours" (R34).
+         :ok <- ensure_owned_quiz(scope, quiz_id),
          {:ok, filters} <- ResultFilters.parse(params),
          {:ok, pagination} <- Pagination.parse(params) do
-      page = Games.list_quiz_game_history(scope(conn), quiz_id, filters, pagination)
+      page = Games.list_quiz_game_history(scope, quiz_id, filters, pagination)
       render(conn, :quiz_history, page: page)
     end
+  end
+
+  defp path_quiz_id(value) do
+    case ResourceId.cast(value) do
+      {:ok, quiz_id} -> {:ok, quiz_id}
+      :error -> {:error, :not_found}
+    end
+  end
+
+  defp ensure_owned_quiz(%Scope{} = scope, quiz_id) do
+    Quizzes.get_quiz!(scope, quiz_id)
+
+    :ok
+  rescue
+    Ecto.NoResultsError -> {:error, :not_found}
   end
 
   defp scope(conn), do: conn.assigns.current_scope
