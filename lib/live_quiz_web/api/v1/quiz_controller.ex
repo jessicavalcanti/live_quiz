@@ -132,8 +132,12 @@ defmodule LiveQuizWeb.Api.V1.QuizController do
     scope = scope(conn)
 
     with {:ok, %Quiz{} = quiz} <- fetch_quiz_with_questions(scope, id),
-         {:ok, %Quiz{} = quiz} <- Quizzes.update_quiz(scope, quiz, quiz_params(params)) do
-      render(conn, :show, quiz: quiz)
+         {:ok, %Quiz{}} <- Quizzes.update_quiz(scope, quiz, quiz_params(params)),
+         # Read back for the render rather than serializing what the write
+         # returned: the context answers with the quiz it wrote, and this
+         # representation carries the questions alongside it.
+         {:ok, %Quiz{} = updated} <- fetch_quiz_with_questions(scope, id) do
+      render(conn, :show, quiz: updated)
     end
   end
 

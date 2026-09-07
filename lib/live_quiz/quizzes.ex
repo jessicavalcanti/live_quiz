@@ -18,6 +18,7 @@ defmodule LiveQuiz.Quizzes do
   alias LiveQuiz.Quizzes.Question
   alias LiveQuiz.Quizzes.Quiz
   alias LiveQuiz.Repo
+  alias LiveQuiz.ResourceId
 
   @max_questions 50
 
@@ -94,6 +95,8 @@ defmodule LiveQuiz.Quizzes do
   """
   @spec get_quiz!(Scope.t(), integer() | String.t()) :: Quiz.t()
   def get_quiz!(%Scope{} = scope, id) do
+    id = ResourceId.cast!(id, Quiz)
+
     scope
     |> owned_quizzes()
     |> where([q], q.id == ^id)
@@ -153,11 +156,10 @@ defmodule LiveQuiz.Quizzes do
   """
   @spec update_quiz(Scope.t(), Quiz.t(), map()) :: {:ok, Quiz.t()} | {:error, write_error()}
   def update_quiz(%Scope{} = scope, %Quiz{} = quiz, attrs) do
-    true = quiz.owner_id == scope.user.id
+    quiz = fetch_owned_quiz!(scope, quiz.id)
 
     while_unlocked(quiz.id, fn ->
       quiz
-      |> ensure_questions_count()
       |> Quiz.changeset(attrs)
       |> Repo.update()
       |> or_rollback()
@@ -173,11 +175,10 @@ defmodule LiveQuiz.Quizzes do
   """
   @spec delete_quiz(Scope.t(), Quiz.t()) :: {:ok, Quiz.t()} | {:error, write_error()}
   def delete_quiz(%Scope{} = scope, %Quiz{} = quiz) do
-    true = quiz.owner_id == scope.user.id
+    quiz = fetch_owned_quiz!(scope, quiz.id)
 
     while_unlocked(quiz.id, fn ->
       quiz
-      |> ensure_questions_count()
       |> Repo.delete()
       |> or_rollback()
     end)
@@ -225,6 +226,8 @@ defmodule LiveQuiz.Quizzes do
   """
   @spec get_question!(Scope.t(), Quiz.t(), integer() | String.t()) :: Question.t()
   def get_question!(%Scope{} = scope, %Quiz{} = quiz, id) do
+    id = ResourceId.cast!(id, Question)
+
     scope
     |> owned_questions()
     |> where([q, quiz: quiz], quiz.id == ^quiz.id and q.id == ^id)
@@ -246,7 +249,7 @@ defmodule LiveQuiz.Quizzes do
   @spec create_question(Scope.t(), Quiz.t(), map()) ::
           {:ok, Question.t()} | {:error, write_error()} | {:error, :question_limit_reached}
   def create_question(%Scope{} = scope, %Quiz{} = quiz, attrs) do
-    true = quiz.owner_id == scope.user.id
+    quiz = fetch_owned_quiz!(scope, quiz.id)
 
     while_unlocked(quiz.id, fn ->
       if count_questions(quiz) >= @max_questions do
@@ -443,6 +446,21 @@ defmodule LiveQuiz.Quizzes do
     %Question{answer_options: blank_options()}
   end
 
+  # The resource is resolved by id *and* owner here, the way every read function
+  # of this module does, rather than matched on the struct the caller handed
+  # over. `owner_id` on a struct is a field somebody else filled in: a stale
+  # copy, a hand-built one, or one whose field was changed in memory would all
+  # pass a match and none of them proves anything (R32). Somebody else's quiz
+  # raises the same `Ecto.NoResultsError` a read of it would, which is what the
+  # controllers already turn into a 404.
+  defp fetch_owned_quiz!(%Scope{} = scope, id) do
+    scope
+    |> owned_quizzes()
+    |> where([q], q.id == ^id)
+    |> with_questions_count()
+    |> Repo.one!()
+  end
+
   defp fetch_owned_question!(%Scope{} = scope, id) do
     scope
     |> owned_questions()
@@ -551,15 +569,5 @@ defmodule LiveQuiz.Quizzes do
     |> String.replace("\\", "\\\\")
     |> String.replace("%", "\\%")
     |> String.replace("_", "\\_")
-  end
-
-  defp ensure_questions_count(%Quiz{questions_count: count} = quiz) when is_integer(count) do
-    quiz
-  end
-
-  defp ensure_questions_count(%Quiz{} = quiz) do
-    count = Repo.aggregate(from(q in Question, where: q.quiz_id == ^quiz.id), :count)
-
-    %{quiz | questions_count: count}
   end
 end
