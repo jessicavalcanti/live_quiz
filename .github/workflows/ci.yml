@@ -90,6 +90,81 @@ jobs:
       - name: Testes com cobertura mínima de 80%
         run: mix coveralls
 
+  release-smoke:
+    name: Smoke da release empacotada
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: ecto://postgres:postgres@localhost/live_quiz_smoke
+      SECRET_KEY_BASE: smoke-secret-key-base-com-no-minimo-64-caracteres-para-o-teste-de-empacotamento
+      GUARDIAN_SECRET_KEY: smoke-guardian-secret-key-apenas-para-o-teste-de-empacotamento
+      PHX_HOST: localhost
+    services:
+      db:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: live_quiz_smoke
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s
+          --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      # Lint and tests run under MIX_ENV=test, which compiles neither the
+      # production assets nor the release. An application they approve can still
+      # reach for Mix at runtime, ship without its bundle, or fail its first
+      # migration — none of which the suite can see (R48). This builds the very
+      # artifact the demo runs and makes it serve a request.
+      - name: Imagem final
+        run: docker build --target app -t live-quiz-smoke .
+
+      # `DEMO_SEED` is set here on purpose: the seed reaching for Mix is what
+      # R47 was, and the only way to notice it is to run it in a release.
+      - name: Migrações e seed da demonstração
+        run: |
+          docker run --rm --network host \
+            -e DATABASE_URL -e SECRET_KEY_BASE -e GUARDIAN_SECRET_KEY \
+            -e DEMO_SEED=true \
+            live-quiz-smoke bin/live_quiz eval 'LiveQuiz.Release.migrate(); LiveQuiz.Release.seed()'
+
+      - name: A aplicação sobe e responde
+        run: |
+          docker run -d --name smoke --network host \
+            -e DATABASE_URL -e SECRET_KEY_BASE -e GUARDIAN_SECRET_KEY -e PHX_HOST \
+            live-quiz-smoke
+
+          for attempt in $(seq 1 60); do
+            if curl -fsS http://localhost:4000/ >/dev/null; then
+              echo "A aplicação respondeu na tentativa $attempt"
+              exit 0
+            fi
+            sleep 2
+          done
+
+          echo "::error::A release não respondeu em 120s"
+          docker logs smoke
+          exit 1
+
+      # O bundle de produção tem de estar dentro da imagem: um asset ausente é
+      # exatamente o que `MIX_ENV=test` não enxerga.
+      - name: O bundle de produção foi servido
+        run: |
+          curl -fsS http://localhost:4000/ > page.html
+
+          for asset in "/assets/js/app" "/assets/css/app"; do
+            grep -q "$asset" page.html || {
+              echo "::error::A página não referencia $asset — o bundle de produção não está na imagem"
+              docker logs smoke
+              exit 1
+            }
+          done
+
+      - name: Encerra o contêiner
+        if: always()
+        run: docker rm -f smoke || true
+
   audit:
     name: Auditoria de advisories
     runs-on: ubuntu-latest
