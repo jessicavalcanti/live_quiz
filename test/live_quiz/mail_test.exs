@@ -1,9 +1,21 @@
 defmodule LiveQuiz.MailTest do
   @moduledoc """
   A caixa de saída: o que se grava, o que se entrega e o que se desiste (R07).
+
+  `async: false`, e isto é a correção de um defeito e não uma preferência: o
+  bloco "quando o provedor recusa" troca o adaptador do `LiveQuiz.Mailer`, que é
+  **configuração da aplicação inteira**. Rodando em paralelo, qualquer outro
+  caso que mandasse um e-mail nesse intervalo — `user_fixture/1` manda, em
+  quase toda a suíte — recebia a recusa do adaptador deste teste: nenhum e-mail
+  chegava e a linha ficava pendente com uma tentativa gasta. Era intermitente
+  porque dependia do escalonamento, e reprovava sempre em outro módulo.
+
+  O ExUnit roda os casos síncronos depois de todos os assíncronos e um de cada
+  vez, que é a única disposição em que trocar configuração global significa o
+  que este teste diz que significa.
   """
 
-  use LiveQuiz.DataCase, async: true
+  use LiveQuiz.DataCase, async: false
 
   import LiveQuiz.AccountsFixtures
   import Swoosh.TestAssertions
@@ -187,8 +199,9 @@ defmodule LiveQuiz.MailTest do
     |> Map.merge(Map.new(overrides))
   end
 
-  # O adaptador de teste do Swoosh recusa quando o e-mail pede: é o jeito de ter
-  # um provedor indisponível sem esperar por um.
+  # Um provedor indisponível sem esperar por um. A troca é global — vale para
+  # toda a aplicação enquanto durar —, que é a razão de este módulo inteiro ser
+  # síncrono.
   defp failing_mailer(_context) do
     Application.put_env(:live_quiz, LiveQuiz.Mailer, adapter: LiveQuiz.MailTest.RefusingAdapter)
 
