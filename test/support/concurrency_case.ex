@@ -136,6 +136,20 @@ defmodule LiveQuiz.ConcurrencyCase do
     end
   end
 
+  @doc """
+  How many competitors this machine can actually race at once.
+
+  Every competitor holds a connection for as long as its transaction lasts, so
+  the pool is the ceiling — one connection is left over for the test process
+  itself. The pool is sized from `System.schedulers_online/0`, which is why a
+  number that fits a developer's laptop can be three too many on a CI runner:
+  tests ask for this rather than for a number they picked.
+  """
+  @spec max_competitors() :: pos_integer()
+  def max_competitors do
+    Keyword.fetch!(Repo.config(), :pool_size) - 1
+  end
+
   @doc "The pid of the PostgreSQL backend serving the calling process."
   @spec backend_pid() :: integer()
   def backend_pid do
@@ -148,12 +162,11 @@ defmodule LiveQuiz.ConcurrencyCase do
   # pool and time out. Saying that here turns a confusing DBConnection timeout
   # into the actual problem, which is that the test asked for too many.
   defp ensure_pool_fits(count) do
-    pool_size = Keyword.fetch!(Repo.config(), :pool_size)
-
-    if count >= pool_size do
+    if count > max_competitors() do
       raise ArgumentError,
-            "#{count} competitors do not fit the pool of #{pool_size} connections; " <>
-              "a race only needs enough competitors to contend, not one per row"
+            "#{count} competitors do not fit the pool of " <>
+              "#{Keyword.fetch!(Repo.config(), :pool_size)} connections; a race only needs " <>
+              "enough competitors to contend, not one per row — size it with max_competitors/0"
     end
   end
 
