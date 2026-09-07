@@ -4814,7 +4814,9 @@ defmodule LiveQuiz.GamesTest do
 
   # The sandbox lends a single connection, so the tasks below take turns on it
   # rather than truly running at once. What is under test is the outcome the
-  # cross-table rules must produce whatever the interleaving is.
+  # cross-table rules must produce whatever the interleaving is. The races
+  # themselves — two transactions, two backends, real commits in between — are
+  # in `LiveQuiz.GamesConcurrencyTest`.
   defp in_parallel(items, fun) do
     owner = self()
 
