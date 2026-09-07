@@ -9,7 +9,7 @@ defmodule LiveQuiz.Games.GameSessionQuestionTest do
   alias LiveQuiz.Quizzes.Question
 
   defp valid_attrs(attrs) do
-    Enum.into(attrs, %{position: 1, question_text: "Qual é a capital do Brasil?"})
+    Enum.into(attrs, %{position: 1, text: "Qual é a capital do Brasil?"})
   end
 
   defp new_snapshot_question(session, attrs \\ %{}) do
@@ -34,7 +34,7 @@ defmodule LiveQuiz.Games.GameSessionQuestionTest do
 
       assert changeset.valid?
       assert get_change(changeset, :position) == 1
-      assert get_change(changeset, :question_text) == "Qual é a capital do Brasil?"
+      assert get_change(changeset, :text) == "Qual é a capital do Brasil?"
     end
 
     test "requires the position", %{session: session} do
@@ -45,25 +45,25 @@ defmodule LiveQuiz.Games.GameSessionQuestionTest do
     end
 
     test "requires the statement", %{session: session} do
-      changeset = new_snapshot_question(session, %{question_text: nil})
+      changeset = new_snapshot_question(session, %{text: nil})
 
       refute changeset.valid?
-      assert "can't be blank" in errors_on(changeset).question_text
+      assert "can't be blank" in errors_on(changeset).text
     end
 
     test "trims the statement", %{session: session} do
-      changeset = new_snapshot_question(session, %{question_text: "  Capital?  "})
+      changeset = new_snapshot_question(session, %{text: "  Capital?  "})
 
-      assert get_change(changeset, :question_text) == "Capital?"
+      assert get_change(changeset, :text) == "Capital?"
     end
 
     test "keeps a blanked statement invalid on a stored snapshot question", %{session: session} do
       changeset =
-        %GameSessionQuestion{game_session_id: session.id, question_text: "Capital?", position: 1}
-        |> GameSessionQuestion.changeset(%{question_text: nil})
+        %GameSessionQuestion{game_session_id: session.id, text: "Capital?", position: 1}
+        |> GameSessionQuestion.changeset(%{text: nil})
 
       refute changeset.valid?
-      assert "can't be blank" in errors_on(changeset).question_text
+      assert "can't be blank" in errors_on(changeset).text
     end
 
     test "keeps the question it was copied from", %{scope: scope, quiz: quiz, session: session} do
@@ -80,25 +80,25 @@ defmodule LiveQuiz.Games.GameSessionQuestionTest do
 
   describe "changeset/2 statement length" do
     test "rejects an empty statement", %{session: session} do
-      changeset = new_snapshot_question(session, %{question_text: ""})
+      changeset = new_snapshot_question(session, %{text: ""})
 
       refute changeset.valid?
-      assert "can't be blank" in errors_on(changeset).question_text
+      assert "can't be blank" in errors_on(changeset).text
     end
 
     test "accepts a single character", %{session: session} do
-      assert new_snapshot_question(session, %{question_text: "?"}).valid?
+      assert new_snapshot_question(session, %{text: "?"}).valid?
     end
 
     test "accepts exactly 500 characters", %{session: session} do
-      assert new_snapshot_question(session, %{question_text: String.duplicate("a", 500)}).valid?
+      assert new_snapshot_question(session, %{text: String.duplicate("a", 500)}).valid?
     end
 
     test "rejects 501 characters", %{session: session} do
-      changeset = new_snapshot_question(session, %{question_text: String.duplicate("a", 501)})
+      changeset = new_snapshot_question(session, %{text: String.duplicate("a", 501)})
 
       refute changeset.valid?
-      assert "should be at most 500 character(s)" in errors_on(changeset).question_text
+      assert "should be at most 500 character(s)" in errors_on(changeset).text
     end
   end
 
@@ -122,7 +122,7 @@ defmodule LiveQuiz.Games.GameSessionQuestionTest do
     test "refuses a non-positive position even without the changeset", %{session: session} do
       assert_raise Ecto.ConstraintError, ~r/position_positive/, fn ->
         %GameSessionQuestion{game_session_id: session.id}
-        |> Ecto.Changeset.change(position: 0, question_text: "Capital?")
+        |> Ecto.Changeset.change(position: 0, text: "Capital?")
         |> Repo.insert()
       end
     end

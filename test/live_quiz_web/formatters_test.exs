@@ -28,4 +28,10 @@ defmodule LiveQuizWeb.FormattersTest do
       assert Formatters.format_datetime(~U[2026-08-30 12:05:00Z]) == "30/08/2026 09:05"
     end
   end
+
+  describe "option_letter/1" do
+    test "labels the four alternatives of a question from A to D" do
+      assert Enum.map(1..4, &Formatters.option_letter/1) == ["A", "B", "C", "D"]
+    end
+  end
 end

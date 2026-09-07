@@ -42,6 +42,7 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
   alias LiveQuiz.Games.Presence
   alias LiveQuizWeb.Formatters
   alias LiveQuizWeb.GameOver
+  alias LiveQuizWeb.GameSessionLive.MatchAssigns
   alias LiveQuizWeb.QuestionResults
   alias LiveQuizWeb.Ranking
   alias LiveQuizWeb.ShareSession
@@ -135,56 +136,19 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
     end
   end
 
-  # The tally is only ever asked for once the question is done with: while it is
-  # open the context refuses it (AD-46), and the screen has no answer key to
-  # draw until the reveal. A refusal is read as "nothing to reveal yet" rather
-  # than as an error, because the very question this screen believed was closed
-  # may have been reopened by nobody but a race with the timer.
-  defp load_results(socket, %{question_state: :closed, question_number: position}) do
-    %{current_scope: scope, session: session} = socket.assigns
+  # Who this screen is watching as. It is the whole difference between the host
+  # and the player when it comes to reading the match, which is why everything
+  # else lives in `MatchAssigns`.
+  defp viewer(socket), do: socket.assigns.current_scope
 
-    case Games.question_results(session, position, scope) do
-      {:ok, results} -> assign(socket, :results, results)
-      {:error, _nothing_to_reveal} -> assign(socket, :results, nil)
-    end
-  end
+  defp load_results(socket, state), do: MatchAssigns.assign_results(socket, viewer(socket), state)
 
-  defp load_results(socket, _open_or_pending), do: assign(socket, :results, nil)
+  defp load_ranking(socket, state), do: MatchAssigns.assign_ranking(socket, viewer(socket), state)
 
-  defp load_ranking(socket, %{question_state: :closed}) do
-    %{current_scope: scope, session: session} = socket.assigns
+  defp load_final_ranking(socket, session),
+    do: MatchAssigns.assign_ranking(socket, viewer(socket), session)
 
-    case Games.current_ranking(session, scope) do
-      {:ok, ranking} -> assign(socket, :ranking, ranking)
-      {:error, :unauthorized} -> assign(socket, :ranking, nil)
-    end
-  end
-
-  defp load_ranking(socket, _state), do: assign(socket, :ranking, nil)
-
-  defp load_final_ranking(socket, %GameSession{status: :finished} = session) do
-    case Games.current_ranking(session, socket.assigns.current_scope) do
-      {:ok, ranking} -> assign(socket, :ranking, ranking)
-      {:error, :unauthorized} -> assign(socket, :ranking, nil)
-    end
-  end
-
-  defp load_final_ranking(socket, _session), do: assign(socket, :ranking, nil)
-
-  # What the match added up to, read only when the room is over: asking for it
-  # while it is running would cost a query per event for a number no screen of
-  # this phase shows before the ending.
-  defp load_summary(socket) do
-    %{current_scope: scope, session: session} = socket.assigns
-
-    if GameSession.active?(session) do
-      assign(socket, :summary, nil)
-    else
-      {:ok, summary} = Games.game_summary(session, scope)
-
-      assign(socket, :summary, summary)
-    end
-  end
+  defp load_summary(socket), do: MatchAssigns.assign_summary(socket, viewer(socket))
 
   @impl true
   def handle_event("start", _params, socket) do
@@ -350,8 +314,6 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
   def handle_info({:ranking_updated, ranking}, socket),
     do: {:noreply, assign(socket, :ranking, ranking)}
 
-  def handle_info({:question_scored, _session, _ranking}, socket), do: {:noreply, socket}
-
   # The one event of the match that carries no struct (AD-45): with twenty-five
   # people answering, all this screen does with it is redraw a number.
   def handle_info({:answer_submitted, _session_id, count}, socket) do
@@ -484,7 +446,7 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
               </span>
             </p>
 
-            <p :if={closed?(@game_state)} id="question-closed-badge" class="text-lg text-warning">
+            <p :if={revealed?(@game_state)} id="question-closed-badge" class="text-lg text-warning">
               Pergunta encerrada
             </p>
           </header>
@@ -493,7 +455,7 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
             {@game_state.question_text}
           </p>
 
-          <ul :if={not closed?(@game_state)} id="question-options" class="mt-6 space-y-3">
+          <ul :if={not revealed?(@game_state)} id="question-options" class="mt-6 space-y-3">
             <li
               :for={option <- @game_state.options}
               id={"option-#{option.id}"}
@@ -506,7 +468,7 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
                 aria-hidden="true"
                 class="flex size-9 shrink-0 items-center justify-center rounded-lg bg-base-200 font-bold"
               >
-                {option_letter(option.position)}
+                {Formatters.option_letter(option.position)}
               </span>
 
               <span class="min-w-0 break-words">{option.text}</span>
@@ -522,7 +484,7 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
 
           <QuestionResults.question_results :if={@results} results={@results} viewer={:host} />
 
-          <Ranking.ranking :if={closed?(@game_state) and @ranking} ranking={@ranking} />
+          <Ranking.ranking :if={revealed?(@game_state) and @ranking} ranking={@ranking} />
 
           <p
             id="answers-count"
@@ -778,7 +740,9 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
   # make the screen jump in the middle of the presentation.
   defp pending?(%{question_state: state}), do: state == :pending
 
-  defp closed?(%{question_state: state}), do: state == :closed
+  # The server said the question is over and the answer key is on screen. Not
+  # the same question the player screen asks — see `answers_closed?/1` there.
+  defp revealed?(%{question_state: state}), do: state == :closed
 
   defp counting?(%{question_state: :open, ends_at: %DateTime{}}), do: true
   defp counting?(%{}), do: false
@@ -799,7 +763,6 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
 
   # A question always freezes exactly four alternatives, so the letters the host
   # reads out loud never run past the beginning of the alphabet.
-  defp option_letter(position), do: <<?A + position - 1>>
 
   defp hint(%{access_lost?: true}), do: nil
 

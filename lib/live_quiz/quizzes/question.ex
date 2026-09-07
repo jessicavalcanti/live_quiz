@@ -13,6 +13,7 @@ defmodule LiveQuiz.Quizzes.Question do
 
   import Ecto.Changeset
 
+  alias LiveQuiz.Changesets
   alias LiveQuiz.Quizzes.AnswerOption
   alias LiveQuiz.Quizzes.Quiz
 
@@ -40,7 +41,7 @@ defmodule LiveQuiz.Quizzes.Question do
   def changeset(question, attrs) do
     question
     |> cast(attrs, [:text, :position])
-    |> update_change(:text, &trim/1)
+    |> update_change(:text, &Changesets.trim/1)
     |> validate_required([:text, :position])
     |> validate_length(:text, min: 3, max: 500)
     |> validate_number(:position, greater_than: 0)
@@ -100,7 +101,4 @@ defmodule LiveQuiz.Quizzes.Question do
       add_error(changeset, :answer_options, "as alternativas não podem ter textos repetidos")
     end
   end
-
-  defp trim(value) when is_binary(value), do: String.trim(value)
-  defp trim(value), do: value
 end

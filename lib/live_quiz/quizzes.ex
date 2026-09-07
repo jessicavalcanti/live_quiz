@@ -13,14 +13,12 @@ defmodule LiveQuiz.Quizzes do
   alias Ecto.Changeset
   alias LiveQuiz.Accounts.Scope
   alias LiveQuiz.Games.QuizLock
+  alias LiveQuiz.Pagination
   alias LiveQuiz.Quizzes.AnswerOption
   alias LiveQuiz.Quizzes.Question
   alias LiveQuiz.Quizzes.Quiz
   alias LiveQuiz.Repo
 
-  @default_page 1
-  @default_per_page 20
-  @max_per_page 100
   @max_questions 50
 
   @typedoc """
@@ -51,17 +49,19 @@ defmodule LiveQuiz.Quizzes do
 
   ## Options
 
-    * `:page` — defaults to `#{@default_page}`, minimum `1`
-    * `:per_page` — defaults to `#{@default_per_page}`, from `1` to `#{@max_per_page}`
+    * `:page` — defaults to `#{Pagination.default_page()}`, minimum `1`
+    * `:per_page` — defaults to `#{Pagination.default_per_page()}`, from `1` to
+      `#{Pagination.max_per_page()}`
     * `:search` — case-insensitive match on the title; blank terms are ignored
 
   Out-of-range or non-numeric pagination values fall back to the defaults, and a
-  page past the end returns `entries: []` rather than an error.
+  page past the end returns `entries: []` rather than an error. The API refuses
+  those values before getting here (`LiveQuiz.Pagination.parse/2`); the leniency
+  is for callers whose numbers come from an address somebody typed.
   """
   @spec list_quizzes(Scope.t(), keyword()) :: page()
   def list_quizzes(%Scope{} = scope, opts \\ []) do
-    page = normalize_page(Keyword.get(opts, :page))
-    per_page = normalize_per_page(Keyword.get(opts, :per_page))
+    %{page: page, per_page: per_page} = Pagination.normalize(opts)
 
     query = scope |> owned_quizzes() |> search_by_title(Keyword.get(opts, :search))
 
@@ -552,34 +552,6 @@ defmodule LiveQuiz.Quizzes do
     |> String.replace("%", "\\%")
     |> String.replace("_", "\\_")
   end
-
-  defp normalize_page(value) do
-    case to_integer(value) do
-      page when is_integer(page) and page >= 1 -> page
-      _other -> @default_page
-    end
-  end
-
-  defp normalize_per_page(value) do
-    case to_integer(value) do
-      per_page when is_integer(per_page) and per_page >= 1 and per_page <= @max_per_page ->
-        per_page
-
-      _other ->
-        @default_per_page
-    end
-  end
-
-  defp to_integer(value) when is_integer(value), do: value
-
-  defp to_integer(value) when is_binary(value) do
-    case Integer.parse(value) do
-      {parsed, ""} -> parsed
-      _other -> nil
-    end
-  end
-
-  defp to_integer(_value), do: nil
 
   defp ensure_questions_count(%Quiz{questions_count: count} = quiz) when is_integer(count) do
     quiz

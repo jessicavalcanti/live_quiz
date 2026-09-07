@@ -65,7 +65,7 @@ defmodule LiveQuizWeb.QuestionResults do
               aria-hidden="true"
               class="flex size-8 shrink-0 items-center justify-center rounded-lg bg-base-200 font-bold"
             >
-              {option_letter(option.position)}
+              {Formatters.option_letter(option.position)}
             </span>
 
             <span class="min-w-0 break-words font-medium">{option.text}</span>
@@ -138,5 +138,4 @@ defmodule LiveQuizWeb.QuestionResults do
 
   # A question always freezes exactly four alternatives, so the letters never
   # run past the beginning of the alphabet.
-  defp option_letter(position), do: <<?A + position - 1>>
 end

@@ -719,37 +719,4 @@ defmodule LiveQuiz.QuizzesTest do
       :count
     )
   end
-
-  # Counts only the queries issued by this test process, so a concurrent async
-  # test cannot inflate the number.
-  defp count_queries(fun) do
-    parent = self()
-    ref = make_ref()
-    handler_id = {__MODULE__, ref}
-
-    :telemetry.attach(
-      handler_id,
-      [:live_quiz, :repo, :query],
-      fn _event, _measurements, _metadata, _config ->
-        if self() == parent, do: send(parent, {ref, :query})
-      end,
-      nil
-    )
-
-    try do
-      fun.()
-    after
-      :telemetry.detach(handler_id)
-    end
-
-    drain(ref, 0)
-  end
-
-  defp drain(ref, count) do
-    receive do
-      {^ref, :query} -> drain(ref, count + 1)
-    after
-      0 -> count
-    end
-  end
 end

@@ -212,7 +212,7 @@ defmodule LiveQuiz.Games.QuestionTimer do
     cond do
       not GameSession.question_open?(session) -> :done
       session.current_question_position != state.position -> :done
-      due?(session) -> close(state)
+      GameSession.question_due?(session) -> close(state)
       true -> {:wait, schedule(%{state | ends_at: session.current_question_ends_at})}
     end
   end
@@ -229,12 +229,6 @@ defmodule LiveQuiz.Games.QuestionTimer do
       )
 
       :done
-  end
-
-  defp due?(%GameSession{current_question_ends_at: nil}), do: false
-
-  defp due?(%GameSession{current_question_ends_at: ends_at}) do
-    DateTime.compare(DateTime.utc_now(), ends_at) != :lt
   end
 
   # A deadline already in the past becomes `0` instead of a negative interval,

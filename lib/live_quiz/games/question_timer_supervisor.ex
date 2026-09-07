@@ -85,7 +85,7 @@ defmodule LiveQuiz.Games.QuestionTimerSupervisor do
   end
 
   defp settle(%GameSession{} = session, acc) do
-    if due?(session), do: close(session, acc), else: rearm(session, acc)
+    if GameSession.question_due?(session), do: close(session, acc), else: rearm(session, acc)
   rescue
     error -> log_failure("recovering match #{inspect(session.id)}", error, __STACKTRACE__, acc)
   end
@@ -102,12 +102,6 @@ defmodule LiveQuiz.Games.QuestionTimerSupervisor do
       {:ok, _pid} -> Map.update!(acc, :scheduled, &(&1 + 1))
       {:error, _reason} -> acc
     end
-  end
-
-  defp due?(%GameSession{current_question_ends_at: nil}), do: false
-
-  defp due?(%GameSession{current_question_ends_at: ends_at}) do
-    DateTime.compare(DateTime.utc_now(), ends_at) != :lt
   end
 
   defp log_failure(what, error, stacktrace, acc \\ @empty) do

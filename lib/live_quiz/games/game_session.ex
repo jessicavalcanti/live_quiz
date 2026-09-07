@@ -22,6 +22,7 @@ defmodule LiveQuiz.Games.GameSession do
   import Ecto.Changeset
 
   alias LiveQuiz.Accounts.User
+  alias LiveQuiz.Changesets
   alias LiveQuiz.Games.GameResult
   alias LiveQuiz.Games.GameSessionQuestion
   alias LiveQuiz.Games.Participant
@@ -80,7 +81,13 @@ defmodule LiveQuiz.Games.GameSession do
   @spec active_statuses() :: [atom()]
   def active_statuses, do: @active_statuses
 
-  @doc "The statuses a room is over in, by any reason."
+  @doc """
+  The statuses a room is over in, by any reason.
+
+  `LiveQuiz.Games` guards its closing transition with this list, so a status
+  that does not actually end a room cannot be written by the `UPDATE` that is
+  supposed to end one.
+  """
   @spec closed_statuses() :: [atom()]
   def closed_statuses, do: @closed_statuses
 
@@ -121,18 +128,56 @@ defmodule LiveQuiz.Games.GameSession do
   def question_open?(%__MODULE__{}), do: false
 
   @doc """
-  Whether the match is showing a closed question and waiting for the host.
+  Whether the deadline written on the room has already passed.
 
-  This is the state between the reveal and the next advance; it is not reached
-  by a match that is over, which shows its ending screen instead.
+  Only about the clock: a room with no deadline running answers `false`, and a
+  question whose instant is behind us answers `true` whether or not anybody has
+  closed it yet. Combining that with `question_open?/1` is what tells a caller
+  there is something to close.
+
+  It lives here because three callers ask it — the context before closing by
+  timeout, the timer before firing and the supervisor before re-arming on boot
+  — and a deadline they disagreed about would be a question closed twice or
+  never.
   """
-  @spec question_closed?(t()) :: boolean()
-  def question_closed?(%__MODULE__{status: :in_progress} = session) do
-    not is_nil(session.current_question_position) and
-      not is_nil(session.current_question_closed_at)
+  @spec question_due?(t()) :: boolean()
+  def question_due?(%__MODULE__{current_question_ends_at: nil}), do: false
+
+  def question_due?(%__MODULE__{current_question_ends_at: ends_at}) do
+    DateTime.compare(DateTime.utc_now(), ends_at) != :lt
   end
 
-  def question_closed?(%__MODULE__{}), do: false
+  @doc """
+  The match as a running one, or why it is not.
+
+  A guard rather than a predicate because every caller of it is a `with` whose
+  next step needs the session: reading it back after a boolean would be a second
+  chance for the status to have changed.
+  """
+  @spec ensure_running(t()) :: {:ok, t()} | {:error, :invalid_status}
+  def ensure_running(%__MODULE__{status: :in_progress} = session), do: {:ok, session}
+  def ensure_running(_over_or_gone), do: {:error, :invalid_status}
+
+  @doc """
+  Whether the question at `position` is done being answered.
+
+  A question the match has already moved past is settled by definition; the one
+  it is sitting on is settled only once it has been closed; one it has not
+  reached yet is not settled at all. This is what keeps an answer key from
+  leaking through a screen or an endpoint that asks too early (AD-46).
+  """
+  @spec ensure_question_settled(t(), pos_integer()) :: :ok | {:error, :question_open}
+  def ensure_question_settled(%__MODULE__{current_question_position: nil}, _position),
+    do: {:error, :question_open}
+
+  def ensure_question_settled(%__MODULE__{current_question_position: current} = session, position) do
+    cond do
+      position < current -> :ok
+      position > current -> {:error, :question_open}
+      question_open?(session) -> {:error, :question_open}
+      true -> :ok
+    end
+  end
 
   @doc """
   Casts and validates the attributes given when a room is opened.
@@ -145,8 +190,8 @@ defmodule LiveQuiz.Games.GameSession do
   def create_changeset(session, attrs) do
     session
     |> cast(attrs, [:quiz_title, :join_code, :question_duration_seconds])
-    |> update_change(:quiz_title, &trim/1)
-    |> update_change(:join_code, &upcase/1)
+    |> update_change(:quiz_title, &Changesets.trim/1)
+    |> update_change(:join_code, &Changesets.upcase/1)
     |> validate_required([:quiz_title, :join_code, :host_id, :question_duration_seconds])
     |> validate_length(:quiz_title, min: 3, max: 120)
     |> validate_inclusion(:question_duration_seconds, @question_durations,
@@ -194,7 +239,13 @@ defmodule LiveQuiz.Games.GameSession do
 
   Going live stamps `started_at`; closing the room, by any reason, stamps
   `finished_at` and drops any pending expiration. Pass `:at` to control the
-  instant, which the tests and the expiration sweeper (F2-06) rely on.
+  instant.
+
+  The running application never moves a room through here: every transition it
+  makes is a single `UPDATE` guarded by the status it is allowed to come from,
+  because a read followed by a write would let two hosts both win. What this
+  changeset is for is building a room already in a given state — which is what
+  the fixtures do — without restating the timestamp rules that go with it.
   """
   @spec status_changeset(t(), atom(), keyword()) :: Ecto.Changeset.t()
   def status_changeset(session, status, opts \\ []) do
@@ -267,10 +318,4 @@ defmodule LiveQuiz.Games.GameSession do
       message: "você já possui uma sala ativa"
     )
   end
-
-  defp trim(value) when is_binary(value), do: String.trim(value)
-  defp trim(value), do: value
-
-  defp upcase(value) when is_binary(value), do: value |> String.trim() |> String.upcase()
-  defp upcase(value), do: value
 end

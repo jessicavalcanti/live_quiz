@@ -335,30 +335,6 @@ defmodule LiveQuiz.GamesTest do
     end
   end
 
-  describe "get_game_session!/2" do
-    test "devolve a sala do host do escopo" do
-      scope = user_scope_fixture()
-      session = game_session_fixture(%{host: scope.user})
-
-      assert Games.get_game_session!(scope, session.id).id == session.id
-    end
-
-    test "levanta NoResultsError para a sala de outra pessoa" do
-      session = game_session_fixture()
-      other_scope = user_scope_fixture()
-
-      assert_raise Ecto.NoResultsError, fn ->
-        Games.get_game_session!(other_scope, session.id)
-      end
-    end
-
-    test "levanta NoResultsError para um id inexistente" do
-      scope = user_scope_fixture()
-
-      assert_raise Ecto.NoResultsError, fn -> Games.get_game_session!(scope, 0) end
-    end
-  end
-
   describe "get_active_session_for_host/1" do
     test "devolve a sala ativa do host" do
       scope = user_scope_fixture()
@@ -1937,7 +1913,7 @@ defmodule LiveQuiz.GamesTest do
 
       assert Enum.map(questions, & &1.position) == [1, 2, 3]
 
-      assert Enum.map(questions, & &1.question_text) == [
+      assert Enum.map(questions, & &1.text) == [
                "Pergunta 1 do quiz",
                "Pergunta 2 do quiz",
                "Pergunta 3 do quiz"
@@ -2036,7 +2012,7 @@ defmodule LiveQuiz.GamesTest do
       )
 
       assert {:ok, frozen} = Games.get_snapshot_question(started, 1)
-      assert frozen.question_text == "Pergunta 1 do quiz"
+      assert frozen.text == "Pergunta 1 do quiz"
       assert List.first(Enum.map(frozen.answer_options, & &1.text)) == "Brasília"
     end
 
@@ -2155,7 +2131,7 @@ defmodule LiveQuiz.GamesTest do
       assert {:ok, question} = Games.get_snapshot_question(session, 2)
 
       assert question.position == 2
-      assert question.question_text == "Pergunta 2 do quiz"
+      assert question.text == "Pergunta 2 do quiz"
       assert length(question.answer_options) == 4
     end
 
@@ -2188,7 +2164,7 @@ defmodule LiveQuiz.GamesTest do
       questions = Games.list_snapshot_questions(session)
 
       assert Enum.map(questions, & &1.position) == [1, 2, 3]
-      assert List.first(Enum.map(questions, & &1.question_text)) == "Pergunta 1 do quiz"
+      assert List.first(Enum.map(questions, & &1.text)) == "Pergunta 1 do quiz"
       assert Enum.all?(questions, &is_nil(&1.question_id))
       assert length(Enum.flat_map(questions, & &1.answer_options)) == 12
       assert {:ok, %{position: 1}} = Games.get_snapshot_question(session, 1)
@@ -3152,7 +3128,7 @@ defmodule LiveQuiz.GamesTest do
       assert closed.current_question_position == 1
       assert closed.current_question_closed_at
       refute GameSession.question_open?(closed)
-      assert GameSession.question_closed?(closed)
+      refute GameSession.question_open?(closed)
     end
 
     test "encerrar de novo não mexe no instante registrado", %{scope: scope, session: session} do
@@ -4050,96 +4026,6 @@ defmodule LiveQuiz.GamesTest do
     end
   end
 
-  describe "leitura das respostas da pergunta corrente" do
-    setup :open_match
-
-    test "get_current_answer/2 devolve a escolha que ficou", %{
-      session: session,
-      questions: questions,
-      participant: participant
-    } do
-      assert is_nil(Games.get_current_answer(session, participant))
-
-      first = option_at(questions, 1, 1)
-      second = option_at(questions, 1, 4)
-
-      assert {:ok, _recorded} = Games.answer_question(participant, first.id, 25)
-
-      assert %Answer{game_session_answer_option_id: chosen} =
-               Games.get_current_answer(session, participant)
-
-      assert chosen == first.id
-
-      assert {:ok, _swapped} = Games.answer_question(participant, second.id, 25)
-
-      assert %Answer{game_session_answer_option_id: swapped} =
-               Games.get_current_answer(session, participant)
-
-      assert swapped == second.id
-    end
-
-    test "get_current_answer/2 é nil antes do primeiro avanço" do
-      %{session: session} = match_of(3)
-      participant = participant_fixture(session)
-
-      assert is_nil(Games.get_current_answer(session, participant))
-    end
-
-    test "get_current_answer/2 ignora a resposta da pergunta anterior", %{
-      scope: scope,
-      session: session,
-      questions: questions,
-      participant: participant
-    } do
-      assert {:ok, _first} = Games.answer_question(participant, option_at(questions, 1, 1).id, 25)
-      assert {:ok, second} = Games.advance_question(scope, session, 1)
-
-      assert is_nil(Games.get_current_answer(second, participant))
-    end
-
-    test "current_answers_count/1 conta zero, um e vinte e cinco" do
-      %{session: session} = match_of(3)
-      assert Games.current_answers_count(session) == 0
-
-      %{session: open, questions: questions, participants: participants} = open_match_with(25)
-      assert Games.current_answers_count(open) == 0
-
-      option = option_at(questions, 1, 1)
-      [first | rest] = participants
-
-      assert {:ok, _one} = Games.answer_question(first, option.id, 0)
-      assert Games.current_answers_count(open) == 1
-
-      for participant <- rest do
-        assert {:ok, _more} = Games.answer_question(participant, option.id, 0)
-      end
-
-      assert Games.current_answers_count(open) == 25
-    end
-
-    test "answered_participant_ids/1 ignora as respostas das perguntas anteriores" do
-      %{scope: scope, session: session, questions: questions, participants: [a, b]} =
-        open_match_with(2)
-
-      assert Games.answered_participant_ids(session) == MapSet.new()
-
-      assert {:ok, _first} = Games.answer_question(a, option_at(questions, 1, 1).id, 0)
-      assert Games.answered_participant_ids(session) == MapSet.new([a.id])
-
-      assert {:ok, second} = Games.advance_question(scope, session, 1)
-      assert Games.answered_participant_ids(second) == MapSet.new()
-
-      assert {:ok, _also} = Games.answer_question(b, option_at(questions, 2, 3).id, 0)
-      assert Games.answered_participant_ids(second) == MapSet.new([b.id])
-    end
-
-    test "answered_participant_ids/1 é vazio antes do primeiro avanço" do
-      %{session: session} = match_of(3)
-
-      assert Games.answered_participant_ids(session) == MapSet.new()
-    end
-  end
-
   describe "eventos da resposta" do
     test "cada resposta publica answer_submitted com a contagem da pergunta" do
       %{session: session, questions: questions, participants: [a, b]} = open_match_with(2)
@@ -4183,7 +4069,7 @@ defmodule LiveQuiz.GamesTest do
 
       refute_receive {:answer_submitted, _id, _count}, 50
       refute_receive {:question_closed, _repeated}, 50
-      assert is_nil(Games.get_current_answer(closed, participant))
+      assert {:ok, %{my_answer_option_id: nil}} = Games.game_state(closed, participant)
     end
   end
 

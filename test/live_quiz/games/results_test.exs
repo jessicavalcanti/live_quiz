@@ -28,7 +28,11 @@ defmodule LiveQuiz.Games.ResultsTest do
 
     assert {:ok, result} = Games.get_game_result(Scope.for_user(host), session.id, participant.id)
     assert result.quiz_title == session.quiz_title
-    assert result.question_results["1"]["question"] == question.question_text
+    assert result.question_results["1"]["question"] == question.text
+
+    # As alternativas congeladas vivem uma vez em game_session_answer_options,
+    # não replicadas dentro do resultado de cada participação.
+    refute Map.has_key?(result.question_results["1"], "options")
     assert result.question_results["1"]["answer"] == option.text
   end
 

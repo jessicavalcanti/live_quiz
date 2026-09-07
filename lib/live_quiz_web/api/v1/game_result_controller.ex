@@ -10,11 +10,14 @@ defmodule LiveQuizWeb.Api.V1.GameResultController do
   use OpenApiSpex.ControllerSpecs
 
   alias LiveQuiz.Games
+  alias LiveQuiz.Games.ResultFilters
+  alias LiveQuiz.Pagination
   alias LiveQuizWeb.Api.V1.Schemas.ErrorResponse
   alias LiveQuizWeb.Api.V1.Schemas.GameHistoryResponse
   alias LiveQuizWeb.Api.V1.Schemas.GameResultListResponse
   alias LiveQuizWeb.Api.V1.Schemas.GameResultResponse
   alias LiveQuizWeb.Api.V1.Schemas.RankingResponse
+  alias LiveQuizWeb.Api.Viewer
 
   action_fallback LiveQuizWeb.Api.FallbackController
   tags ["Resultados"]
@@ -60,7 +63,7 @@ defmodule LiveQuizWeb.Api.V1.GameResultController do
 
   def ranking(conn, %{"code" => code}) do
     with {:ok, session} <- Games.get_match_by_code(code),
-         {:ok, ranking} <- Games.current_ranking(session, viewer(conn)) do
+         {:ok, ranking} <- Viewer.read(conn, &Games.current_ranking(session, &1)) do
       render(conn, :ranking, ranking: ranking)
     end
   end
@@ -118,8 +121,8 @@ defmodule LiveQuizWeb.Api.V1.GameResultController do
     ]
 
   def my_history(conn, params) do
-    with {:ok, filters} <- filters(params),
-         {:ok, pagination} <- pagination(params) do
+    with {:ok, filters} <- ResultFilters.parse(params),
+         {:ok, pagination} <- Pagination.parse(params) do
       page = Games.list_game_results(scope(conn), filters, pagination)
       render(conn, :history, page: page)
     end
@@ -140,61 +143,13 @@ defmodule LiveQuizWeb.Api.V1.GameResultController do
     ]
 
   def quiz_history(conn, %{"quiz_id" => quiz_id} = params) do
-    with {:ok, quiz_id} <- positive_integer(quiz_id),
-         {:ok, filters} <- filters(params),
-         {:ok, pagination} <- pagination(params) do
+    with {:ok, quiz_id} <- ResultFilters.required_quiz_id(quiz_id),
+         {:ok, filters} <- ResultFilters.parse(params),
+         {:ok, pagination} <- Pagination.parse(params) do
       page = Games.list_quiz_game_history(scope(conn), quiz_id, filters, pagination)
       render(conn, :quiz_history, page: page)
     end
   end
 
-  defp viewer(conn), do: conn.assigns[:current_scope] || conn.assigns[:current_participant]
   defp scope(conn), do: conn.assigns.current_scope
-
-  defp pagination(params) do
-    with {:ok, page} <- optional_positive_integer(params["page"]),
-         {:ok, per_page} <- optional_positive_integer(params["per_page"]),
-         :ok <- valid_per_page(per_page) do
-      {:ok, %{page: page, per_page: per_page}}
-    end
-  end
-
-  defp valid_per_page(nil), do: :ok
-  defp valid_per_page(value) when value in 1..100, do: :ok
-  defp valid_per_page(_value), do: {:error, :invalid_filter}
-
-  defp filters(params) do
-    with {:ok, quiz_id} <- optional_positive_integer(params["quiz_id"]),
-         {:ok, from} <- optional_date(params["from"]),
-         {:ok, to} <- optional_date(params["to"]) do
-      {:ok, %{quiz_id: quiz_id, from: from, to: to}}
-    end
-  end
-
-  defp optional_positive_integer(nil), do: {:ok, nil}
-  defp optional_positive_integer(""), do: {:ok, nil}
-  defp optional_positive_integer(value), do: positive_integer(value)
-
-  defp positive_integer(value) when is_integer(value) and value > 0, do: {:ok, value}
-
-  defp positive_integer(value) when is_binary(value) do
-    case Integer.parse(value) do
-      {integer, ""} when integer > 0 -> {:ok, integer}
-      _ -> {:error, :invalid_filter}
-    end
-  end
-
-  defp positive_integer(_value), do: {:error, :invalid_filter}
-
-  defp optional_date(nil), do: {:ok, nil}
-  defp optional_date(""), do: {:ok, nil}
-
-  defp optional_date(value) when is_binary(value) do
-    case Date.from_iso8601(value) do
-      {:ok, date} -> {:ok, DateTime.new!(date, ~T[00:00:00], "Etc/UTC")}
-      _ -> {:error, :invalid_filter}
-    end
-  end
-
-  defp optional_date(_value), do: {:error, :invalid_filter}
 end

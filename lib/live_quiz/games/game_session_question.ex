@@ -21,6 +21,7 @@ defmodule LiveQuiz.Games.GameSessionQuestion do
 
   import Ecto.Changeset
 
+  alias LiveQuiz.Changesets
   alias LiveQuiz.Games.Answer
   alias LiveQuiz.Games.GameSession
   alias LiveQuiz.Games.GameSessionAnswerOption
@@ -28,11 +29,11 @@ defmodule LiveQuiz.Games.GameSessionQuestion do
 
   @type t :: %__MODULE__{}
 
-  @question_text_max_length 500
+  @text_max_length 500
 
   schema "game_session_questions" do
     field :position, :integer
-    field :question_text, :string
+    field :text, :string
     field :scored_at, :utc_datetime_usec
 
     belongs_to :game_session, GameSession
@@ -47,18 +48,21 @@ defmodule LiveQuiz.Games.GameSessionQuestion do
   @doc """
   Casts and validates the snapshot of one question.
 
-  `question_text` copies the statement as it was, so it accepts anything the
-  question of phase 1 accepts — up to #{@question_text_max_length} characters.
+  `text` copies the statement as it was, up to #{@text_max_length} characters.
+  The floor is lower than the one `LiveQuiz.Quizzes.Question` enforces on the
+  way in: this is a copy of something that was already accepted, and refusing it
+  now would mean a match that cannot be started because of a rule that changed
+  after the question was written.
   `game_session_id` comes from the caller, either set on the struct or filled in
   by the association, and is never cast from outside.
   """
   @spec changeset(t(), map()) :: Ecto.Changeset.t()
   def changeset(question, attrs) do
     question
-    |> cast(attrs, [:position, :question_text, :question_id])
-    |> update_change(:question_text, &trim/1)
-    |> validate_required([:position, :question_text])
-    |> validate_length(:question_text, min: 1, max: @question_text_max_length)
+    |> cast(attrs, [:position, :text, :question_id])
+    |> update_change(:text, &Changesets.trim/1)
+    |> validate_required([:position, :text])
+    |> validate_length(:text, min: 1, max: @text_max_length)
     |> validate_number(:position, greater_than: 0)
     |> assoc_constraint(:game_session)
     |> assoc_constraint(:question)
@@ -71,7 +75,4 @@ defmodule LiveQuiz.Games.GameSessionQuestion do
       message: "deve ser maior que zero"
     )
   end
-
-  defp trim(value) when is_binary(value), do: String.trim(value)
-  defp trim(value), do: value
 end
