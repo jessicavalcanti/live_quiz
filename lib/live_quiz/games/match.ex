@@ -54,6 +54,7 @@ defmodule LiveQuiz.Games.Match do
   alias LiveQuiz.Games.QuestionTimer
   alias LiveQuiz.Games.Room
   alias LiveQuiz.Games.Scoring
+  alias LiveQuiz.Games.Telemetry
   alias LiveQuiz.Games.Topic
   alias LiveQuiz.Quizzes
   alias LiveQuiz.Quizzes.Question
@@ -207,6 +208,10 @@ defmodule LiveQuiz.Games.Match do
   def advance_question(%Scope{} = scope, %GameSession{} = session, expected_position, opts \\ [])
       when (is_nil(expected_position) or
               (is_integer(expected_position) and expected_position > 0)) and is_list(opts) do
+    Telemetry.transition(:advance, fn -> advance(scope, session, expected_position, opts) end)
+  end
+
+  defp advance(%Scope{} = scope, %GameSession{} = session, expected_position, opts) do
     with {:ok, hosted} <- Room.fetch_hosted(scope, session),
          {:ok, {advanced, effects}} <- open_next_question(hosted, expected_position, opts) do
       publish_effects(advanced.id, effects)
@@ -248,12 +253,17 @@ defmodule LiveQuiz.Games.Match do
           {:ok, GameSession.t()}
           | {:error, :unauthorized | :invalid_status | :no_open_question | :stale | :access_lost}
   def close_question(%Scope{} = scope, %GameSession{} = session, opts \\ []) do
+    Telemetry.transition(:close, fn -> close_by_host(scope, session, opts) end)
+  end
+
+  defp close_by_host(%Scope{} = scope, %GameSession{} = session, opts) do
     with {:ok, hosted} <- Room.fetch_hosted(scope, session),
          {:ok, outcome} <- close_current_question(hosted, opts) do
       stop_timer_of(outcome)
 
       case outcome do
         {:closed, closed, effects} ->
+          report_closed(:host, closed)
           publish_effects(closed.id, effects)
           Topic.broadcast(closed.id, {:question_closed, closed})
           {:ok, closed}
@@ -289,8 +299,13 @@ defmodule LiveQuiz.Games.Match do
           | {:error, :not_found | :invalid_status | :no_open_question | :not_due | :stale}
   def close_question_by_timeout(session_id, expected_position \\ nil)
       when is_integer(session_id) do
+    Telemetry.transition(:close, fn -> close_by_timeout(session_id, expected_position) end)
+  end
+
+  defp close_by_timeout(session_id, expected_position) do
     case close_due_question(session_id, expected_position) do
       {:ok, {:closed, closed, effects}} ->
+        report_closed(:timeout, closed)
         publish_effects(closed.id, effects)
         Topic.broadcast(closed.id, {:question_closed, closed})
         {:ok, closed}
@@ -400,6 +415,7 @@ defmodule LiveQuiz.Games.Match do
         Topic.broadcast(session.id, {:answer_submitted, session.id, count})
 
         if closed? do
+          report_closed(:everybody_answered, session)
           QuestionTimer.stop(session.id, session.current_question_position)
           publish_effects(session.id, effects)
           Topic.broadcast(session.id, {:question_closed, session})
@@ -445,6 +461,10 @@ defmodule LiveQuiz.Games.Match do
   @spec finish_game_session(Scope.t(), GameSession.t(), keyword()) ::
           {:ok, GameSession.t()} | {:error, :unauthorized | :invalid_status | :access_lost}
   def finish_game_session(%Scope{} = scope, %GameSession{} = session, opts \\ []) do
+    Telemetry.transition(:finish, fn -> finish(scope, session, opts) end)
+  end
+
+  defp finish(%Scope{} = scope, %GameSession{} = session, opts) do
     case Room.fetch_hosted(scope, session) do
       {:ok, %GameSession{status: :finished} = finished} -> {:ok, finished}
       {:ok, %GameSession{} = current} -> finish_and_announce(current, opts)
@@ -884,6 +904,19 @@ defmodule LiveQuiz.Games.Match do
   # The timer is stopped for the question that was just closed, named by its
   # position: by the time this runs the host may have advanced, and a stop that
   # named only the room would take down the timer of the *new* question (R18).
+  # The delay is measured against the deadline the question carried, so a host
+  # closing early reports nothing and a timer arriving a minute late reports a
+  # minute. It is the number that says whether the timers are keeping up (R44).
+  defp report_closed(origin, %GameSession{} = closed) do
+    Telemetry.question_closed(
+      origin,
+      closed.current_question_ends_at,
+      closed.current_question_closed_at
+    )
+
+    closed
+  end
+
   defp stop_timer_of({:closed, %GameSession{} = closed, _effects}),
     do: QuestionTimer.stop(closed.id, closed.current_question_position)
 

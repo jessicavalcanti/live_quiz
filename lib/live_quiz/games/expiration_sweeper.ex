@@ -30,6 +30,7 @@ defmodule LiveQuiz.Games.ExpirationSweeper do
 
   alias LiveQuiz.Games
   alias LiveQuiz.Games.GameSession
+  alias LiveQuiz.Games.Telemetry
 
   @tick :timer.seconds(10)
 
@@ -93,7 +94,19 @@ defmodule LiveQuiz.Games.ExpirationSweeper do
   defp schedule(%{enabled: true, tick: tick}), do: Process.send_after(self(), :sweep, tick)
   defp schedule(%{enabled: false}), do: :ok
 
-  defp sweep(%{lister: lister}) do
+  # The count is the measurement and the rooms are the answer: `rooms` is not one
+  # of the keys the telemetry reads, so it never becomes a metric.
+  defp sweep(state) do
+    %{rooms: rooms} =
+      Telemetry.reconciliation(:expiration, fn ->
+        rooms = run_sweep(state)
+        %{expired: length(rooms), rooms: rooms}
+      end)
+
+    rooms
+  end
+
+  defp run_sweep(%{lister: lister}) do
     lister.() |> Enum.flat_map(&expire/1)
   rescue
     error -> log_failure("listing the expired rooms", error, __STACKTRACE__)
