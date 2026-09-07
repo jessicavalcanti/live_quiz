@@ -14,7 +14,7 @@ defmodule LiveQuiz.Accounts do
   # act (R06).
   @sudo_window_minutes 10
 
-  alias LiveQuiz.Accounts.{User, UserNotifier, UserToken}
+  alias LiveQuiz.Accounts.{RefreshToken, User, UserNotifier, UserToken}
 
   ## Database getters
 
@@ -434,11 +434,19 @@ defmodule LiveQuiz.Accounts do
       with {:ok, query} <- UserToken.verify_email_token_query(token, "reset_password"),
            %User{id: user_id} <- Repo.one(query),
            %User{} <- lock_user(user_id),
-           %User{} = user <- Repo.one(query) do
-        user
-        |> User.password_changeset(attrs)
-        |> update_user_and_delete_all_tokens()
+           %User{} = user <- Repo.one(query),
+           {:ok, {updated, expired}} <-
+             user |> User.password_changeset(attrs) |> update_user_and_delete_all_tokens() do
+        # Web sessions end by having their rows deleted above. API sessions
+        # prove themselves from a signature, so they end here: the refresh
+        # families are revoked and the auth version moves, which rejects every
+        # access token already issued (R03). Resetting a password is the one
+        # action that has to mean "everywhere, now".
+        {:ok, _revoked} = revoke_all_api_sessions(updated)
+
+        {:ok, {updated, expired}}
       else
+        {:error, %Ecto.Changeset{}} = invalid_password -> invalid_password
         _ -> {:error, :invalid_token}
       end
     end)
@@ -446,6 +454,161 @@ defmodule LiveQuiz.Accounts do
 
   defp lock_user(user_id) do
     User |> where([u], u.id == ^user_id) |> lock("FOR UPDATE") |> Repo.one()
+  end
+
+  ## API sessions
+
+  @doc """
+  Opens a refresh family for a freshly authenticated account.
+
+  One family per login. The token itself is not stored — only its digest — and
+  the row is what makes revoking a session possible at all: a JWT proves itself
+  from its signature, so without this there is nothing to say "not this one any
+  more" (R03).
+  """
+  @spec start_refresh_family(User.t(), String.t(), DateTime.t()) ::
+          {:ok, RefreshToken.t()} | {:error, Ecto.Changeset.t()}
+  def start_refresh_family(%User{} = user, token, %DateTime{} = expires_at) do
+    %RefreshToken{}
+    |> RefreshToken.changeset(%{
+      user_id: user.id,
+      family_id: Ecto.UUID.generate(),
+      token_hash: RefreshToken.hash(token),
+      expires_at: DateTime.truncate(expires_at, :second)
+    })
+    |> Repo.insert()
+  end
+
+  @doc """
+  Spends a refresh token and issues the next one of its family.
+
+  Rotation is what turns a long-lived secret into a chain, and the chain is
+  what makes replay visible. A row spent twice means two holders, and only one
+  of them logged in — so the whole family is revoked rather than guessing which:
+  the thief loses the session, and so does the person, who logs in again and
+  learns something happened. That is the trade the reuse detection makes, and it
+  is the right way round.
+
+  Answers `{:error, :invalid_refresh_token}` for a token that is unknown, spent,
+  revoked or expired, which are all the same news to the client.
+  """
+  @spec rotate_refresh_token(String.t(), String.t(), DateTime.t()) ::
+          :ok | {:error, :invalid_refresh_token}
+  def rotate_refresh_token(presented, issued, %DateTime{} = expires_at) do
+    now = DateTime.utc_now(:second)
+
+    # The refusal is carried out as a value rather than as `{:error, _}`:
+    # rejecting a replay is a *write* — the family is revoked — and rolling the
+    # transaction back would undo exactly the thing the detection is for.
+    result =
+      Repo.transact(fn ->
+        presented
+        |> RefreshToken.hash()
+        |> lock_refresh_token()
+        |> spend_or_revoke(issued, expires_at, now)
+      end)
+
+    case result do
+      {:ok, :rotated} -> :ok
+      _refused -> {:error, :invalid_refresh_token}
+    end
+  end
+
+  defp spend_or_revoke(nil, _issued, _expires_at, _now), do: {:ok, :unknown}
+
+  defp spend_or_revoke(%RefreshToken{} = token, issued, expires_at, now) do
+    if RefreshToken.spendable?(token, now) do
+      spend(token, issued, expires_at, now)
+    else
+      # Spent, revoked or expired. Revoking the family covers the case that
+      # matters: a token presented twice is a token somebody else also has.
+      revoke_family(token, now)
+
+      {:ok, :reused}
+    end
+  end
+
+  @doc """
+  Revokes the family a refresh token belongs to — logging out one device.
+
+  Idempotent, and deliberately quiet about tokens it does not recognise: a
+  client discarding a credential it can no longer use should not be told
+  whether the server had ever heard of it.
+  """
+  @spec revoke_refresh_family(String.t()) :: :ok
+  def revoke_refresh_family(token) when is_binary(token) do
+    now = DateTime.utc_now(:second)
+
+    case Repo.get_by(RefreshToken, token_hash: RefreshToken.hash(token)) do
+      nil -> :ok
+      %RefreshToken{} = found -> revoke_family(found, now)
+    end
+  end
+
+  def revoke_refresh_family(_token), do: :ok
+
+  @doc """
+  Ends every API session of an account, on every device.
+
+  Two writes, because a session has two halves. The refresh families go, so
+  nothing can be renewed; and `auth_version` moves, which rejects every access
+  token already issued — immediately, without a lookup per request, because the
+  account row is read to resolve the subject either way.
+  """
+  @spec revoke_all_api_sessions(User.t()) :: {:ok, User.t()}
+  def revoke_all_api_sessions(%User{} = user) do
+    now = DateTime.utc_now(:second)
+
+    Repo.update_all(
+      from(t in RefreshToken, where: t.user_id == ^user.id and is_nil(t.revoked_at)),
+      set: [revoked_at: now, updated_at: now]
+    )
+
+    {1, [updated]} =
+      Repo.update_all(
+        from(u in User, where: u.id == ^user.id, select: u),
+        inc: [auth_version: 1],
+        set: [updated_at: now]
+      )
+
+    {:ok, updated}
+  end
+
+  defp lock_refresh_token(hash) do
+    RefreshToken
+    |> where([t], t.token_hash == ^hash)
+    |> lock("FOR UPDATE")
+    |> Repo.one()
+  end
+
+  defp spend(%RefreshToken{} = token, issued, expires_at, now) do
+    {1, _} =
+      Repo.update_all(
+        from(t in RefreshToken, where: t.id == ^token.id),
+        set: [used_at: now, updated_at: now]
+      )
+
+    %RefreshToken{}
+    |> RefreshToken.changeset(%{
+      user_id: token.user_id,
+      family_id: token.family_id,
+      token_hash: RefreshToken.hash(issued),
+      expires_at: DateTime.truncate(expires_at, :second)
+    })
+    |> Repo.insert()
+    |> case do
+      {:ok, _next} -> {:ok, :rotated}
+      {:error, changeset} -> {:error, changeset}
+    end
+  end
+
+  defp revoke_family(%RefreshToken{} = token, now) do
+    Repo.update_all(
+      from(t in RefreshToken, where: t.family_id == ^token.family_id and is_nil(t.revoked_at)),
+      set: [revoked_at: now, updated_at: now]
+    )
+
+    :ok
   end
 
   ## Session
