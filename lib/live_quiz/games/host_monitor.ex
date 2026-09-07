@@ -111,13 +111,29 @@ defmodule LiveQuiz.Games.HostMonitor do
 
   @impl GenServer
   def handle_info({:confirm_absence, session_id}, state) do
-    if Presence.host_connected?(session_id) do
-      :ok
-    else
-      safely(session_id, fn -> Games.record_host_absence(session_id) end)
-    end
+    # Whether *the* host connection is here, not whether some host tab is. A tab
+    # another device took the room from still holds a presence, and reading it
+    # as the host being present kept an abandoned room from ever expiring (R22).
+    #
+    # Reading the room is inside the guard along with the write: it is a query
+    # like any other, and a failure there must not take down the monitor
+    # watching every other room either.
+    safely(session_id, fn ->
+      if host_in_control?(session_id) do
+        :ok
+      else
+        Games.record_host_absence(session_id)
+      end
+    end)
 
     {:noreply, %{state | pending: Map.delete(state.pending, session_id)}}
+  end
+
+  defp host_in_control?(session_id) do
+    case Games.get_live_game_session(session_id) do
+      nil -> false
+      session -> Presence.host_in_control?(session)
+    end
   end
 
   # A room the database refuses to update must not take the monitor down with

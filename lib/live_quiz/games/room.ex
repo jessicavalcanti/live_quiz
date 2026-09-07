@@ -69,6 +69,27 @@ defmodule LiveQuiz.Games.Room do
     end
   end
 
+  @doc """
+  Whether the connection issuing a host command is still the one holding the room.
+
+  `nil` means the caller presented no lease and the check does not apply: that
+  is every REST command, which authenticates the account and nothing else. The
+  browser does present one, and a tab another device took the room from is
+  refused here instead of finding out from an event it may not have processed
+  yet (R22).
+
+  Meant to be asked of a room read inside the transition's own transaction,
+  under its lock. Comparing two structs the caller already had proves nothing
+  about the lease the database holds now.
+  """
+  @spec ensure_in_control(GameSession.t(), Ecto.UUID.t() | nil) :: :ok | {:error, :access_lost}
+  def ensure_in_control(%GameSession{}, nil), do: :ok
+
+  def ensure_in_control(%GameSession{host_connection_id: current}, presented)
+      when is_binary(presented) do
+    if current == presented, do: :ok, else: {:error, :access_lost}
+  end
+
   @doc "Whether the quiz has anything to play, checked when a room opens and when it starts."
   @spec ensure_playable(Quiz.t()) :: :ok | {:error, :quiz_not_playable}
   def ensure_playable(%Quiz{} = quiz) do
