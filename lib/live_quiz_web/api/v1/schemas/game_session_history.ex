@@ -12,9 +12,18 @@ defmodule LiveQuizWeb.Api.V1.Schemas.GameSessionHistory do
       properties: %{
         id: %Schema{type: :integer},
         code: %Schema{type: :string, description: "Código da partida"},
-        quiz_id: %Schema{type: :integer},
+        quiz_id: %Schema{
+          type: :integer,
+          nullable: true,
+          description: "Nulo quando o quiz de origem foi excluído"
+        },
         quiz_title: %Schema{type: :string},
-        status: %Schema{type: :string, enum: ["finished", "cancelled"]},
+        status: %Schema{
+          type: :string,
+          enum: ["finished"],
+          description:
+            "O histórico lista apenas partidas encerradas; uma sala cancelada não entra"
+        },
         finished_at: %Schema{type: :string, format: :"date-time", nullable: true},
         participants_count: %Schema{type: :integer},
         winner_nickname: %Schema{type: :string, nullable: true},

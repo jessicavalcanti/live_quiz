@@ -277,7 +277,7 @@ defmodule LiveQuizWeb.ApiSpecTest do
 
       schemas = spec["components"]["schemas"]
 
-      assert map_size(schemas) == 42
+      assert map_size(schemas) == 43
 
       for {name, schema} <- schemas do
         assert is_binary(schema["description"]), "schema #{name} está sem description"
