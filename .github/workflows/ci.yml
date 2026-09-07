@@ -69,3 +69,24 @@ jobs:
 
       - name: Testes com cobertura mínima de 80%
         run: mix coveralls
+
+  audit:
+    name: Auditoria de advisories
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: erlef/setup-beam@v1
+        id: beam
+        with:
+          elixir-version: "1.20"
+          otp-version: "29"
+
+      - name: Dependências
+        run: mix deps.get --check-locked
+
+      # Verifica advisories de segurança e pacotes aposentados das dependências
+      # travadas no mix.lock. É diferente de `mix hex.outdated`, que só compara
+      # versões: aqui a build reprova apenas quando há vulnerabilidade publicada.
+      - name: Advisories das dependências (mix hex.audit)
+        run: mix hex.audit
