@@ -8,12 +8,28 @@ defmodule LiveQuizWeb.RateLimit do
 
   ## What "origin" means here
 
-  `conn.remote_ip`, and nothing else. The `X-Forwarded-For` header is *not*
-  read: it is written by whoever sends the request, so trusting it would let
-  anybody spend somebody else's budget and none of their own — a limiter keyed
-  on a value the attacker chooses is not a limiter. A deployment behind a proxy
-  has to make the proxy set the peer address (or add a plug that trusts one
-  named hop), which is a deployment decision and not a default.
+  The address of whoever made the request, which depends on what is in front of
+  the application — and that is **declared**, never guessed.
+
+  `TRUSTED_PROXY_HOPS=0` means nothing is in front: the origin is
+  `conn.remote_ip`, the peer of the socket, which no client can forge.
+
+  `TRUSTED_PROXY_HOPS=N` means N proxies are, and the origin is the entry *N
+  from the end* of `X-Forwarded-For` — the one the nearest trusted proxy
+  observed and appended. The front of that list is written by the client and is
+  worth nothing: a limiter keyed on a value the caller picks is not a limiter,
+  which is why the count from the end is the whole point.
+
+  Guessing wrong in either direction is bad, and one direction is worse. Read
+  the header when nothing sets it and anybody spends anybody's budget. Read the
+  peer when a balancer is in front and *every request in the world* lands on
+  one key — which is not a weak limiter but an outage, since a room of thirty
+  people entering at once locks itself out of a budget of twenty. That is why
+  production refuses to start without the variable rather than picking a side.
+
+  When the header carries fewer hops than were declared, the topology is not
+  what it was said to be. The origin falls back to the peer and the fact is
+  logged and emitted, instead of being quietly guessed.
 
   ## Why the address is truncated
 
@@ -27,6 +43,8 @@ defmodule LiveQuizWeb.RateLimit do
 
   alias LiveQuiz.RateLimit
   alias LiveQuizWeb.Api.ErrorJSON
+
+  require Logger
 
   @doc """
   Plug that spends one attempt of `:bucket`, keyed by the origin of the request.
@@ -50,13 +68,84 @@ defmodule LiveQuizWeb.RateLimit do
   The key an origin is counted by: a v4 address, or the /64 of a v6 one.
   """
   @spec origin(Plug.Conn.t() | :inet.ip_address() | nil) :: term()
-  def origin(%Plug.Conn{remote_ip: remote_ip}), do: origin(remote_ip)
+  def origin(%Plug.Conn{} = conn) do
+    resolve(conn.remote_ip, Plug.Conn.get_req_header(conn, "x-forwarded-for"))
+  end
+
   def origin({_a, _b, _c, _d} = ipv4), do: ipv4
   def origin({a, b, c, d, _e, _f, _g, _h}), do: {a, b, c, d}
   # A LiveView reached over a socket whose peer data was not asked for. One
   # bucket for all of them is a worse budget than one per address and a better
   # one than none.
   def origin(_unknown), do: :unknown
+
+  @doc """
+  How many trusted proxies stand in front of the application.
+
+  Zero — a direct connection — is the default everywhere but production, which
+  requires the variable to be set because a silent default is the defect.
+  """
+  @spec trusted_proxy_hops() :: non_neg_integer()
+  def trusted_proxy_hops do
+    :live_quiz
+    |> Application.get_env(__MODULE__, [])
+    |> Keyword.get(:trusted_proxy_hops, 0)
+  end
+
+  @doc """
+  The origin of a request, from its peer and its forwarded headers.
+
+  Both a connection and a socket end up here, because both arrive through
+  whatever is in front of the application and both have to be counted the same
+  way.
+  """
+  @spec resolve(:inet.ip_address() | nil, [String.t()]) :: term()
+  def resolve(peer, forwarded) do
+    case trusted_proxy_hops() do
+      0 -> origin(peer)
+      hops -> origin(forwarded_address(forwarded, hops) || peer)
+    end
+  end
+
+  # The nearest trusted proxy appended what it saw to the end of the list, so
+  # the address to count is `hops` from the end. Everything before it is the
+  # client's to write, and is worth exactly nothing.
+  defp forwarded_address(forwarded, hops) do
+    addresses =
+      forwarded
+      |> Enum.flat_map(&String.split(&1, ","))
+      |> Enum.map(&String.trim/1)
+      |> Enum.reject(&(&1 == ""))
+
+    case Enum.at(addresses, -hops) do
+      nil -> untrusted(:too_few_hops)
+      address -> parse(address) || untrusted(:unparsable)
+    end
+  end
+
+  defp parse(address) do
+    case address |> String.to_charlist() |> :inet.parse_address() do
+      {:ok, parsed} -> parsed
+      {:error, _reason} -> nil
+    end
+  end
+
+  # The header is not the shape the deployment said it would be. Falling back to
+  # the peer is the safe answer — at worst one bucket, never somebody else's —
+  # and saying so out loud is what turns a misconfiguration into something
+  # findable instead of a room that mysteriously locks itself out.
+  defp untrusted(reason) do
+    :telemetry.execute([:live_quiz, :rate_limit, :untrusted_origin], %{count: 1}, %{
+      reason: reason
+    })
+
+    Logger.warning(
+      "X-Forwarded-For does not carry #{trusted_proxy_hops()} trusted hop(s) (#{reason}); " <>
+        "counting the socket peer instead. Check TRUSTED_PROXY_HOPS against the deployment."
+    )
+
+    nil
+  end
 
   @doc """
   Remembers the origin of a LiveView, so its events can be budgeted.
@@ -68,11 +157,23 @@ defmodule LiveQuizWeb.RateLimit do
   """
   @spec assign_origin(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
   def assign_origin(socket) do
-    origin =
+    peer =
       case Phoenix.LiveView.get_connect_info(socket, :peer_data) do
-        %{address: address} -> origin(address)
-        _disconnected_or_absent -> :unknown
+        %{address: address} -> address
+        _disconnected_or_absent -> nil
       end
+
+    # A socket arrives through the same proxies a request does, so it is counted
+    # the same way — otherwise the two budgets a LiveView spends, entering a room
+    # and asking for a reset link, would be the ones that collapse.
+    forwarded =
+      socket
+      |> Phoenix.LiveView.get_connect_info(:x_headers)
+      |> List.wrap()
+      |> Enum.filter(fn {name, _value} -> name == "x-forwarded-for" end)
+      |> Enum.map(fn {_name, value} -> value end)
+
+    origin = resolve(peer, forwarded)
 
     Phoenix.Component.assign(socket, :rate_limit_origin, origin)
   end
