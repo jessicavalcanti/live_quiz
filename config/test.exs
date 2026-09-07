@@ -44,8 +44,10 @@ config :live_quiz, LiveQuiz.Games.QuestionTimerReconciler, enabled: false
 
 # The grace period of the application's monitor is long on purpose: a test that
 # cares about timing starts a monitor of its own with a short window, so no stray
-# wait leaks from one test into the next.
-config :live_quiz, LiveQuiz.Games.HostMonitor, grace_period: 60_000
+# wait leaks from one test into the next. The reconciliation of presence against
+# the database is off for the same reason — a test that wants that pass calls
+# `HostMonitor.reconcile_now/1`.
+config :live_quiz, LiveQuiz.Games.HostMonitor, grace_period: 60_000, enabled: false
 
 # In test we don't send emails
 config :live_quiz, LiveQuiz.Mailer, adapter: Swoosh.Adapters.Test

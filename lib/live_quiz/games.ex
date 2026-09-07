@@ -905,6 +905,23 @@ defmodule LiveQuiz.Games do
   end
 
   @doc """
+  Live rooms that have had a host connection at some point.
+
+  What the host monitor reconciles presence against. A room opened through the
+  API and never claimed from a socket is deliberately left out: it has no
+  presence to compare with, and reading an empty presence as an absence would
+  expire a room whose host is driving it over HTTP. What liveness means for
+  those is a contract still to be defined.
+  """
+  @spec list_sessions_with_host_claim() :: [GameSession.t()]
+  def list_sessions_with_host_claim do
+    GameSession
+    |> Room.live()
+    |> where([s], not is_nil(s.host_connection_id))
+    |> Repo.all()
+  end
+
+  @doc """
   Live rooms whose host absence deadline has already run out.
 
   This is what the sweeper of F2-06 reads. Only `waiting` and `in_progress`
