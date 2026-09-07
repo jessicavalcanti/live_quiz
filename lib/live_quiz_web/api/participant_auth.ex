@@ -2,13 +2,34 @@ defmodule LiveQuizWeb.Api.ParticipantAuth do
   @moduledoc """
   Resolves who is talking to a room over the JSON API.
 
-  Two credentials share the `Authorization` header and they are never
-  interchangeable. A participation presents `Authorization: Participant <token>`,
-  the opaque credential of AD-24, and it is the only identity somebody without
-  an account ever has. An account presents `Authorization: Bearer <jwt>`, which
-  the rest of the API already speaks. A `Bearer` is not read as a participation
-  and a `Participant` is not read as a token, so neither scheme can be smuggled
-  in place of the other.
+  Two credentials can travel in one request and they are never interchangeable.
+  An account presents `Authorization: Bearer <jwt>`, which the rest of the API
+  already speaks. A participation presents `X-Participant-Token: <token>`, the
+  opaque credential of AD-24, and it is the only identity somebody without an
+  account ever has.
+
+  ## Why a header of its own
+
+  Both used to share `Authorization`, as repeated fields. Plug represents that
+  field as a list, which made it look workable, but a list in Plug is not an
+  interoperable contract: HTTP clients, proxies and generated SDKs are free to
+  consolidate repeated `Authorization` headers, keep only one, or refuse the
+  request — and Swagger UI cannot express two of them at all. What worked in a
+  `ConnTest` was not what a real client would send (R28). See the semantics of
+  fields and of `Authorization` in
+  [RFC 9110](https://www.rfc-editor.org/rfc/rfc9110.html#section-11.6.2).
+
+  `X-Participant-Token` carries the participation, one value per field, and
+  several of them are read when a client holds credentials for several rooms.
+
+  **Precedence.** `X-Participant-Token` is read first. `Authorization:
+  Participant <token>` is still accepted, so clients written against the old
+  transport keep working, and it is only consulted when no dedicated header is
+  present — a request that sends both is a request whose author has already
+  chosen. The old form is deprecated and will be removed once no client uses it.
+
+  A `Bearer` is never read as a participation and a participant token is never
+  read as an account, so neither can be smuggled in place of the other.
 
   Whatever is presented, the plug decides nothing about the room: it puts the
   participation in `conn.assigns.current_participant`, the clear credential in
@@ -42,6 +63,7 @@ defmodule LiveQuizWeb.Api.ParticipantAuth do
 
   @scheme "participant"
   @bearer_scheme "bearer"
+  @participant_header "x-participant-token"
 
   # A client presenting a handful of credentials is a client that has taken part
   # in a handful of rooms; one presenting a hundred is a client turning a header
@@ -72,14 +94,36 @@ defmodule LiveQuizWeb.Api.ParticipantAuth do
   @spec presented_tokens(Plug.Conn.t()) :: [String.t()]
   def presented_tokens(%Plug.Conn{} = conn) do
     conn
-    |> credentials()
-    |> Enum.flat_map(fn {scheme, token} -> if scheme == @scheme, do: [token], else: [] end)
+    |> dedicated_tokens()
+    |> case do
+      [] -> legacy_tokens(conn)
+      tokens -> tokens
+    end
     |> Enum.take(@max_credentials)
   end
+
+  @doc "The header a participation credential travels in."
+  @spec participant_header() :: String.t()
+  def participant_header, do: @participant_header
 
   @doc "How many participant credentials one request may present."
   @spec max_credentials() :: pos_integer()
   def max_credentials, do: @max_credentials
+
+  defp dedicated_tokens(conn) do
+    conn
+    |> get_req_header(@participant_header)
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+  end
+
+  # The transport this API started with. Kept so a client written against it
+  # keeps working, and read only when the dedicated header says nothing.
+  defp legacy_tokens(conn) do
+    conn
+    |> credentials()
+    |> Enum.flat_map(fn {scheme, token} -> if scheme == @scheme, do: [token], else: [] end)
+  end
 
   # The JWT goes through the pipeline of the authenticated endpoints, so there
   # is a single place where a token is verified and a scope is assigned. It only

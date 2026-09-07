@@ -70,6 +70,7 @@ defmodule LiveQuizWeb.Api.V1.GameResultJSON do
   defp session_data(session),
     do: %{
       id: session.id,
+      public_id: session.public_id,
       code: session.join_code,
       quiz_id: session.quiz_id,
       quiz_title: session.quiz_title,

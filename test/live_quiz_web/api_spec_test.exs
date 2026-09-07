@@ -363,10 +363,15 @@ defmodule LiveQuizWeb.ApiSpecTest do
 
       scheme = spec["components"]["securitySchemes"]["participantAuth"]
 
-      assert scheme["type"] == "http"
-      assert scheme["scheme"] == "Participant"
+      # Um cabeçalho próprio, e não `Authorization` repetido: uma conta e uma
+      # participação chegam na mesma requisição, e campos repetidos de
+      # `Authorization` não são um contrato interoperável.
+      assert scheme["type"] == "apiKey"
+      assert scheme["in"] == "header"
+      assert scheme["name"] == "X-Participant-Token"
       assert scheme["description"] =~ "uma única vez"
-      assert spec["components"]["securitySchemes"]["bearerAuth"]
+      assert scheme["description"] =~ "Depreciado"
+      assert spec["components"]["securitySchemes"]["bearerAuth"]["scheme"] == "bearer"
     end
 
     test "requires the participation credential where only it identifies", %{conn: conn} do
