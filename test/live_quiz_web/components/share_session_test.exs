@@ -73,8 +73,28 @@ defmodule LiveQuizWeb.ShareSessionTest do
       assert html =~ ShareSession.join_url("K7P4Q2")
       assert html =~ ~s(id="copy-link")
       assert html =~ ~s(id="copy-code")
-      assert html =~ ~s(phx-click="copy_link")
-      assert html =~ ~s(phx-click="copy_code")
+    end
+
+    test "o clique não anuncia a cópia: quem anuncia é o resultado da escrita" do
+      html = render_block("K7P4Q2")
+
+      # `phx-click` confirmava antes de a promessa resolver — e mesmo quando a
+      # API de área de transferência não existia (R40). O evento agora sai do
+      # hook, e o nome dele viaja como dado.
+      refute html =~ ~s(phx-click="copy_link")
+      refute html =~ ~s(phx-click="copy_code")
+
+      assert html =~ ~s(data-event="copy_link")
+      assert html =~ ~s(data-event="copy_code")
+    end
+
+    test "cada botão sabe qual texto selecionar quando a cópia falha" do
+      html = render_block("K7P4Q2")
+
+      assert html =~ ~s(data-target="join-code")
+      assert html =~ ~s(data-target="join-url")
+      assert html =~ ~s(id="join-code")
+      assert html =~ ~s(id="join-url")
     end
 
     test "o QR code é inline e aponta para a entrada da sala" do

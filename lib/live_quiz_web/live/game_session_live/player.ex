@@ -719,6 +719,7 @@ defmodule LiveQuizWeb.GameSessionLive.Player do
             phx-hook=".Countdown"
             phx-update="ignore"
             data-ends-at={DateTime.to_iso8601(@game_state.ends_at)}
+            data-server-now={DateTime.to_iso8601(@game_state.server_now)}
             role="timer"
             aria-live="polite"
             aria-atomic="true"
@@ -816,20 +817,30 @@ defmodule LiveQuizWeb.GameSessionLive.Player do
         mounted() { this.start() },
         updated() { this.start() },
         destroyed() { this.stop() },
+        // O prazo e o instante em que o servidor o mediu chegam juntos, e a
+        // conta é entre os dois: o relógio de quem lê nunca entra. Um navegador
+        // com a hora minutos fora mostrava um tempo diferente do que o servidor
+        // aceita (R40).
         start() {
           this.stop()
-          this.endsAt = Date.parse(this.el.dataset.endsAt)
+
+          const endsAt = Date.parse(this.el.dataset.endsAt)
+          const serverNow = Date.parse(this.el.dataset.serverNow)
+
+          this.remainingAtSync = endsAt - serverNow
+          // Monotônico: imune a acertos de hora e a suspensão da aba, que é o
+          // que faz um contador voltar no tempo quando a máquina dorme.
+          this.syncedAt = performance.now()
+
           this.draw()
-          // Recomputed against the clock on every tick, never decremented: a
-          // phone with the tab in the background has its interval throttled and
-          // would drift.
           this.timer = setInterval(() => this.draw(), 200)
         },
         stop() {
           if (this.timer) { clearInterval(this.timer); this.timer = null }
         },
         draw() {
-          const left = Math.max(0, Math.ceil((this.endsAt - Date.now()) / 1000))
+          const elapsed = performance.now() - this.syncedAt
+          const left = Math.max(0, Math.ceil((this.remainingAtSync - elapsed) / 1000))
           const seconds = String(left % 60).padStart(2, "0")
           this.el.textContent = `${Math.floor(left / 60)}:${seconds}`
           if (left === 0) { this.stop() }

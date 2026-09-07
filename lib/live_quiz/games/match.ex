@@ -1396,6 +1396,10 @@ defmodule LiveQuiz.Games.Match do
       question_state: state,
       question_text: question && question.text,
       ends_at: session.current_question_ends_at,
+      # The instant the deadline above was measured against. The countdown is
+      # drawn from the distance between the two, so a reader whose clock is
+      # minutes out still sees the time the server will actually accept (R40).
+      server_now: Room.now_usec(),
       seconds_left: seconds_left(session, state),
       last_question?: last_question?(session, count),
       options: state_options(question, state, host?)
