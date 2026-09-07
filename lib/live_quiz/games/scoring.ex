@@ -50,6 +50,7 @@ defmodule LiveQuiz.Games.Scoring do
   alias LiveQuiz.Games.GameSessionQuestion
   alias LiveQuiz.Games.Locks
   alias LiveQuiz.Games.Participant
+  alias LiveQuiz.Games.Telemetry
   alias LiveQuiz.Games.Topic
   alias LiveQuiz.Repo
 
@@ -161,8 +162,12 @@ defmodule LiveQuiz.Games.Scoring do
   @spec consolidate_question(GameSession.t(), pos_integer()) ::
           {:ok, %{ranking: [map()], scored?: boolean()}}
           | {:error, :question_open | :not_found | :invalid_status | :missing_question_clock}
-  def consolidate_question(%GameSession{id: session_id} = session, question_position)
+  def consolidate_question(%GameSession{} = session, question_position)
       when is_integer(question_position) and question_position > 0 do
+    Telemetry.consolidation(fn -> consolidate(session, question_position) end)
+  end
+
+  defp consolidate(%GameSession{id: session_id} = session, question_position) do
     with {:ok, running} <- GameSession.ensure_running(session),
          :ok <- GameSession.ensure_question_settled(running, question_position),
          {:ok, question} <- lock_snapshot_question(session_id, question_position),

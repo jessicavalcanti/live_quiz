@@ -36,6 +36,7 @@ defmodule LiveQuiz.Games.QuestionTimerReconciler do
   alias LiveQuiz.Games
   alias LiveQuiz.Games.GameSession
   alias LiveQuiz.Games.QuestionTimer
+  alias LiveQuiz.Games.Telemetry
 
   @tick :timer.seconds(15)
 
@@ -103,7 +104,11 @@ defmodule LiveQuiz.Games.QuestionTimerReconciler do
   defp schedule(%{enabled: true, tick: tick}), do: Process.send_after(self(), :reconcile, tick)
   defp schedule(%{enabled: false}), do: :ok
 
-  defp reconcile(%{lister: lister}) do
+  defp reconcile(state) do
+    Telemetry.reconciliation(:question_timer, fn -> sweep(state) end)
+  end
+
+  defp sweep(%{lister: lister}) do
     lister.() |> Enum.reduce(%{closed: 0, armed: 0}, &settle/2)
   rescue
     error -> log_failure("listing the matches with an open question", error, __STACKTRACE__)

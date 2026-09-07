@@ -53,6 +53,7 @@ defmodule LiveQuiz.Games.HostMonitor do
 
   alias LiveQuiz.Games
   alias LiveQuiz.Games.Presence
+  alias LiveQuiz.Games.Telemetry
 
   @default_grace_period :timer.seconds(10)
   @default_tick :timer.seconds(30)
@@ -219,7 +220,11 @@ defmodule LiveQuiz.Games.HostMonitor do
   # up abandoned with no deadline behind it. The pass feeds the same two casts
   # rather than writing anything itself, so a room found without its host gets a
   # grace window like any other.
-  defp reconcile(%{lister: lister} = state) do
+  defp reconcile(state) do
+    Telemetry.reconciliation(:host_absence, fn -> sweep(state) end)
+  end
+
+  defp sweep(%{lister: lister} = state) do
     lister.() |> Enum.reduce(%{opened: 0, cleared: 0}, &reconcile_room(&1, &2, state))
   rescue
     error ->
