@@ -20,7 +20,10 @@ defmodule LiveQuizWeb.GameResultLive.Index do
     page =
       Games.list_game_results(
         socket.assigns.current_scope,
-        ResultFilters.normalize(params),
+        # O dia que a tela mostra é o de São Paulo, e é nesse fuso que ela tem
+        # de ser lida — senão a partida que aparece no dia 6 fica de fora quando
+        # se filtra o dia 6 (R39).
+        ResultFilters.normalize(params, time_zone: ResultFilters.screen_time_zone()),
         %{page: params["page"], per_page: @per_page}
       )
 

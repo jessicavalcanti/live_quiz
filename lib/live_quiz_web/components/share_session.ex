@@ -14,10 +14,14 @@ defmodule LiveQuizWeb.ShareSession do
   is wrapped in a white frame that is its quiet zone — a QR code printed flush
   against its border is one a camera refuses to read.
 
-  Copying happens in the browser, where the clipboard is, and the buttons also
-  announce `"copy_code"` and `"copy_link"` to the LiveView holding the block, so
-  the confirmation is a server-rendered message rather than something only the
-  hook could have said. A parent that renders this block handles both events.
+  Copying happens in the browser, where the clipboard is, and the confirmation
+  is a server-rendered message so it reads like every other one on the page. The
+  hook announces `"copy_code"` or `"copy_link"` **once the write resolves**, and
+  `"copy_failed"` when it does not — the click used to announce success on its
+  own, so a refused clipboard, or a browser without the API, still said
+  "copiado" (R40). A failure selects the text instead, which is something to act
+  on rather than a false reassurance. A parent that renders this block handles
+  the three events.
   """
 
   use Phoenix.Component
@@ -68,9 +72,10 @@ defmodule LiveQuizWeb.ShareSession do
           <button
             type="button"
             id="copy-code"
-            phx-click="copy_code"
             phx-hook=".CopyToClipboard"
             data-value={@code}
+            data-event="copy_code"
+            data-target="join-code"
             class="btn btn-soft btn-sm"
           >
             <.icon name="hero-clipboard-document" class="size-4" /> Copiar código
@@ -79,9 +84,10 @@ defmodule LiveQuizWeb.ShareSession do
           <button
             type="button"
             id="copy-link"
-            phx-click="copy_link"
             phx-hook=".CopyToClipboard"
             data-value={@url}
+            data-event="copy_link"
+            data-target="join-url"
             class="btn btn-soft btn-sm"
           >
             <.icon name="hero-link" class="size-4" /> Copiar link
@@ -91,10 +97,36 @@ defmodule LiveQuizWeb.ShareSession do
         <script :type={Phoenix.LiveView.ColocatedHook} name=".CopyToClipboard">
           export default {
             mounted() {
-              this.el.addEventListener("click", () => {
-                const value = this.el.dataset.value
-                if (navigator.clipboard) { navigator.clipboard.writeText(value) }
-              })
+              this.el.addEventListener("click", () => this.copy())
+            },
+            // `writeText` devolve uma promessa, e o servidor anunciava
+            // "copiado" antes de ela resolver — ou mesmo quando a API não
+            // existia. Quem confirma é o resultado, não o clique (R40).
+            copy() {
+              const value = this.el.dataset.value
+
+              if (!navigator.clipboard) { return this.fallback() }
+
+              navigator.clipboard.writeText(value).then(
+                () => this.pushEvent(this.el.dataset.event, {}),
+                () => this.fallback()
+              )
+            },
+            // Recusada ou indisponível, o texto é selecionado para a pessoa
+            // copiar à mão: melhor uma ação a fazer do que um aviso falso.
+            fallback() {
+              const target = document.getElementById(this.el.dataset.target)
+
+              if (target) {
+                const range = document.createRange()
+                range.selectNodeContents(target)
+
+                const selection = window.getSelection()
+                selection.removeAllRanges()
+                selection.addRange(range)
+              }
+
+              this.pushEvent("copy_failed", {})
             }
           }
         </script>

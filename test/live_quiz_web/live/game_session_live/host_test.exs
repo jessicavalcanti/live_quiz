@@ -192,16 +192,35 @@ defmodule LiveQuizWeb.GameSessionLive.HostTest do
       assert lv |> element("#reserved-count") |> render() =~ "2"
     end
 
-    test "confirma a cópia do código", %{conn: conn, session: session} do
+    test "confirma a cópia do código quando o hook diz que ela funcionou", %{
+      conn: conn,
+      session: session
+    } do
       {:ok, lv, _html} = live(conn, ~p"/game-sessions/#{session.join_code}/host")
 
-      assert lv |> element("#copy-code") |> render_click() =~ "Código copiado"
+      # O evento vem do hook, depois de a escrita resolver — não do clique.
+      assert render_hook(lv, "copy_code", %{}) =~ "Código copiado"
     end
 
-    test "confirma a cópia do link", %{conn: conn, session: session} do
+    test "confirma a cópia do link quando o hook diz que ela funcionou", %{
+      conn: conn,
+      session: session
+    } do
       {:ok, lv, _html} = live(conn, ~p"/game-sessions/#{session.join_code}/host")
 
-      assert lv |> element("#copy-link") |> render_click() =~ "Link copiado"
+      assert render_hook(lv, "copy_link", %{}) =~ "Link copiado"
+    end
+
+    test "diz que não copiou quando a área de transferência recusa", %{
+      conn: conn,
+      session: session
+    } do
+      {:ok, lv, _html} = live(conn, ~p"/game-sessions/#{session.join_code}/host")
+
+      html = render_hook(lv, "copy_failed", %{})
+
+      assert html =~ "Não foi possível copiar"
+      refute html =~ "Código copiado"
     end
 
     test "mostra código, link e QR code de entrada", %{conn: conn, session: session} do
@@ -919,6 +938,24 @@ defmodule LiveQuizWeb.GameSessionLive.HostTest do
 
   describe "eventos da partida" do
     setup [:register_and_log_in_user, :running_room]
+
+    test "o contador recebe o prazo e o instante em que o servidor o mediu", %{
+      conn: conn,
+      scope: scope,
+      session: session
+    } do
+      {:ok, open} = Games.advance_question(scope, session, nil)
+      Games.QuestionTimer.stop(open.id)
+
+      {:ok, lv, _html} = live(conn, ~p"/game-sessions/#{session.join_code}/host")
+      html = render(lv)
+
+      # Os dois juntos são o que faz a conta ser entre instantes do servidor. Só
+      # o prazo obrigaria o navegador a usar o próprio relógio, que pode estar
+      # minutos fora do que o servidor aceita (R40).
+      assert html =~ "data-ends-at="
+      assert html =~ "data-server-now="
+    end
 
     test "o encerramento pelo prazo chega sozinho à tela", %{
       conn: conn,
