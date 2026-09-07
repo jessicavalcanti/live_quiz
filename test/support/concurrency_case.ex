@@ -170,10 +170,21 @@ defmodule LiveQuiz.ConcurrencyCase do
     end
   end
 
-  @doc "Empties every table, so the next test starts from nothing."
+  @doc """
+  Empties every table, so the next test starts from nothing.
+
+  Deliberately **without** `RESTART IDENTITY`. Rows go; the sequences keep
+  counting. Resetting them hands the next test ids that earlier tests already
+  used, and this application registers processes under those ids — a question
+  timer left alive under `{:question_timer, 1}` is found by a later test whose
+  brand new room is also id 1, which is a failure with no visible cause and no
+  way to reproduce it in isolation (#139).
+
+  Ids are cheap. Uniqueness across a run is not.
+  """
   @spec truncate_all() :: :ok
   def truncate_all do
-    Repo.query!("TRUNCATE TABLE #{Enum.join(@tables, ", ")} RESTART IDENTITY CASCADE")
+    Repo.query!("TRUNCATE TABLE #{Enum.join(@tables, ", ")} CASCADE")
     :ok
   end
 end
