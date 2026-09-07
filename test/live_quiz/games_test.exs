@@ -1233,7 +1233,7 @@ defmodule LiveQuiz.GamesTest do
     end
 
     test "a credencial morre com a sala", %{session: session, token: token} do
-      {:ok, _session} = Games.expire_game_session(session)
+      {:ok, _session} = session |> overdue_host_absence() |> Games.expire_game_session()
 
       assert Games.get_participant_of_session(token, session.join_code) == {:error, :not_found}
     end
@@ -1264,7 +1264,7 @@ defmodule LiveQuiz.GamesTest do
     end
 
     test "distingue a sala expirada da cancelada", %{session: session, token: token} do
-      {:ok, _session} = Games.expire_game_session(session)
+      {:ok, _session} = session |> overdue_host_absence() |> Games.expire_game_session()
 
       assert {:ok, %GameSession{status: :expired}} = Games.get_session_by_participant_token(token)
     end
@@ -2429,7 +2429,7 @@ defmodule LiveQuiz.GamesTest do
     setup :hosted_waiting_session
 
     test "expira uma sala em espera", %{session: session} do
-      assert {:ok, expired} = Games.expire_game_session(session)
+      assert {:ok, expired} = session |> overdue_host_absence() |> Games.expire_game_session()
 
       assert expired.status == :expired
       assert expired.finished_at
@@ -2439,7 +2439,7 @@ defmodule LiveQuiz.GamesTest do
     test "expira uma sala em andamento", %{session: session} do
       started = start_session(session)
 
-      assert {:ok, expired} = Games.expire_game_session(started)
+      assert {:ok, expired} = started |> overdue_host_absence() |> Games.expire_game_session()
 
       assert expired.status == :expired
       assert expired.started_at == started.started_at
@@ -2448,7 +2448,7 @@ defmodule LiveQuiz.GamesTest do
     test "libera as participações ao expirar", %{session: session} do
       participant = participant_fixture(session)
 
-      assert {:ok, _expired} = Games.expire_game_session(session)
+      assert {:ok, _expired} = session |> overdue_host_absence() |> Games.expire_game_session()
 
       participant = Repo.get!(Participant, participant.id)
       assert participant.released_at
@@ -2456,7 +2456,7 @@ defmodule LiveQuiz.GamesTest do
     end
 
     test "libera o host ao expirar", %{scope: scope, session: session, quiz: quiz} do
-      assert {:ok, _expired} = Games.expire_game_session(session)
+      assert {:ok, _expired} = session |> overdue_host_absence() |> Games.expire_game_session()
 
       assert {:ok, _reopened} = Games.create_game_session(scope, quiz.id)
     end
@@ -2464,7 +2464,9 @@ defmodule LiveQuiz.GamesTest do
     test "recusa expirar uma sala já encerrada", %{session: session} do
       cancelled = close_session(session, :cancelled)
 
-      assert {:error, :invalid_transition} = Games.expire_game_session(cancelled)
+      assert {:error, :invalid_transition} =
+               cancelled |> overdue_host_absence() |> Games.expire_game_session()
+
       assert Repo.get!(GameSession, session.id).status == :cancelled
     end
   end
@@ -2856,7 +2858,7 @@ defmodule LiveQuiz.GamesTest do
     test "a expiração é publicada", %{session: session} do
       :ok = Games.subscribe(session.id)
 
-      assert {:ok, expired} = Games.expire_game_session(session)
+      assert {:ok, expired} = session |> overdue_host_absence() |> Games.expire_game_session()
 
       assert_receive {:game_expired, %GameSession{id: id, status: :expired}}
       assert id == expired.id
@@ -2866,7 +2868,8 @@ defmodule LiveQuiz.GamesTest do
       assert {:ok, cancelled} = Games.cancel_game_session(scope, session)
       :ok = Games.subscribe(session.id)
 
-      assert {:error, :invalid_transition} = Games.expire_game_session(cancelled)
+      assert {:error, :invalid_transition} =
+               cancelled |> overdue_host_absence() |> Games.expire_game_session()
 
       refute_receive {:game_expired, _session}, 50
     end

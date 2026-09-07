@@ -16,11 +16,33 @@ defmodule LiveQuiz.Games.Locks do
   | `2` | room id | the 25 seats of one room |
   | `3` | room id | the progress of one match, question to question |
 
-  **Order matters.** Anything taking both the identity and the seats lock takes
-  identity first, always, which is what keeps `join_game_session/4` from
-  deadlocking against `rejoin_game_session/2`. The match lock is taken alone —
-  the commands that move a match take nothing else — so it has no order to keep
-  and cannot deadlock against anything.
+  **Order matters, and there is exactly one:**
+
+      identity  →  match  →  seats
+
+  Every command that changes a room, its seats or a participation takes the
+  locks it needs in that order and skips the ones it does not. Two commands
+  taking the same locks in opposite orders is a deadlock nobody sees until a
+  room wedges under load, so the order is stated here rather than left to be
+  inferred from each call site.
+
+  | Command | Takes |
+  |---|---|
+  | entering, coming back | identity, seats |
+  | opening a room | identity (plus the quiz row) |
+  | advancing, closing, answering | match |
+  | finishing, cancelling, expiring | match, seats |
+
+  Ending a room takes the seats lock as well as the match one, which is what
+  makes a join already under way finish *before* the room closes — and be
+  released with everybody else — or wait and find the room terminal. Without
+  it a participation could be inserted after the release ran, leaving somebody
+  tied to a room that is over.
+
+  A lock only serializes; it decides nothing. Every command re-reads the room
+  under the lock and re-checks what it validated before taking it: the read
+  that authorized the command happened earlier, and by the time the lock is
+  granted the winner has already changed the answer.
 
   Every one of them is an `xact` lock: it is released when the transaction ends,
   never by hand, so a crash inside the transaction cannot leave a room wedged.
@@ -39,13 +61,23 @@ defmodule LiveQuiz.Games.Locks do
   @spec identity(integer()) :: :ok
   def identity(user_id), do: advisory(@identity_lock_class, user_id)
 
-  @doc "Serializes the seat count of one room. Only ever taken after `identity/1`."
+  @doc "Serializes the seat count of one room. Always taken last."
   @spec seats(integer()) :: :ok
   def seats(session_id), do: advisory(@seats_lock_class, session_id)
 
-  @doc "Serializes the commands that move one match. Taken alone."
+  @doc "Serializes the commands that move one match. Taken after identity, before seats."
   @spec match(integer()) :: :ok
   def match(session_id), do: advisory(@match_lock_class, session_id)
+
+  @doc """
+  Takes both room locks in the order this module fixes, for a transition that
+  ends a room: the match stops moving and the seats stop being handed out.
+  """
+  @spec room(integer()) :: :ok
+  def room(session_id) do
+    match(session_id)
+    seats(session_id)
+  end
 
   @doc """
   Takes the room's row with `FOR UPDATE` and answers with it, or `nil`.

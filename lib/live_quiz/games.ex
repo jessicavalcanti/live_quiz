@@ -277,12 +277,15 @@ defmodule LiveQuiz.Games do
   def create_game_session(%Scope{} = scope, quiz_id, attrs) when is_map(attrs) do
     Repo.transaction(fn ->
       Locks.identity(scope.user.id)
-      quiz = Quizzes.get_quiz!(scope, quiz_id)
-      # The same row lock `LiveQuiz.Quizzes` takes before every write (F2-07).
-      # Taking it here is what turns the block into a real guarantee: an edit
-      # already under way finishes before the room exists, and one that starts
-      # afterwards finds the room and is refused.
-      QuizLock.lock_quiz!(quiz.id)
+      # The id is resolved through the scope first, so somebody else's quiz is a
+      # 404 before anything is locked. What the room is then built from is the
+      # row read back *after* the lock: an edit already under way finishes
+      # first, and the title and the questions this reads are the ones that
+      # survived it. Validating the copy read before the lock would let an edit
+      # that removed the last question slip a room in behind it (R24).
+      %Quiz{id: id} = Quizzes.get_quiz!(scope, quiz_id)
+      QuizLock.lock_quiz!(id)
+      quiz = Quizzes.get_quiz!(scope, id)
 
       with :ok <- Room.ensure_playable(quiz),
            :ok <- ensure_not_hosting(scope),
@@ -455,8 +458,9 @@ defmodule LiveQuiz.Games do
     known = known_credentials(opts)
 
     Repo.transaction(fn ->
-      with {:ok, session} <- fetch_joinable_session(code),
-           {:ok, :new} <- resolve_identity(scope, session, known),
+      with {:ok, found} <- fetch_joinable_session(code),
+           {:ok, :new} <- resolve_identity(scope, found, known),
+           {:ok, session} <- lock_joinable_session(found),
            :ok <- ensure_seat_available(session),
            {:ok, participant, token} <- insert_participant(session, scope, attrs) do
         {participant, token}
@@ -643,21 +647,37 @@ defmodule LiveQuiz.Games do
   untouched.
   """
   @spec leave_game_session(Participant.t()) :: {:ok, Participant.t()}
-  def leave_game_session(%Participant{} = participant) do
-    if Participant.in_lobby?(participant) do
-      at = Room.now()
+  def leave_game_session(%Participant{id: id, game_session_id: session_id}) do
+    at = Room.now()
 
-      changeset = Participant.connection_changeset(participant, %{left_at: at, released_at: at})
+    # Only the row decides. The struct that arrives may have been read before a
+    # rejoin, in which case leaving on the strength of it would answer "already
+    # gone" about somebody who is back; or before a previous leave, in which
+    # case it would stamp the instant again and announce a second departure.
+    # `left_at IS NULL` in the `WHERE` is what makes this idempotent about the
+    # state the database is in rather than about the state the caller remembers
+    # (R23).
+    # The same condition `Participant.in_lobby?/1` states, asked of the row: a
+    # participation the room already released is not somebody who walked out,
+    # and stamping `left_at` on it would rewrite why they are gone.
+    query =
+      from p in Participant,
+        where: p.id == ^id and is_nil(p.left_at) and is_nil(p.released_at),
+        select: p
 
-      # Stamping `released_at` only takes the row out of the one-room-per-account
-      # index, so there is no constraint left for this update to violate.
-      participant = Repo.update!(changeset)
+    result =
+      Repo.transaction(fn ->
+        Locks.seats(session_id)
+        Repo.update_all(query, set: [left_at: at, released_at: at, updated_at: at])
+      end)
 
-      Topic.broadcast(participant.game_session_id, {:participant_left, participant})
+    case result do
+      {:ok, {1, [left]}} ->
+        Topic.broadcast(left.game_session_id, {:participant_left, left})
+        {:ok, left}
 
-      {:ok, participant}
-    else
-      {:ok, participant}
+      {:ok, {0, _unchanged}} ->
+        {:ok, Repo.get!(Participant, id)}
     end
   end
 
@@ -686,10 +706,10 @@ defmodule LiveQuiz.Games do
     known = known_credentials(opts)
 
     Repo.transaction(fn ->
-      with {:ok, participant} <- fetch_participant_for_rejoin(token),
-           :ok <- ensure_session_live(participant.game_session),
-           :ok <- ensure_free_to_rejoin(participant, known),
-           {:ok, participant} <- restore_participation(participant) do
+      with {:ok, found} <- fetch_participant_for_rejoin(token),
+           :ok <- ensure_free_to_rejoin(found, known),
+           {:ok, participant, session} <- lock_live_participation(found),
+           {:ok, participant} <- restore_participation(participant, session) do
         participant
       else
         {:error, reason} -> Repo.rollback(reason)
@@ -794,9 +814,11 @@ defmodule LiveQuiz.Games do
   harmless race instead of a double close.
   """
   @spec expire_game_session(GameSession.t()) ::
-          {:ok, GameSession.t()} | {:error, :invalid_transition}
-  def expire_game_session(%GameSession{} = session) do
-    close_and_announce(session, :expired, :game_expired)
+          {:ok, GameSession.t()} | {:error, :invalid_transition} | {:error, :not_expired}
+  def expire_game_session(%GameSession{expires_at: nil}), do: {:error, :not_expired}
+
+  def expire_game_session(%GameSession{expires_at: %DateTime{} = deadline} = session) do
+    close_and_announce(session, :expired, :game_expired, expires_at: deadline)
   end
 
   @doc """
@@ -1220,9 +1242,23 @@ defmodule LiveQuiz.Games do
     end
   end
 
-  defp ensure_seat_available(%GameSession{} = session) do
-    Locks.seats(session.id)
+  # The room was read before any lock was held, to find out whether the code
+  # even exists. By the time the seats lock is granted the host may have started
+  # or cancelled it, so the row is read again — under the lock that the ending
+  # of a room also takes — and judged again. Inserting on the strength of the
+  # first read is how somebody ended up seated in a room that was already over
+  # (R16).
+  defp lock_joinable_session(%GameSession{id: id}) do
+    Locks.seats(id)
 
+    case Repo.get(GameSession, id) do
+      %GameSession{status: :waiting} = session -> {:ok, session}
+      %GameSession{} -> {:error, :session_not_joinable}
+      nil -> {:error, :session_not_found}
+    end
+  end
+
+  defp ensure_seat_available(%GameSession{} = session) do
     if reserved_slots(session) < @max_participants do
       :ok
     else
@@ -1327,8 +1363,21 @@ defmodule LiveQuiz.Games do
     end
   end
 
-  defp ensure_session_live(%GameSession{} = session) do
-    if GameSession.active?(session), do: :ok, else: {:error, :session_ended}
+  # Identity is settled first, under the identity lock, which is the order this
+  # module fixes; only then is the room locked and both rows read again. The
+  # room read at the top came off an unlocked `preload`, and a room that ended
+  # in between would otherwise take somebody back into a match that is over —
+  # or race the release that ends it (R16).
+  defp lock_live_participation(%Participant{id: id, game_session_id: session_id}) do
+    Locks.seats(session_id)
+
+    session = Repo.get(GameSession, session_id)
+
+    cond do
+      is_nil(session) -> {:error, :not_found}
+      not GameSession.active?(session) -> {:error, :session_ended}
+      true -> {:ok, %{Repo.get!(Participant, id) | game_session: session}, session}
+    end
   end
 
   # Nothing else may be holding the person when they come back. For an account
@@ -1357,11 +1406,14 @@ defmodule LiveQuiz.Games do
     end
   end
 
-  defp restore_participation(%Participant{left_at: nil, released_at: nil} = participant) do
+  defp restore_participation(
+         %Participant{left_at: nil, released_at: nil} = participant,
+         %GameSession{}
+       ) do
     {:ok, participant}
   end
 
-  defp restore_participation(%Participant{} = participant) do
+  defp restore_participation(%Participant{} = participant, %GameSession{} = session) do
     participant
     |> Participant.connection_changeset(%{left_at: nil, released_at: nil})
     # Clearing `released_at` puts the row back into the one-room-per-account
@@ -1370,7 +1422,7 @@ defmodule LiveQuiz.Games do
     # refusal instead of leaking a changeset.
     |> Repo.update(mode: :savepoint)
     |> case do
-      {:ok, %Participant{} = participant} -> {:ok, participant}
+      {:ok, %Participant{} = restored} -> {:ok, %{restored | game_session: session}}
       {:error, %Changeset{}} -> {:error, :already_in_another_session}
     end
   end
@@ -1384,8 +1436,8 @@ defmodule LiveQuiz.Games do
   # Both ways of closing a room share the transition and differ only in the
   # event they announce, which is what tells a lobby whether to say "cancelled"
   # or "expired". The broadcast is outside the transaction on purpose (AD-31).
-  defp close_and_announce(%GameSession{} = session, status, event) do
-    case close_session(session, status) do
+  defp close_and_announce(%GameSession{} = session, status, event, guards \\ []) do
+    case close_session(session, status, guards) do
       {:ok, session} ->
         QuestionTimer.stop(session.id)
         Topic.broadcast(session.id, {event, session})
@@ -1400,7 +1452,7 @@ defmodule LiveQuiz.Games do
   # cancelling at the very second the deadline runs out end with exactly one
   # winner and a single status. Releasing everybody rides in the same
   # transaction, so a closed room never leaves people tied to it.
-  defp close_session(%GameSession{id: id}, status) do
+  defp close_session(%GameSession{id: id}, status, guards) do
     true = status in GameSession.closed_statuses()
     at = Room.now()
 
@@ -1409,7 +1461,16 @@ defmodule LiveQuiz.Games do
         where: s.id == ^id and s.status in ^GameSession.active_statuses(),
         select: s
 
+    query = apply_close_guards(query, guards, at)
+
     Repo.transaction(fn ->
+      # Both room locks, in the order `LiveQuiz.Games.Locks` fixes. The seats
+      # one is what makes a join already under way either finish first — and be
+      # released along with everybody — or wait here and find the room over. It
+      # used to be absent, so a participation could be inserted after the
+      # release ran and leave somebody tied to a room that had ended (R16).
+      Locks.room(id)
+
       case Repo.update_all(query,
              set: [status: status, finished_at: at, expires_at: nil, updated_at: at]
            ) do
@@ -1418,9 +1479,34 @@ defmodule LiveQuiz.Games do
           session
 
         {0, _unchanged} ->
-          Repo.rollback(:invalid_transition)
+          Repo.rollback(close_refusal(id, guards))
       end
     end)
+  end
+
+  # Expiring carries the deadline the sweeper selected the room on, and the
+  # `UPDATE` only fires while the database still holds that very deadline and it
+  # has run out. A host who came back cleared it, and a host who dropped again
+  # wrote a new one: neither matches, so a sweep that read the room a moment too
+  # early closes nothing (R17).
+  defp apply_close_guards(query, [], _at), do: query
+
+  defp apply_close_guards(query, [expires_at: deadline], at) do
+    query
+    |> where([s], s.expires_at == ^deadline)
+    |> where([s], s.expires_at <= ^at)
+  end
+
+  # A refusal has to say which of the two conditions failed, because the sweeper
+  # skips a room whose deadline moved and would otherwise treat it as a broken
+  # transition worth reporting.
+  defp close_refusal(_id, []), do: :invalid_transition
+
+  defp close_refusal(id, expires_at: _deadline) do
+    case Repo.get(GameSession, id) do
+      %GameSession{status: status} when status in [:waiting, :in_progress] -> :not_expired
+      _over_or_gone -> :invalid_transition
+    end
   end
 
   # One statement for the whole room. Only `released_at` is stamped: whoever was

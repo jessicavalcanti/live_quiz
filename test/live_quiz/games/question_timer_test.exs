@@ -325,7 +325,7 @@ defmodule LiveQuiz.Games.QuestionTimerTest do
     test "expirar a sala desliga o timer", %{session: session} do
       pid = QuestionTimer.whereis(session.id)
 
-      assert {:ok, _expired} = Games.expire_game_session(session)
+      assert {:ok, _expired} = session |> overdue_host_absence() |> Games.expire_game_session()
 
       refute Process.alive?(pid)
       assert is_nil(QuestionTimer.whereis(session.id))

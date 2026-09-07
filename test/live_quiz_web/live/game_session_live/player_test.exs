@@ -1322,7 +1322,7 @@ defmodule LiveQuizWeb.GameSessionLive.PlayerTest do
       {:ok, lv, _html} = live(conn, ~p"/game-sessions/#{session.join_code}")
 
       session = advance(scope, session)
-      {:ok, _expired} = Games.expire_game_session(session)
+      {:ok, _expired} = session |> overdue_host_absence() |> Games.expire_game_session()
 
       assert lv |> element("#room-closed") |> render() =~ "ausência do host"
     end
@@ -1673,7 +1673,7 @@ defmodule LiveQuizWeb.GameSessionLive.PlayerTest do
   end
 
   defp close_room(session, :expired) do
-    {:ok, session} = Games.expire_game_session(session)
+    {:ok, session} = session |> overdue_host_absence() |> Games.expire_game_session()
 
     session
   end

@@ -320,6 +320,26 @@ defmodule LiveQuiz.GamesFixtures do
     |> Repo.insert!()
   end
 
+  @doc """
+  Stamps a host absence whose deadline has already run out.
+
+  What the sweeper sees when it picks a room up, which is also the only state
+  `Games.expire_game_session/1` acts on: expiring is conditioned on the very
+  deadline the caller was selected with, so a test that wants a room expired
+  has to give it one.
+  """
+  @spec overdue_host_absence(GameSession.t(), non_neg_integer()) :: GameSession.t()
+  def overdue_host_absence(%GameSession{id: id} = session, seconds_ago \\ 60) do
+    expires_at = DateTime.add(now(), -seconds_ago, :second)
+    disconnected_at = DateTime.add(expires_at, -300, :second)
+
+    Repo.update_all(from(s in GameSession, where: s.id == ^id),
+      set: [host_disconnected_at: disconnected_at, expires_at: expires_at, updated_at: now()]
+    )
+
+    %{session | host_disconnected_at: disconnected_at, expires_at: expires_at}
+  end
+
   @doc "The current instant with the second precision the schemas persist."
   @spec now() :: DateTime.t()
   def now, do: DateTime.truncate(DateTime.utc_now(), :second)
