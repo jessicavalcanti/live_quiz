@@ -26,8 +26,12 @@ jobs:
           fi
 
           VERSION=$(grep -m1 -E '^\s*version:' mix.exs | sed -E 's/.*"([0-9]+\.[0-9]+\.[0-9]+)".*/\1/')
-          if [ -z "$VERSION" ]; then
-            echo "::error::Não foi possível ler a versão do mix.exs."
+
+          # O `sed` devolve a linha inteira quando não casa, então o formato é
+          # conferido em vez de suposto: uma versão ilegível vira erro aqui e não
+          # uma tag com um nome estranho.
+          if ! printf '%s' "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::Não foi possível ler uma versão semântica do mix.exs (li: '$VERSION')."
             exit 1
           fi
 
@@ -35,52 +39,104 @@ jobs:
           echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
           echo "Versão detectada: v$VERSION"
 
-      - name: A tag já existe?
-        id: check
+      # Tag e release são estados diferentes, e é essa distinção que faltava: a
+      # tag era criada antes de publicar, então uma falha na publicação deixava
+      # a versão com tag e sem release, e o rerun pulava tudo por já achar a tag
+      # — para sempre, até alguém intervir à mão (R49).
+      - name: O que já existe desta versão?
+        id: state
         if: steps.version.outputs.skip != 'true'
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          if git rev-parse "${{ steps.version.outputs.tag }}" >/dev/null 2>&1; then
-            echo "::notice::A tag ${{ steps.version.outputs.tag }} já existe. Suba a versão no mix.exs para gerar uma release nova."
-            echo "exists=true" >> "$GITHUB_OUTPUT"
+          if git rev-parse --verify --quiet "refs/tags/$TAG" >/dev/null; then
+            echo "tag=true" >> "$GITHUB_OUTPUT"
+            echo "tag_commit=$(git rev-list -n1 "$TAG")" >> "$GITHUB_OUTPUT"
           else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "tag=false" >> "$GITHUB_OUTPUT"
+            echo "tag_commit=" >> "$GITHUB_OUTPUT"
           fi
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Nada a fazer
+        if: steps.version.outputs.skip != 'true' && steps.state.outputs.release == 'true'
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          echo "::notice::$TAG já tem release publicada. Suba a versão no mix.exs para gerar uma nova."
+
+      # Uma tag que já existe só é reaproveitada depois de provar que aponta
+      # para este commit. Mover ou recriar uma tag publicada para esconder a
+      # divergência é pior do que parar e dizer o que houve.
+      - name: A tag existente aponta para este commit?
+        if: steps.version.outputs.skip != 'true' && steps.state.outputs.release == 'false' && steps.state.outputs.tag == 'true'
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+          TAG_COMMIT: ${{ steps.state.outputs.tag_commit }}
+          HEAD_COMMIT: ${{ github.sha }}
+        run: |
+          if [ "$TAG_COMMIT" != "$HEAD_COMMIT" ]; then
+            echo "::error::$TAG já existe e aponta para $TAG_COMMIT, não para $HEAD_COMMIT."
+            echo "::error::Suba a versão no mix.exs, ou apague a tag deliberadamente se ela nunca foi publicada."
+            exit 1
+          fi
+
+          echo "$TAG aponta para este commit: a release que falta será publicada."
 
       - name: Identificar entrega de fase
         id: phase
-        if: steps.version.outputs.skip != 'true' && steps.check.outputs.exists == 'false'
+        if: steps.version.outputs.skip != 'true' && steps.state.outputs.release == 'false'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.version.outputs.tag }}
         run: |
-          case "${{ steps.version.outputs.version }}" in
+          case "$VERSION" in
             0.1.0) NAME="Fase 1 — Criação e gerenciamento de quizzes"; PHASE=1 ;;
             0.2.0) NAME="Fase 2 — Sala de quiz e lobby em tempo real"; PHASE=2 ;;
             0.3.0) NAME="Fase 3 — Execução do quiz em tempo real";     PHASE=3 ;;
             1.0.0) NAME="Fase 4 — Pontuação, ranking e histórico";      PHASE=4 ;;
             *)     NAME=""; PHASE="" ;;
           esac
+
+          # O título é determinístico: republicar a mesma versão produz o mesmo
+          # texto, que é o que faz um rerun ser seguro.
           if [ -n "$PHASE" ]; then
-            echo "title=${{ steps.version.outputs.tag }} — $NAME" >> "$GITHUB_OUTPUT"
+            echo "title=$TAG — $NAME" >> "$GITHUB_OUTPUT"
             echo "is_phase=true" >> "$GITHUB_OUTPUT"
             echo "phase=$PHASE" >> "$GITHUB_OUTPUT"
           else
-            echo "title=${{ steps.version.outputs.tag }}" >> "$GITHUB_OUTPUT"
+            echo "title=$TAG" >> "$GITHUB_OUTPUT"
             echo "is_phase=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Criar a tag
-        if: steps.version.outputs.skip != 'true' && steps.check.outputs.exists == 'false'
+        if: steps.version.outputs.skip != 'true' && steps.state.outputs.release == 'false' && steps.state.outputs.tag == 'false'
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+          TITLE: ${{ steps.phase.outputs.title }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "${{ steps.version.outputs.tag }}" -m "${{ steps.phase.outputs.title }}"
-          git push origin "${{ steps.version.outputs.tag }}"
+          git tag -a "$TAG" -m "$TITLE"
+          git push origin "$TAG"
 
       - name: Montar o cabeçalho das notas
         id: notes
-        if: steps.version.outputs.skip != 'true' && steps.check.outputs.exists == 'false'
+        if: steps.version.outputs.skip != 'true' && steps.state.outputs.release == 'false'
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+          IS_PHASE: ${{ steps.phase.outputs.is_phase }}
+          PHASE: ${{ steps.phase.outputs.phase }}
         run: |
           {
-            if [ "${{ steps.phase.outputs.is_phase }}" = "true" ]; then
-              echo "## 🏁 Entrega da Fase ${{ steps.phase.outputs.phase }}"
+            if [ "$IS_PHASE" = "true" ]; then
+              echo "## 🏁 Entrega da Fase $PHASE"
               echo ""
               echo "Esta release marca a conclusão de uma fase completa do projeto."
               echo ""
@@ -88,7 +144,7 @@ jobs:
             echo "### Rodar esta versão localmente"
             echo ""
             echo '```bash'
-            echo "bin/demo ${{ steps.version.outputs.tag }}"
+            echo "bin/demo $TAG"
             echo '```'
             echo ""
             echo "A aplicação sobe em http://localhost:4000 com o banco migrado e populado."
@@ -97,12 +153,14 @@ jobs:
           echo "Cabeçalho gerado."
 
       - name: Publicar a release
-        if: steps.version.outputs.skip != 'true' && steps.check.outputs.exists == 'false'
+        if: steps.version.outputs.skip != 'true' && steps.state.outputs.release == 'false'
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          TITLE: ${{ steps.phase.outputs.title }}
         run: |
-          gh release create "${{ steps.version.outputs.tag }}" \
-            --title "${{ steps.phase.outputs.title }}" \
+          gh release create "$TAG" \
+            --title "$TITLE" \
             --notes-file header.md \
             --generate-notes \
             --verify-tag
