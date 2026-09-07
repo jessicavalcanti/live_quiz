@@ -3,12 +3,26 @@ defmodule LiveQuiz.Games.Locks do
   The advisory locks a room is serialized by, and the order they are taken in.
 
   Postgres advisory locks live in one namespace shared by the whole
-  application, so the first key of every one of them is a *class* saying what
-  the second key identifies. Keeping the classes in one module is the point:
-  two callers that picked the same class for different subjects would block
-  each other for no reason, and two that picked different classes for the same
-  subject would not block at all — the failure nobody notices until two browser
-  tabs both win.
+  application, so every key carries a *class* saying what the rest of it
+  identifies. Keeping the classes in one module is the point: two callers that
+  picked the same class for different subjects would block each other for no
+  reason, and two that picked different classes for the same subject would not
+  block at all — the failure nobody notices until two browser tabs both win.
+
+  ## Why one 64-bit key and not two 32-bit ones
+
+  The two-argument form of `pg_advisory_xact_lock` takes two `int4`, and the
+  ids of this application are `bigint`. Past `2_147_483_647` the id is simply
+  not representable there: the call would fail, on the busiest table, long after
+  anybody was still thinking about advisory locks (R45).
+
+  So the class and the id are packed into the single `bigint` key instead: the
+  class in the high bits, the id in the low #{56}. That is exact rather than
+  hashed — two different subjects can never collide into the same lock — and it
+  costs a bound on the id, `#{1_000} times` beyond anything a `bigserial` will
+  reach in the life of this application. The bound is checked rather than
+  assumed: an id past it raises here, where the message can say what happened,
+  instead of wedging a room.
 
   | Class | Second key | Serializes |
   |---|---|---|
@@ -57,6 +71,12 @@ defmodule LiveQuiz.Games.Locks do
   @seats_lock_class 2
   @match_lock_class 3
 
+  # 56 bits for the id leaves the class in the top 8 and the whole key inside a
+  # signed `bigint`. A `bigserial` reaching 2^56 would need a row inserted every
+  # microsecond for two thousand years.
+  @id_bits 56
+  @max_id Bitwise.<<<(1, @id_bits) - 1
+
   @doc "Serializes everything one account does across rooms. Always taken first."
   @spec identity(integer()) :: :ok
   def identity(user_id), do: advisory(@identity_lock_class, user_id)
@@ -91,9 +111,29 @@ defmodule LiveQuiz.Games.Locks do
     GameSession |> where([s], s.id == ^id) |> lock("FOR UPDATE") |> Repo.one()
   end
 
-  defp advisory(class, key) do
-    Repo.query!("SELECT pg_advisory_xact_lock($1, $2)", [class, key])
+  defp advisory(class, id) when is_integer(id) and id > 0 and id <= @max_id do
+    Repo.query!("SELECT pg_advisory_xact_lock($1)", [key(class, id)])
 
     :ok
   end
+
+  defp advisory(_class, id) do
+    raise ArgumentError,
+          "#{inspect(id)} cannot be locked: an advisory lock key holds ids from 1 to #{@max_id}"
+  end
+
+  @doc """
+  The single `bigint` key a class and an id become.
+
+  Public so a test can prove that two classes never produce the same key for
+  the same id, and that the packing survives the largest id it accepts.
+  """
+  @spec key(pos_integer(), pos_integer()) :: pos_integer()
+  def key(class, id) when is_integer(class) and is_integer(id) do
+    Bitwise.<<<(class, @id_bits) + id
+  end
+
+  @doc "The largest row id an advisory lock key can hold."
+  @spec max_id() :: pos_integer()
+  def max_id, do: @max_id
 end

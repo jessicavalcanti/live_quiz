@@ -60,6 +60,7 @@ defmodule LiveQuiz.Games.Match do
   alias LiveQuiz.Quizzes.Question
   alias LiveQuiz.Quizzes.Quiz
   alias LiveQuiz.Repo
+  alias LiveQuiz.ResourceId
 
   @doc """
   Puts the room live, freezing the quiz into it, which is the only way out of
@@ -299,7 +300,13 @@ defmodule LiveQuiz.Games.Match do
           | {:error, :not_found | :invalid_status | :no_open_question | :not_due | :stale}
   def close_question_by_timeout(session_id, expected_position \\ nil)
       when is_integer(session_id) do
-    Telemetry.transition(:close, fn -> close_by_timeout(session_id, expected_position) end)
+    # An id no row could have names no match, which is the same answer a match
+    # that is gone gets. Reaching the lock with it would raise instead, and a
+    # timer firing for a match that no longer exists is ordinary (R30, R45).
+    case ResourceId.cast(session_id) do
+      {:ok, id} -> Telemetry.transition(:close, fn -> close_by_timeout(id, expected_position) end)
+      :error -> {:error, :not_found}
+    end
   end
 
   defp close_by_timeout(session_id, expected_position) do
