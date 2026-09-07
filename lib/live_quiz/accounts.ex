@@ -372,22 +372,57 @@ defmodule LiveQuiz.Accounts do
   end
 
   @doc """
-  Resets the user password and expires every token of that user,
-  which logs out all the active sessions.
+  Resets the password of the user the reset token belongs to.
+
+  The token is the authorization for this write, so it is re-checked here
+  rather than by the caller: a link validated when a page was opened says
+  nothing about whether it is still valid now, and a second tab holding the
+  same link must not be able to set the password again after the first one
+  consumed it.
+
+  Everything happens in one transaction. The user row is taken `FOR UPDATE`
+  first, so two resets of the same account queue up instead of racing, and the
+  token is only re-read once that lock is held — a competitor that got there
+  first has already deleted it by then, and this call answers
+  `{:error, :invalid_token}`.
+
+  An invalid password does not spend a valid token: the changeset error rolls
+  the transaction back, leaving the link usable for the next attempt.
+
+  Returns the updated user with every token that was expired. Those tokens
+  still authorize LiveViews that mounted before the reset, so the caller has to
+  pass them to `LiveQuizWeb.UserAuth.disconnect_sessions/1` after this returns
+  — deleting the rows only stops the *next* HTTP authentication.
 
   ## Examples
 
-      iex> reset_user_password(user, %{password: "new long password"})
+      iex> reset_user_password(token, %{password: "new long password"})
       {:ok, {%User{}, [...]}}
 
-      iex> reset_user_password(user, %{password: "short"})
+      iex> reset_user_password(token, %{password: "short"})
       {:error, %Ecto.Changeset{}}
 
+      iex> reset_user_password("already used", %{password: "new long password"})
+      {:error, :invalid_token}
+
   """
-  def reset_user_password(user, attrs) do
-    user
-    |> User.password_changeset(attrs)
-    |> update_user_and_delete_all_tokens()
+  def reset_user_password(token, attrs) when is_binary(token) do
+    Repo.transact(fn ->
+      with {:ok, query} <- UserToken.verify_email_token_query(token, "reset_password"),
+           %User{id: user_id} <- Repo.one(query),
+           %User{} <- lock_user(user_id),
+           %User{} = user <- Repo.one(query) do
+        user
+        |> User.password_changeset(attrs)
+        |> update_user_and_delete_all_tokens()
+      else
+        _ -> {:error, :invalid_token}
+      end
+    end)
+  end
+
+  defp lock_user(user_id) do
+    User |> where([u], u.id == ^user_id) |> lock("FOR UPDATE") |> Repo.one()
   end
 
   ## Session
@@ -402,15 +437,23 @@ defmodule LiveQuiz.Accounts do
 
   ## Token helper
 
+  # Callers already inside a transaction — `reset_user_password/2` — get the
+  # same guarantee without opening a nested one, which Ecto would flatten anyway.
   defp update_user_and_delete_all_tokens(changeset) do
-    Repo.transact(fn ->
-      with {:ok, user} <- Repo.update(changeset) do
-        tokens_to_expire = Repo.all_by(UserToken, user_id: user.id)
+    if Repo.in_transaction?() do
+      expire_tokens_of_updated_user(changeset)
+    else
+      Repo.transact(fn -> expire_tokens_of_updated_user(changeset) end)
+    end
+  end
 
-        Repo.delete_all(from(t in UserToken, where: t.id in ^Enum.map(tokens_to_expire, & &1.id)))
+  defp expire_tokens_of_updated_user(changeset) do
+    with {:ok, user} <- Repo.update(changeset) do
+      tokens_to_expire = Repo.all_by(UserToken, user_id: user.id)
 
-        {:ok, {user, tokens_to_expire}}
-      end
-    end)
+      Repo.delete_all(from(t in UserToken, where: t.id in ^Enum.map(tokens_to_expire, & &1.id)))
+
+      {:ok, {user, tokens_to_expire}}
+    end
   end
 end

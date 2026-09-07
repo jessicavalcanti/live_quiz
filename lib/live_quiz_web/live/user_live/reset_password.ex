@@ -2,6 +2,7 @@ defmodule LiveQuizWeb.UserLive.ResetPassword do
   use LiveQuizWeb, :live_view
 
   alias LiveQuiz.Accounts
+  alias LiveQuizWeb.UserAuth
 
   @impl true
   def render(assigns) do
@@ -57,6 +58,9 @@ defmodule LiveQuizWeb.UserLive.ResetPassword do
          |> redirect(to: ~p"/")}
 
       user ->
+        # `user` is here to build the form only. What authorizes the write is
+        # the token, and the context re-checks it on submit: this page may sit
+        # open long after the link stopped being valid.
         {:ok,
          socket
          |> assign(user: user, token: token)
@@ -66,12 +70,22 @@ defmodule LiveQuizWeb.UserLive.ResetPassword do
 
   @impl true
   def handle_event("reset_password", %{"user" => user_params}, socket) do
-    case Accounts.reset_user_password(socket.assigns.user, user_params) do
-      {:ok, {_user, _expired_tokens}} ->
+    case Accounts.reset_user_password(socket.assigns.token, user_params) do
+      {:ok, {_user, expired_tokens}} ->
+        # Deleting the rows blocks the next HTTP authentication; sockets that
+        # already carry a scope keep the old identity until they are told to go.
+        UserAuth.disconnect_sessions(expired_tokens)
+
         {:noreply,
          socket
          |> put_flash(:info, "Senha redefinida com sucesso. Entre com a nova senha.")
          |> redirect(to: ~p"/users/log-in")}
+
+      {:error, :invalid_token} ->
+        {:noreply,
+         socket
+         |> put_flash(:error, "O link de redefinição é inválido ou expirou.")
+         |> redirect(to: ~p"/")}
 
       {:error, changeset} ->
         {:noreply, assign_form(socket, Map.put(changeset, :action, :insert))}
