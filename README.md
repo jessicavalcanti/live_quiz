@@ -406,7 +406,24 @@ Variáveis lidas em tempo de execução (`config/runtime.exs`):
 | `SECRET_KEY_BASE` | sim | — |
 | `PHX_HOST` | não | `example.com` |
 | `PORT` | não | `4000` |
-| `SMTP_HOST` / `SMTP_PORT` | não | `localhost` / `1025` |
+| `SMTP_MODE` | não | `provider` |
+| `SMTP_HOST` | **sim**, fora de `SMTP_MODE=demo` | — |
+| `SMTP_PORT` | não | `587` (`1025` no modo demo) |
+| `SMTP_USERNAME` / `SMTP_PASSWORD` | **sim**, fora de `SMTP_MODE=demo` | — |
+| `SMTP_AUTH` | não | `always` |
+| `SMTP_TLS` | não | `always` |
+| `SMTP_SSL` | não | `false` |
+| `MAIL_FROM` | não | `nao-responda@livequiz.dev` |
+
+O envio de e-mail é **assíncrono e durável**: a intenção é gravada em
+`email_deliveries` na mesma transação do token, e `LiveQuiz.Mail.Courier`
+entrega com até 5 tentativas (30s, 2min, 10min, 1h). Uma mensagem deixa de ser
+tentada quando o link que ela carrega expira — insistir depois entregaria um
+endereço morto.
+
+`SMTP_MODE=demo` é o relay aberto do Mailpit, sem autenticação nem TLS, e é o
+que o `docker-compose.demo.yml` usa. Em qualquer outro modo a release **não
+sobe** sem host, usuário e senha, e verifica o certificado do servidor.
 
 ---
 

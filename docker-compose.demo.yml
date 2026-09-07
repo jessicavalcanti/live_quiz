@@ -41,6 +41,9 @@ services:
       PHX_SCHEME: ${PHX_SCHEME:-http}
       PHX_URL_PORT: ${DEMO_PORT:-4000}
       PORT: "4000"
+      # O relay aberto ao lado é da demonstração, e agora precisa dizer isso:
+      # sem SMTP_MODE=demo a release exige credenciais de um provedor real (R07).
+      SMTP_MODE: demo
       SMTP_HOST: mailpit
       SMTP_PORT: "1025"
     # A aplicação é o único serviço que uma demonstração em LAN precisa expor, e

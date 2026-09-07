@@ -4,6 +4,7 @@ defmodule LiveQuiz.Accounts do
   """
 
   import Ecto.Query, warn: false
+  alias LiveQuiz.Mail
   alias LiveQuiz.Repo
 
   # How recently somebody has to have proved their password before the
@@ -253,10 +254,9 @@ defmodule LiveQuiz.Accounts do
   """
   def deliver_user_update_email_instructions(%User{} = user, current_email, update_email_url_fun)
       when is_function(update_email_url_fun, 1) do
-    {encoded_token, user_token} = UserToken.build_email_token(user, "change:#{current_email}")
-
-    Repo.insert!(user_token)
-    UserNotifier.deliver_update_email_instructions(user, update_email_url_fun.(encoded_token))
+    record_token_email(user, "change:#{current_email}", update_email_url_fun, fn url ->
+      {"update_email", UserNotifier.update_email_instructions(user, url)}
+    end)
   end
 
   @doc """
@@ -331,9 +331,9 @@ defmodule LiveQuiz.Accounts do
     if user.confirmed_at do
       {:error, :already_confirmed}
     else
-      {encoded_token, user_token} = UserToken.build_email_token(user, "confirm")
-      Repo.insert!(user_token)
-      UserNotifier.deliver_confirmation_instructions(user, confirmation_url_fun.(encoded_token))
+      record_token_email(user, "confirm", confirmation_url_fun, fn url ->
+        {"confirmation", UserNotifier.confirmation_instructions(user, url)}
+      end)
     end
   end
 
@@ -375,9 +375,46 @@ defmodule LiveQuiz.Accounts do
   """
   def deliver_user_reset_password_instructions(%User{} = user, reset_password_url_fun)
       when is_function(reset_password_url_fun, 1) do
-    {encoded_token, user_token} = UserToken.build_email_token(user, "reset_password")
-    Repo.insert!(user_token)
-    UserNotifier.deliver_reset_password_instructions(user, reset_password_url_fun.(encoded_token))
+    record_token_email(user, "reset_password", reset_password_url_fun, fn url ->
+      {"reset_password", UserNotifier.reset_password_instructions(user, url)}
+    end)
+  end
+
+  # The token and the intent to mail it are written in one transaction, so the
+  # two facts cannot disagree: there is no token whose message was never owed,
+  # and no message owed for a token that does not exist (R07). Sending is not
+  # part of it — that is exactly what was wrong before.
+  defp record_token_email(%User{} = user, context, url_fun, render) do
+    {encoded_token, user_token} = UserToken.build_email_token(user, context)
+    {kind, message} = render.(url_fun.(encoded_token))
+
+    result =
+      Repo.transact(fn ->
+        token = Repo.insert!(user_token)
+
+        Mail.record(%{
+          user_id: user.id,
+          recipient: user.email,
+          subject: message.subject,
+          body: message.body,
+          kind: kind,
+          # One intent per token. A caller that runs twice writes one message;
+          # a genuinely new request mints a new token and is a new message.
+          dedupe_key: Base.encode16(token.token, case: :lower),
+          expires_at: expiry_of(context)
+        })
+      end)
+
+    with {:ok, delivery} <- result do
+      Mail.deliver_soon()
+
+      {:ok, delivery}
+    end
+  end
+
+  # The message is worth sending exactly as long as the link works.
+  defp expiry_of(context) do
+    DateTime.add(DateTime.utc_now(:second), UserToken.validity_in_days(context), :day)
   end
 
   @doc """

@@ -98,6 +98,11 @@ jobs:
       SECRET_KEY_BASE: smoke-secret-key-base-com-no-minimo-64-caracteres-para-o-teste-de-empacotamento
       GUARDIAN_SECRET_KEY: smoke-guardian-secret-key-apenas-para-o-teste-de-empacotamento
       PHX_HOST: localhost
+      # A smoke não manda e-mail, mas a release agora exige um contrato de SMTP
+      # completo fora do modo de demonstração (R07). Declarar o modo aqui é o
+      # que uma demonstração faz; a etapa "Sem credenciais de SMTP" abaixo é o
+      # que prova que qualquer outra coisa precisa das credenciais.
+      SMTP_MODE: demo
     services:
       db:
         image: postgres:16-alpine
@@ -125,14 +130,34 @@ jobs:
       - name: Migrações e seed da demonstração
         run: |
           docker run --rm --network host \
-            -e DATABASE_URL -e SECRET_KEY_BASE -e GUARDIAN_SECRET_KEY \
+            -e DATABASE_URL -e SECRET_KEY_BASE -e GUARDIAN_SECRET_KEY -e SMTP_MODE \
             -e DEMO_SEED=true \
             live-quiz-smoke bin/live_quiz eval 'LiveQuiz.Release.migrate(); LiveQuiz.Release.seed()'
+
+      # Um provedor real sem credenciais tem de ser um erro de partida, e não um
+      # relay aberto por engano: a configuração antiga não pedia nada e mandava
+      # e-mail para localhost sem TLS (R07).
+      - name: Sem credenciais de SMTP, a release não sobe
+        run: |
+          if docker run --rm --network host \
+            -e DATABASE_URL -e SECRET_KEY_BASE -e GUARDIAN_SECRET_KEY -e PHX_HOST \
+            live-quiz-smoke bin/live_quiz eval 'IO.puts("subiu")' > smtp.log 2>&1; then
+            echo "::error::A release subiu sem SMTP_HOST, SMTP_USERNAME e SMTP_PASSWORD"
+            cat smtp.log
+            exit 1
+          fi
+
+          grep -q "SMTP_HOST" smtp.log || {
+            echo "::error::A release falhou por outro motivo que não a configuração de SMTP"
+            cat smtp.log
+            exit 1
+          }
 
       - name: A aplicação sobe e responde
         run: |
           docker run -d --name smoke --network host \
             -e DATABASE_URL -e SECRET_KEY_BASE -e GUARDIAN_SECRET_KEY -e PHX_HOST \
+            -e SMTP_MODE \
             live-quiz-smoke
 
           for attempt in $(seq 1 60); do

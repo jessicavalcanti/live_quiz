@@ -278,6 +278,8 @@ Onde a informação foi descartada de propósito, `down` recria a coluna vazia:
 | `add_question_totals_to_game_results` | o esquema sem os contadores | — |
 | `add_public_id_to_game_sessions` | o esquema sem o identificador | os identificadores emitidos, que eram os endereços duráveis |
 | `enforce_result_invariants_in_the_database` | as constraints anteriores | — |
+| `add_refresh_token_families_and_auth_version` | o esquema sem as famílias | as sessões de API abertas, que passam a valer de novo até expirar |
+| `record_email_send_intents` | o esquema sem a caixa de saída | as mensagens ainda não entregues, que somem com a tabela |
 
 Antes de qualquer migração que transforme dado: **backup, dry run em cópia da
 base, e contagem antes e depois**. Uma migração irreversível deve dizer que é
@@ -370,6 +372,7 @@ ou dentro do container com `docker compose exec app`.
 | Integridade | validação no changeset **e** constraint no banco — as escritas em lote não passam por changeset |
 | Locks | ordem global única, declarada em `LiveQuiz.Games.Locks`: **identity → match → seats** |
 | Sessões | apagar `UserToken` encerra sessões web; desconectar sockets já montados exige `UserAuth.disconnect_sessions/1`. As sessões de API são revogadas em duas metades: a família em `refresh_tokens` (um dispositivo) e `users.auth_version` no claim `ver` (todos, na hora) |
+| E-mail | gravar a intenção e enviar são separados: `LiveQuiz.Mail.record/1` escreve na mesma transação do token e `LiveQuiz.Mail.Courier` entrega, com retry limitado. Uma mensagem para de ser tentada quando o link que ela carrega expira. Fora de `SMTP_MODE=demo`, a release exige host, usuário, senha e verifica o certificado |
 | Limites | orçamentos por operação em `LiveQuiz.RateLimit`, gastos **antes** do trabalho caro. Chave por operação + identidade + origem, nunca só a origem; responder é contado por participação, para que ninguém trave a sala inteira. A origem é `remote_ip` — `X-Forwarded-For` não é lido, então atrás de proxy é o proxy que precisa entregar o endereço do par |
 
 ---

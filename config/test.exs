@@ -73,3 +73,9 @@ config :phoenix,
 # would make one case fail because of another. The cases that exercise it turn
 # it on with `LiveQuiz.RateLimitCase`.
 config :live_quiz, LiveQuiz.RateLimit, enabled: false
+
+# E-mail: gravar a intenção e entregar acontecem na mesma chamada, para que um
+# teste que dispara um envio possa afirmar sobre ele sem correr atrás de um
+# processo. O carteiro existe, mas não drena sozinho.
+config :live_quiz, LiveQuiz.Mail, mode: :inline
+config :live_quiz, LiveQuiz.Mail.Courier, enabled: false

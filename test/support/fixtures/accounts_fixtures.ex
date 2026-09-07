@@ -53,9 +53,13 @@ defmodule LiveQuiz.AccountsFixtures do
     Scope.for_user(user)
   end
 
+  # O que a chamada devolve agora é a intenção gravada, não o e-mail enviado
+  # (R07). O corpo é o mesmo, e é dele que o token sai — o envio em si acontece
+  # no modo `:inline` durante a chamada, então quem quiser afirmar sobre a
+  # entrega ainda tem `assert_email_sent/0`.
   def extract_user_token(fun) do
-    {:ok, captured_email} = fun.(&"[TOKEN]#{&1}[TOKEN]")
-    [_, token | _] = String.split(captured_email.text_body, "[TOKEN]")
+    {:ok, %LiveQuiz.Mail.Delivery{body: body}} = fun.(&"[TOKEN]#{&1}[TOKEN]")
+    [_, token | _] = String.split(body, "[TOKEN]")
     token
   end
 
