@@ -250,7 +250,7 @@ defmodule LiveQuiz.Games.Match do
   def close_question(%Scope{} = scope, %GameSession{} = session, opts \\ []) do
     with {:ok, hosted} <- Room.fetch_hosted(scope, session),
          {:ok, outcome} <- close_current_question(hosted, opts) do
-      QuestionTimer.stop(hosted.id)
+      stop_timer_of(outcome)
 
       case outcome do
         {:closed, closed, effects} ->
@@ -284,11 +284,12 @@ defmodule LiveQuiz.Games.Match do
   The result is indistinguishable from `close_question/2`: same columns, same
   event. Only the origin differs.
   """
-  @spec close_question_by_timeout(integer()) ::
+  @spec close_question_by_timeout(integer(), pos_integer() | nil) ::
           {:ok, GameSession.t()}
-          | {:error, :not_found | :invalid_status | :no_open_question | :not_due}
-  def close_question_by_timeout(session_id) when is_integer(session_id) do
-    case close_due_question(session_id) do
+          | {:error, :not_found | :invalid_status | :no_open_question | :not_due | :stale}
+  def close_question_by_timeout(session_id, expected_position \\ nil)
+      when is_integer(session_id) do
+    case close_due_question(session_id, expected_position) do
       {:ok, {:closed, closed, effects}} ->
         publish_effects(closed.id, effects)
         Topic.broadcast(closed.id, {:question_closed, closed})
@@ -399,7 +400,7 @@ defmodule LiveQuiz.Games.Match do
         Topic.broadcast(session.id, {:answer_submitted, session.id, count})
 
         if closed? do
-          QuestionTimer.stop(session.id)
+          QuestionTimer.stop(session.id, session.current_question_position)
           publish_effects(session.id, effects)
           Topic.broadcast(session.id, {:question_closed, session})
         end
@@ -794,31 +795,37 @@ defmodule LiveQuiz.Games.Match do
   # take turns and the loser writes nothing. The deadline is read inside the
   # transaction rather than trusted from the caller: a timer only knows when it
   # was armed, the row knows when the question actually ends.
-  defp close_due_question(session_id) do
+  defp close_due_question(session_id, expected_position) do
     Repo.transaction(fn ->
       Locks.match(session_id)
 
       case Repo.get(GameSession, session_id) do
         nil -> Repo.rollback(:not_found)
-        %GameSession{} = session -> close_if_due(session)
+        %GameSession{} = session -> close_if_due(session, expected_position)
       end
     end)
   end
 
-  defp close_if_due(%GameSession{} = session) do
-    case GameSession.ensure_running(session) do
-      {:error, reason} ->
-        Repo.rollback(reason)
-
-      {:ok, %GameSession{current_question_position: nil}} ->
-        Repo.rollback(:no_open_question)
-
-      {:ok, %GameSession{current_question_closed_at: at} = closed} when not is_nil(at) ->
-        {:already_closed, closed}
-
-      {:ok, %GameSession{} = open} ->
-        if GameSession.question_due?(open), do: close_now(open), else: Repo.rollback(:not_due)
+  defp close_if_due(%GameSession{} = session, expected_position) do
+    with {:ok, running} <- GameSession.ensure_running(session),
+         # A timer that waited on the lock while the host advanced would
+         # otherwise close the question it found rather than the one it was
+         # armed for (R18).
+         :ok <- ensure_expected_position(running, expected_position) do
+      close_due(running)
+    else
+      {:error, reason} -> Repo.rollback(reason)
     end
+  end
+
+  defp close_due(%GameSession{current_question_position: nil}),
+    do: Repo.rollback(:no_open_question)
+
+  defp close_due(%GameSession{current_question_closed_at: at} = closed) when not is_nil(at),
+    do: {:already_closed, closed}
+
+  defp close_due(%GameSession{} = open) do
+    if GameSession.question_due?(open), do: close_now(open), else: Repo.rollback(:not_due)
   end
 
   # Closing and consolidating are one step, taken inside the transaction that is
@@ -874,6 +881,15 @@ defmodule LiveQuiz.Games.Match do
 
   # Everything the committed transaction wants the room to hear, announced only
   # now that it is committed.
+  # The timer is stopped for the question that was just closed, named by its
+  # position: by the time this runs the host may have advanced, and a stop that
+  # named only the room would take down the timer of the *new* question (R18).
+  defp stop_timer_of({:closed, %GameSession{} = closed, _effects}),
+    do: QuestionTimer.stop(closed.id, closed.current_question_position)
+
+  defp stop_timer_of({:already_closed, %GameSession{} = closed}),
+    do: QuestionTimer.stop(closed.id, closed.current_question_position)
+
   defp publish_effects(_session_id, effects) do
     Enum.each(effects, fn {id, message} -> Topic.broadcast(id, message) end)
   end
