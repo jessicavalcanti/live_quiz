@@ -297,7 +297,8 @@ defmodule LiveQuiz.Games.QuestionTimerTest do
       option = option_at(questions, 1, 1)
       pid = QuestionTimer.whereis(session.id)
 
-      assert {:ok, %{closed?: true}} = Games.answer_question(participant, option.id, 1)
+      assert {:ok, %{closed?: true}} =
+               Games.answer_question(participant, option.id, [participant.id])
 
       refute Process.alive?(pid)
       assert is_nil(QuestionTimer.whereis(session.id))
@@ -394,7 +395,7 @@ defmodule LiveQuiz.Games.QuestionTimerTest do
       assert [{:ok, %GameSession{}}, {:error, reason}] =
                in_parallel([:timer, :answer], fn
                  :timer -> Games.close_question_by_timeout(session.id)
-                 :answer -> Games.answer_question(participant, option.id, 1)
+                 :answer -> Games.answer_question(participant, option.id, [participant.id])
                end)
 
       # A resposta chegou depois do prazo, então o encerramento é do timer.
@@ -416,7 +417,7 @@ defmodule LiveQuiz.Games.QuestionTimerTest do
       assert [timer_result, {:ok, %{closed?: true}}] =
                in_parallel([:timer, :answer], fn
                  :timer -> Games.close_question_by_timeout(session.id)
-                 :answer -> Games.answer_question(participant, option.id, 1)
+                 :answer -> Games.answer_question(participant, option.id, [participant.id])
                end)
 
       # As duas ordens da mesma corrida são legítimas: o timer que chega com a

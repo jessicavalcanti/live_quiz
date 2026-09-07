@@ -1059,7 +1059,7 @@ defmodule LiveQuizWeb.GameSessionLive.PlayerTest do
       {:ok, lv, _html} = live(conn, ~p"/game-sessions/#{session.join_code}")
 
       session = advance(scope, session)
-      {:ok, _answer} = Games.answer_question(bruno, option_at(session, 1, 1).id, 2)
+      {:ok, _answer} = Games.answer_question(bruno, option_at(session, 1, 1).id, [])
 
       render_click(lv, "answer", %{"option_id" => to_string(option_at(session, 1, 2).id)})
 
@@ -1356,7 +1356,7 @@ defmodule LiveQuizWeb.GameSessionLive.PlayerTest do
       session = advance(scope, session)
       session = scope |> close_question!(session) |> then(&advance(scope, &1, 1))
       chosen = option_at(session, 2, 2)
-      {:ok, _answer} = Games.answer_question(participant, chosen.id, 0)
+      {:ok, _answer} = Games.answer_question(participant, chosen.id, [])
 
       {:ok, lv, _html} = live(conn, ~p"/game-sessions/#{session.join_code}")
 
@@ -1515,7 +1515,7 @@ defmodule LiveQuizWeb.GameSessionLive.PlayerTest do
       {:ok, lv, _html} = live(conn, ~p"/game-sessions/#{session.join_code}")
 
       session = advance(scope, session)
-      {:ok, _answer} = Games.answer_question(bruno, option_at(session, 1, 1).id, 3)
+      {:ok, _answer} = Games.answer_question(bruno, option_at(session, 1, 1).id, [])
 
       html = render(lv)
 

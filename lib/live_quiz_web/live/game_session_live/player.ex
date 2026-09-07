@@ -85,7 +85,7 @@ defmodule LiveQuizWeb.GameSessionLive.Player do
       |> assign(:ended, nil)
       |> assign(:leaving?, false)
       |> assign(:participants_empty?, true)
-      |> assign(:connected_count, 0)
+      |> assign(:connected_ids, [])
       |> assign(:question_count, 0)
       |> assign(:game_state, nil)
       |> assign(:selected_option_id, nil)
@@ -212,7 +212,9 @@ defmodule LiveQuizWeb.GameSessionLive.Player do
     |> assign(:participants_count, length(participants))
     # Not shown anywhere on this screen: it is what an answer carries to the
     # context, which uses it to decide whether this was the last one missing.
-    |> assign(:connected_count, Enum.count(participants, & &1.connected))
+    # The ids and not the count, because that decision is about which people
+    # answered and not about how many.
+    |> assign(:connected_ids, for(p <- participants, p.connected, do: p.id))
   end
 
   # The whole match in one read (F3-03), never an edit of what is on screen: a
@@ -385,11 +387,11 @@ defmodule LiveQuizWeb.GameSessionLive.Player do
 
   # What ends up highlighted is read back from the database and never taken from
   # the click: a write that failed must not leave a mark on screen saying that
-  # it worked. `connected_count` is the room the presence is showing, and the
+  # it worked. `connected_ids` is the room the presence is showing, and the
   # context uses it for one thing only — deciding whether this answer was the
   # last one missing.
   defp submit(socket, option_id) do
-    %{participant: participant, connected_count: connected} = socket.assigns
+    %{participant: participant, connected_ids: connected} = socket.assigns
 
     case Games.answer_question(participant, option_id, connected) do
       {:ok, _recorded} -> socket |> assign(:notice, nil) |> load_match()

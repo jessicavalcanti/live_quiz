@@ -88,6 +88,12 @@ defmodule LiveQuizWeb.GameOver do
             <dt class="text-base-content/70">Sem resposta</dt><dd class="font-bold">
               {@result.unanswered_questions}
             </dd>
+            <dd
+              :if={@result.played_questions < @result.total_questions}
+              class="text-xs text-base-content/60"
+            >
+              de {@result.played_questions} aplicadas
+            </dd>
           </div>
           <div>
             <dt class="text-base-content/70">Tempo médio</dt><dd class="font-bold">

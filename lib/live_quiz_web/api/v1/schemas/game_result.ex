@@ -20,8 +20,23 @@ defmodule LiveQuizWeb.Api.V1.Schemas.GameResult do
         score: %Schema{type: :integer},
         correct_answers: %Schema{type: :integer},
         incorrect_answers: %Schema{type: :integer},
-        unanswered_questions: %Schema{type: :integer},
+        unanswered_questions: %Schema{
+          type: :integer,
+          description: "Perguntas aplicadas que esta participação não respondeu"
+        },
         answered_questions: %Schema{type: :integer},
+        played_questions: %Schema{
+          type: :integer,
+          description:
+            "Perguntas que a partida chegou a aplicar. " <>
+              "Sempre igual a answered_questions + unanswered_questions"
+        },
+        total_questions: %Schema{
+          type: :integer,
+          description:
+            "Perguntas congeladas no snapshot da partida. " <>
+              "Maior que played_questions quando a partida terminou antes do fim"
+        },
         total_response_time_ms: %Schema{type: :integer},
         average_response_time_ms: %Schema{type: :number, nullable: true},
         final_position: %Schema{type: :integer},
@@ -40,6 +55,8 @@ defmodule LiveQuizWeb.Api.V1.Schemas.GameResult do
         :incorrect_answers,
         :unanswered_questions,
         :answered_questions,
+        :played_questions,
+        :total_questions,
         :total_response_time_ms,
         :final_position,
         :question_results,
@@ -58,6 +75,8 @@ defmodule LiveQuizWeb.Api.V1.Schemas.GameResult do
         "incorrect_answers" => 1,
         "unanswered_questions" => 0,
         "answered_questions" => 10,
+        "played_questions" => 10,
+        "total_questions" => 10,
         "total_response_time_ms" => 12_400,
         "average_response_time_ms" => 1240,
         "final_position" => 1,

@@ -339,13 +339,17 @@ defmodule LiveQuiz.Games.Match do
   showing the question open is not an argument: a millisecond past the deadline
   is `:time_is_up`.
 
-  `connected_count` comes from whoever watches the presence of the room (AD-23)
-  and is used for one thing only — deciding whether this answer was the last
-  one missing. When the answers of the current question reach it, the question
-  is closed inside this very transaction, under the same advisory lock the
-  host's commands take (AD-42), so two final answers cannot both conclude "only
-  I was missing" and close it twice. With nobody connected the rule never
-  fires, and the question waits for the deadline or for the host.
+  `connected_ids` are the participations the presence of the room is showing
+  (AD-23), and they are used for one thing only — deciding whether this answer
+  was the last one missing. It is a question about people, not about totals:
+  every connected participation has to be among the ones that answered. Two
+  independent counts would let an answer from somebody who has since dropped
+  off stand in for somebody still connected who has not answered yet, and the
+  question would close on them. When the set is complete the question is closed
+  inside this very transaction, under the same advisory lock the host's commands
+  take (AD-42), so two final answers cannot both conclude "only I was missing"
+  and close it twice. With nobody connected the rule never fires, and the
+  question waits for the deadline or for the host.
 
   Being connected is deliberately *not* required in order to answer: somebody
   may tap at the exact instant the presence has yet to register them, and
@@ -364,7 +368,7 @@ defmodule LiveQuiz.Games.Match do
   > in the refinement and accepted; a rate limit, if it ever becomes necessary,
   > belongs right here, before the transaction opens.
   """
-  @spec answer_question(Participant.t(), integer(), non_neg_integer()) ::
+  @spec answer_question(Participant.t(), integer(), Enumerable.t()) ::
           {:ok, %{answer: Answer.t(), session: GameSession.t(), closed?: boolean()}}
           | {:error,
              :invalid_status
@@ -373,10 +377,9 @@ defmodule LiveQuiz.Games.Match do
              | :time_is_up
              | :option_not_found
              | :left_session}
-  def answer_question(%Participant{} = participant, answer_option_id, connected_count)
-      when is_integer(answer_option_id) and is_integer(connected_count) and
-             connected_count >= 0 do
-    case record_answer(participant, answer_option_id, connected_count) do
+  def answer_question(%Participant{} = participant, answer_option_id, connected_ids)
+      when is_integer(answer_option_id) do
+    case record_answer(participant, answer_option_id, connected_ids) do
       {:ok, %{session: session, closed?: closed?, count: count, effects: effects} = recorded} ->
         Topic.broadcast(session.id, {:answer_submitted, session.id, count})
 
@@ -859,11 +862,19 @@ defmodule LiveQuiz.Games.Match do
     Repo.transaction(fn ->
       Locks.match(session_id)
 
+      # One instant for this answer, taken once the room is serialized. The
+      # deadline used to be tested against one reading of the clock and
+      # `answered_at` written from another, taken after several more queries: an
+      # answer could pass the check and land persisted past the deadline, so the
+      # instant that authorized it and the instant that scores it disagreed
+      # (R14). Now the same `at` decides and is written.
+      at = Room.now_usec()
+
       with {:ok, session} <- GameSession.ensure_running(Repo.get(GameSession, session_id)),
-           :ok <- ensure_taking_answers(session),
+           :ok <- ensure_taking_answers(session, at),
            {:ok, playing} <- ensure_still_playing(participant),
            {:ok, question_id, chosen_id} <- fetch_current_option(session, option_id) do
-        upsert_answer(session, question_id, playing, chosen_id, connected)
+        upsert_answer(session, question_id, playing, chosen_id, connected, at)
       else
         {:error, reason} -> Repo.rollback(reason)
       end
@@ -873,16 +884,17 @@ defmodule LiveQuiz.Games.Match do
   # Taking answers is a question already advanced to, not yet closed and still
   # inside its deadline (AD-37). The three refusals are told apart because a
   # screen has a different thing to say for each one.
-  defp ensure_taking_answers(%GameSession{current_question_position: nil}),
+  defp ensure_taking_answers(%GameSession{current_question_position: nil}, _at),
     do: {:error, :no_open_question}
 
-  defp ensure_taking_answers(%GameSession{current_question_closed_at: at}) when not is_nil(at),
-    do: {:error, :question_closed}
+  defp ensure_taking_answers(%GameSession{current_question_closed_at: closed_at}, _at)
+       when not is_nil(closed_at),
+       do: {:error, :question_closed}
 
-  defp ensure_taking_answers(%GameSession{current_question_ends_at: ends_at}) do
+  defp ensure_taking_answers(%GameSession{current_question_ends_at: ends_at}, at) do
     # The deadline of the database is the only clock consulted (AD-39): the
     # instant the client believes in never reaches here.
-    if DateTime.compare(Room.now_usec(), ends_at) == :gt, do: {:error, :time_is_up}, else: :ok
+    if DateTime.compare(at, ends_at) == :gt, do: {:error, :time_is_up}, else: :ok
   end
 
   # The participation is read back rather than trusted from the struct that
@@ -921,7 +933,7 @@ defmodule LiveQuiz.Games.Match do
   # `inserted_at` is deliberately out of the replace list: it records when the
   # person first answered this question, and rewriting it would hand phase 4 the
   # instant of the last swap as if it were the first choice.
-  defp upsert_answer(session, question_id, participant, chosen_id, connected) do
+  defp upsert_answer(session, question_id, participant, chosen_id, connected, at) do
     answer =
       %Answer{}
       |> Answer.changeset(%{
@@ -929,7 +941,7 @@ defmodule LiveQuiz.Games.Match do
         game_session_question_id: question_id,
         participant_id: participant.id,
         game_session_answer_option_id: chosen_id,
-        answered_at: Room.now_usec()
+        answered_at: at
       })
       |> Repo.insert!(
         on_conflict: {:replace, [:game_session_answer_option_id, :answered_at, :updated_at]},
@@ -937,28 +949,51 @@ defmodule LiveQuiz.Games.Match do
         returning: true
       )
 
-    count = question_id |> current_answers() |> Repo.aggregate(:count, :id)
-    {session, closed?, effects} = close_if_everybody_answered(session, count, connected)
+    answered_ids = answered_participant_ids(question_id)
+    count = MapSet.size(answered_ids)
+    {session, closed?, effects} = close_if_everybody_answered(session, answered_ids, connected)
 
     %{answer: answer, session: session, closed?: closed?, count: count, effects: effects}
   end
 
+  # "Everybody connected has answered" is a question about two sets of people,
+  # and it used to be asked of two independent totals: how many answers the
+  # question has against how many participations are connected. Those count
+  # different populations, and an answer from somebody who has since dropped off
+  # made up the difference for somebody still connected who had not answered
+  # yet — A answers and disconnects, B answers, and the question closed on C
+  # (R15). Now every connected participation has to be among the ones that
+  # answered.
+  #
   # With nobody connected there is nothing to complete, so the rule never fires
-  # and the question runs to its deadline or waits for the host. The count is
-  # the one taken inside the transaction, which is what makes "I was the last
-  # one missing" a fact instead of a guess.
-  defp close_if_everybody_answered(%GameSession{} = session, _count, 0), do: {session, false, []}
+  # and the question runs to its deadline or waits for the host. Both sets are
+  # read inside the transaction, which is what makes "I was the last one
+  # missing" a fact instead of a guess.
+  defp close_if_everybody_answered(%GameSession{} = session, answered_ids, connected) do
+    connected_ids = MapSet.new(connected)
 
-  defp close_if_everybody_answered(%GameSession{} = session, count, connected)
-       when count >= connected do
-    case close_now(session) do
-      {:closed, closed, effects} -> {closed, true, effects}
-      {:already_closed, closed} -> {closed, false, []}
+    cond do
+      MapSet.size(connected_ids) == 0 ->
+        {session, false, []}
+
+      MapSet.subset?(connected_ids, answered_ids) ->
+        case close_now(session) do
+          {:closed, closed, effects} -> {closed, true, effects}
+          {:already_closed, closed} -> {closed, false, []}
+        end
+
+      true ->
+        {session, false, []}
     end
   end
 
-  defp close_if_everybody_answered(%GameSession{} = session, _count, _connected),
-    do: {session, false, []}
+  defp answered_participant_ids(question_id) do
+    question_id
+    |> current_answers()
+    |> select([a], a.participant_id)
+    |> Repo.all()
+    |> MapSet.new()
+  end
 
   defp current_answers(question_id) do
     where(Answer, [a], a.game_session_question_id == ^question_id)
@@ -1039,6 +1074,13 @@ defmodule LiveQuiz.Games.Match do
     write_final_positions(ranked)
 
     questions = session.id |> snapshot_questions() |> preload(:answer_options) |> Repo.all()
+
+    # A question the match never reached was never asked of anybody, and filing
+    # it as an absence made a match finished after the first of three look like
+    # two questions this person skipped (R13). Having been opened is what makes
+    # a question part of the result; the ones behind it are what `total` is for.
+    played = Enum.filter(questions, &(not is_nil(&1.started_at)))
+
     answers = Repo.all(from a in Answer, where: a.game_session_id == ^session.id)
     answer_by_participant = Enum.group_by(answers, & &1.participant_id)
 
@@ -1046,7 +1088,7 @@ defmodule LiveQuiz.Games.Match do
     # who played it, so they are shaped once and each participation only merges
     # its own answer into them. The stored row stays self-contained, which is
     # what makes a result readable after the quiz is gone.
-    skeleton = question_skeleton(questions)
+    skeleton = question_skeleton(played)
     at = Room.now()
 
     rows =
@@ -1064,12 +1106,14 @@ defmodule LiveQuiz.Games.Match do
           score: participant.score,
           correct_answers: participant.correct_answers,
           incorrect_answers: participant.incorrect_answers,
-          unanswered_questions: max(length(questions) - answered_count, 0),
+          unanswered_questions: length(played) - answered_count,
           answered_questions: answered_count,
+          played_questions: length(played),
+          total_questions: length(questions),
           total_response_time_ms: participant.total_response_time_ms,
           average_response_time_ms: average_response_time(participant, answered_count),
           final_position: position,
-          question_results: question_result_snapshot(skeleton, questions, participant_answers),
+          question_results: question_result_snapshot(skeleton, played, participant_answers),
           inserted_at: at,
           updated_at: at
         }
@@ -1301,10 +1345,7 @@ defmodule LiveQuiz.Games.Match do
       question_count: snapshot_question_count(session),
       question_text: question.text,
       answers_count: answers_count,
-      # Never negative: the denominator and the answers are read together, but a
-      # participation that leaves between two tallies would otherwise make the
-      # count of absences go below zero on the next reading.
-      no_answer_count: max(participants_count - answers_count, 0),
+      no_answer_count: participants_count - answers_count,
       participants_count: participants_count,
       options: options,
       my_answer_option_id: my_option_id,
@@ -1315,11 +1356,11 @@ defmodule LiveQuiz.Games.Match do
   # One statement for the distribution and for the denominator alike. The
   # `LEFT JOIN` is what keeps an alternative nobody picked in the list with zero
   # instead of dropping it (AD-43) — the most likely mistake of this reading —
-  # and the cross join carries the count of active participations along, so the
+  # and the cross join carries the size of the eligible population along, so the
   # two numbers describe the same instant.
   defp option_distribution(%GameSession{id: session_id}, %GameSessionQuestion{id: question_id}) do
     from(o in GameSessionAnswerOption,
-      cross_join: p in subquery(active_participations(session_id)),
+      cross_join: p in subquery(eligible_participations(session_id, question_id)),
       left_join: a in Answer,
       on: a.game_session_answer_option_id == o.id,
       where: o.game_session_question_id == ^question_id,
@@ -1337,13 +1378,35 @@ defmodule LiveQuiz.Games.Match do
     |> Repo.all()
   end
 
-  # Whoever left on purpose is out of the denominator; whoever merely dropped off
-  # is in, because being disconnected is still not having answered.
-  defp active_participations(session_id) do
+  # Who this question's numbers are about: everybody still in the room, plus
+  # anybody who answered it and has since walked out.
+  #
+  # The denominator used to count only the people still in, while the bars
+  # counted every answer there was. The two describe different populations, and
+  # somebody who answered and then left showed up as one answer out of zero
+  # participants (R15). Their answer stays counted — it was really given, and a
+  # reveal that changes after the fact is worse than one that includes somebody
+  # who has gone — so the population that answers for it is the one that widens.
+  #
+  # Whoever merely dropped off was always in: being disconnected is still not
+  # having answered.
+  defp eligible_participations(session_id, question_id \\ :any) do
     from p in Participant,
+      as: :participant,
       where: p.game_session_id == ^session_id,
-      where: is_nil(p.left_at),
+      where: is_nil(p.left_at) or exists(subquery(answers_of_participant(question_id))),
       select: %{count: count(p.id)}
+  end
+
+  defp answers_of_participant(:any) do
+    from a in Answer, where: a.participant_id == parent_as(:participant).id, select: 1
+  end
+
+  defp answers_of_participant(question_id) do
+    from a in Answer,
+      where: a.participant_id == parent_as(:participant).id,
+      where: a.game_session_question_id == ^question_id,
+      select: 1
   end
 
   defp participants_count([%{participants_count: count} | _rest], %GameSession{}), do: count
@@ -1351,7 +1414,7 @@ defmodule LiveQuiz.Games.Match do
   # A snapshot question always freezes its alternatives, so this only answers a
   # question stripped of them, and then the denominator still has to be right.
   defp participants_count([], %GameSession{id: session_id}) do
-    %{count: count} = Repo.one(active_participations(session_id))
+    count = Repo.aggregate(where(Participant, [p], p.game_session_id == ^session_id), :count, :id)
     count
   end
 
@@ -1370,12 +1433,15 @@ defmodule LiveQuiz.Games.Match do
   end
 
   defp build_game_summary(%GameSession{id: id} = session) do
-    %{count: participants_count} = Repo.one(active_participations(id))
+    %{count: participants_count} = Repo.one(eligible_participations(id))
 
     %{
       status: session.status,
       question_count: snapshot_question_count(session),
-      questions_played: session.current_question_position || 0,
+      # Counted from the snapshot rather than from the position the room is on,
+      # so the screen and the stored result answer "how much was played" from
+      # the same fact (R13).
+      questions_played: played_question_count(session),
       answers_count: Repo.aggregate(where(Answer, [a], a.game_session_id == ^id), :count),
       participants_count: participants_count
     }
@@ -1385,6 +1451,13 @@ defmodule LiveQuiz.Games.Match do
   # settled the moment it stops taking answers. A question the match has not
   # reached yet is not settled either: the answer key of question 5 is no more
   # public while the room plays question 2 than it is while it plays question 5.
+  defp played_question_count(%GameSession{id: id}) do
+    id
+    |> snapshot_questions()
+    |> where([q], not is_nil(q.started_at))
+    |> Repo.aggregate(:count, :id)
+  end
+
   defp question_state(%GameSession{current_question_position: nil}), do: :pending
 
   defp question_state(%GameSession{} = session) do

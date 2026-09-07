@@ -25,6 +25,8 @@ defmodule LiveQuizWeb.Api.V1.Schemas.GameResultResponse do
           "incorrect_answers" => 1,
           "unanswered_questions" => 0,
           "answered_questions" => 10,
+          "played_questions" => 10,
+          "total_questions" => 10,
           "total_response_time_ms" => 12_400,
           "average_response_time_ms" => 1240,
           "final_position" => 1,
