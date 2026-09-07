@@ -45,6 +45,35 @@ defmodule LiveQuiz.Games.Room do
   @spec live(Ecto.Queryable.t()) :: Ecto.Query.t()
   def live(query), do: where(query, [s], s.status in ^GameSession.active_statuses())
 
+  @doc """
+  Whether this account is hosting a room right now.
+
+  Asked from two sides — opening a room, and letting somebody back into one
+  (AD-28) — so it lives here rather than in either of them.
+  """
+  @spec hosting?(integer()) :: boolean()
+  def hosting?(user_id) do
+    GameSession
+    |> where([s], s.host_id == ^user_id)
+    |> live()
+    |> Repo.exists?()
+  end
+
+  @doc """
+  Whether `field` failed for being taken rather than for being wrong.
+
+  A unique index and a validation both land in `errors`, and the two mean very
+  different things to whoever is going to read the message: one asks for a
+  different value, the other for a corrected one.
+  """
+  @spec unique_violation?(Ecto.Changeset.t(), atom()) :: boolean()
+  def unique_violation?(%Ecto.Changeset{errors: errors}, field) do
+    Enum.any?(errors, fn
+      {^field, {_message, opts}} -> opts[:constraint] == :unique
+      _other_field -> false
+    end)
+  end
+
   @doc "The rooms hosted by the scope user, as a composable query."
   @spec hosted(Scope.t()) :: Ecto.Query.t()
   def hosted(%Scope{} = scope), do: from(s in GameSession, where: s.host_id == ^scope.user.id)
