@@ -112,11 +112,14 @@ defmodule LiveQuiz.RateLimitTest do
     end
 
     test "leaves a bucket whose window has not turned yet alone" do
-      now = System.system_time(:millisecond)
+      {_limit, window} = RateLimit.budget(:password_reset_by_origin)
+      # The start of an hour long window, so that five minutes later is still
+      # the same window — taking the clock as it comes would put the assertion
+      # on the wrong side of the boundary once an hour.
+      opening = div(System.system_time(:millisecond), window) * window
 
-      # An hour long window, hit now: no sweep in the next minutes touches it.
-      RateLimit.hit(:password_reset_by_origin, "key", now)
-      RateLimit.sweep(now + :timer.minutes(5))
+      RateLimit.hit(:password_reset_by_origin, "key", opening)
+      RateLimit.sweep(opening + :timer.minutes(5))
 
       assert RateLimit.size() == 1
     end
