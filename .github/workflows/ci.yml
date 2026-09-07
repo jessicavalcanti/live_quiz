@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [main, develop]
 
+permissions:
+  contents: read
+
 env:
   MIX_ENV: test
 
@@ -13,15 +16,32 @@ jobs:
   guard-main:
     name: Proteção da main
     runs-on: ubuntu-latest
+    permissions: {}
     if: github.event_name == 'pull_request' && github.base_ref == 'main'
     steps:
-      - name: Somente a develop pode ser mergeada na main
+      # A origem precisa ser a develop do próprio repositório: um fork pode ter
+      # uma branch homônima e não é origem de integração autorizada.
+      #
+      # Nome de branch e nome de repositório do PR são entrada não confiável e
+      # nunca são interpolados no script: o Actions substituiria a expressão
+      # antes do shell existir, e aspas não protegem texto já inserido. Os
+      # valores chegam por variável de ambiente e são expandidos entre aspas.
+      # https://docs.github.com/en/actions/concepts/security/script-injections
+      - name: Somente a develop deste repositório pode ser mergeada na main
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          BASE_REPO: ${{ github.repository }}
         run: |
-          if [ "${{ github.head_ref }}" != "develop" ]; then
-            echo "::error::PRs para a main só são aceitos a partir da branch develop (recebido: ${{ github.head_ref }})."
+          if [ "$HEAD_REPO" != "$BASE_REPO" ]; then
+            echo "::error::PRs para a main só são aceitos a partir deste repositório (recebido: $HEAD_REPO)."
             exit 1
           fi
-          echo "Origem válida: develop -> main"
+          if [ "$HEAD_REF" != "develop" ]; then
+            echo "::error::PRs para a main só são aceitos a partir da branch develop (recebido: $HEAD_REF)."
+            exit 1
+          fi
+          echo "Origem válida: $BASE_REPO develop -> main"
 
   quality:
     name: Lint e cobertura
