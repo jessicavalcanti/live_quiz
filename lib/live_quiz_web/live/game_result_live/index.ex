@@ -17,8 +17,11 @@ defmodule LiveQuizWeb.GameResultLive.Index do
 
   @impl true
   def handle_params(params, _uri, socket) do
+    # O resumo, e não a linha inteira: esta tela mostra seis campos, e o
+    # detalhe de cada pergunta de cada partida ficaria no socket enquanto a
+    # aba estivesse aberta (R37).
     page =
-      Games.list_game_results(
+      Games.list_game_result_summaries(
         socket.assigns.current_scope,
         # O dia que a tela mostra é o de São Paulo, e é nesse fuso que ela tem
         # de ser lida — senão a partida que aparece no dia 6 fica de fora quando

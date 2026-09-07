@@ -244,6 +244,7 @@ defmodule LiveQuiz.Games do
   defdelegate get_my_game_result(scope, id), to: History
   defdelegate get_my_game_result_for_session(scope, session_id), to: History
   defdelegate list_game_results(scope, filters, pagination), to: History
+  defdelegate list_game_result_summaries(scope, filters, pagination), to: History
   defdelegate list_quiz_game_history(scope, quiz_id, filters, pagination), to: History
   defdelegate list_host_game_history(scope, filters, pagination), to: History
   defdelegate get_host_game_history(scope, id), to: History

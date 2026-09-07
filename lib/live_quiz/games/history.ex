@@ -107,17 +107,50 @@ defmodule LiveQuiz.Games.History do
     end
   end
 
-  @doc "Lists the finished results belonging to the authenticated participant."
+  @doc """
+  Lists the finished results belonging to the authenticated participant.
+
+  Whole rows, `question_results` included, because the JSON API serializes them
+  whole. A screen that only shows a summary wants
+  `list_game_result_summaries/3` instead.
+  """
   @spec list_game_results(Scope.t(), map() | keyword(), map() | keyword()) :: map()
   def list_game_results(%Scope{} = scope, filters, pagination) do
-    query =
-      from r in GameResult,
-        join: s in assoc(r, :game_session),
-        where: r.user_id == ^scope.user.id and s.status == :finished
-
-    query
+    scope
+    |> own_results()
     |> result_filters(filters)
     |> paginate_results(pagination)
+  end
+
+  @doc """
+  The same listing, reduced to what a list of results shows.
+
+  Six fields instead of a whole row. The difference is `question_results`: the
+  detail of every question of every match on the page, read out of the database,
+  shipped to the LiveView and then held in the socket for as long as the tab is
+  open — to render a title, a score and a position (R37). A list is a list; the
+  detail belongs to the page that shows one result.
+  """
+  @spec list_game_result_summaries(Scope.t(), map() | keyword(), map() | keyword()) :: map()
+  def list_game_result_summaries(%Scope{} = scope, filters, pagination) do
+    scope
+    |> own_results()
+    |> result_filters(filters)
+    |> select([r], %{
+      id: r.id,
+      quiz_title: r.quiz_title,
+      score: r.score,
+      correct_answers: r.correct_answers,
+      final_position: r.final_position,
+      inserted_at: r.inserted_at
+    })
+    |> paginate_results(pagination)
+  end
+
+  defp own_results(%Scope{} = scope) do
+    from r in GameResult,
+      join: s in assoc(r, :game_session),
+      where: r.user_id == ^scope.user.id and s.status == :finished
   end
 
   @doc "Lists finished matches hosted for quizzes owned by the authenticated user."
@@ -265,7 +298,10 @@ defmodule LiveQuiz.Games.History do
   defp paginate_results(query, pagination) do
     %{page: page, per_page: per_page} = Pagination.normalize(pagination)
 
-    total = Repo.aggregate(query, :count, :id)
+    # Counting is about how many rows match, never about what is in them, so the
+    # projection a caller asked for is dropped here — counting a `select` of six
+    # fields reads those six fields for every row of the history.
+    total = query |> exclude(:select) |> Repo.aggregate(:count, :id)
 
     %{
       entries:

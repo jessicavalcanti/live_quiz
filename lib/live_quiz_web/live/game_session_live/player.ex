@@ -308,13 +308,32 @@ defmodule LiveQuizWeb.GameSessionLive.Player do
   # and after the room ended it would replace an explanation with a list of
   # strangers.
   #
-  # Everything else re-reads the match along with the lobby. It costs one read
-  # per event, and it buys a screen that reconciles itself: whoever comes back
-  # from a moment offline finds out that the question closed on the first nudge
-  # of the room, instead of holding a question nobody is waiting for any more.
-  defp refresh(%{assigns: %{leaving?: true}} = socket), do: socket
-  defp refresh(%{assigns: %{ended: reason}} = socket) when not is_nil(reason), do: socket
-  defp refresh(socket), do: socket |> load_lobby() |> load_match()
+  # Everything else re-reads, and what it re-reads is what the event was about.
+  # Every event of a room reaches every socket in it, so a room of twenty-five
+  # people turns one person joining into twenty-five refreshes — and each of
+  # them used to read the lobby *and* the match, half of it about something the
+  # event said nothing about (R38).
+  #
+  # What the reads still buy is a screen that reconciles itself: whoever comes
+  # back from a moment offline finds out that the question closed on the first
+  # nudge of the room, instead of holding a question nobody is waiting for.
+  defp refresh(socket), do: socket |> refresh_with(&load_lobby/1) |> refresh_with(&load_match/1)
+
+  # A lobby event: who is in the room and who is connected. During a match that
+  # still matters — the connected set is what decides whether an answer was the
+  # last one missing — but the match itself has not moved.
+  defp refresh_lobby(socket), do: refresh_with(socket, &load_lobby/1)
+
+  # A match event: the question, the clock, the reveal. The list of people is
+  # the same as it was a moment ago.
+  defp refresh_match(socket), do: refresh_with(socket, &load_match/1)
+
+  defp refresh_with(%{assigns: %{leaving?: true}} = socket, _read), do: socket
+
+  defp refresh_with(%{assigns: %{ended: reason}} = socket, _read) when not is_nil(reason),
+    do: socket
+
+  defp refresh_with(socket, read), do: read.(socket)
 
   defp back_to_join(socket) do
     redirect(socket, to: ~p"/join?code=#{socket.assigns.code}")
@@ -420,19 +439,19 @@ defmodule LiveQuizWeb.GameSessionLive.Player do
   end
 
   def handle_info({:participant_joined, _participant}, socket) do
-    {:noreply, refresh(socket)}
+    {:noreply, refresh_lobby(socket)}
   end
 
   def handle_info({:participant_left, _participant}, socket) do
-    {:noreply, refresh(socket)}
+    {:noreply, refresh_lobby(socket)}
   end
 
   def handle_info({:participant_rejoined, _participant}, socket) do
-    {:noreply, refresh(socket)}
+    {:noreply, refresh_lobby(socket)}
   end
 
   def handle_info({:presence_changed, _session_id}, socket) do
-    {:noreply, refresh(socket)}
+    {:noreply, refresh_lobby(socket)}
   end
 
   # The claim of every connected mount lands here, this screen's own included.
@@ -467,14 +486,14 @@ defmodule LiveQuizWeb.GameSessionLive.Player do
   # A new question wipes the notice of the previous one: an answer that arrived
   # late is old news the moment there is something new to answer.
   def handle_info({:question_advanced, session}, socket) do
-    {:noreply, socket |> assign(:session, session) |> assign(:notice, nil) |> load_match()}
+    {:noreply, socket |> assign(:session, session) |> assign(:notice, nil) |> refresh_match()}
   end
 
   # The three ways a question closes — the deadline, the host and the last
   # answer missing — arrive here as the same event and are read back the same
   # way, so the screen has no idea which one it was and no reason to.
   def handle_info({:question_closed, session}, socket) do
-    {:noreply, socket |> assign(:session, session) |> load_match()}
+    {:noreply, socket |> assign(:session, session) |> refresh_match()}
   end
 
   def handle_info({:ranking_updated, ranking}, socket),
