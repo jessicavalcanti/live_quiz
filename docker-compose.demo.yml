@@ -4,6 +4,7 @@
 services:
   db:
     image: postgres:16-alpine
+    ports: ["127.0.0.1:5432:5432"]
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
@@ -46,6 +47,7 @@ services:
       SMTP_MODE: demo
       SMTP_HOST: mailpit
       SMTP_PORT: "1025"
+      TRUSTED_PROXY_HOPS: "0"
     # A aplicação é o único serviço que uma demonstração em LAN precisa expor, e
     # ainda assim só quando alguém pede: `DEMO_BIND=0.0.0.0` junto com um
     # `PHX_HOST` que os aparelhos consigam resolver.
