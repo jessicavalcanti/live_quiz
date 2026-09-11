@@ -35,7 +35,7 @@ defmodule LiveQuizWeb.Layouts do
 
   def app(assigns) do
     ~H"""
-    <header class="navbar gap-2 px-4 sm:px-6 lg:px-8">
+    <header class="navbar gap-2 px-3 sm:px-4 lg:px-6">
       <div class="flex-1">
         <.link navigate={home_path(@current_scope)} class="text-lg font-semibold">
           LiveQuiz
@@ -77,8 +77,8 @@ defmodule LiveQuizWeb.Layouts do
       </nav>
     </header>
 
-    <main class="px-4 py-12 sm:px-6 sm:py-20 lg:px-8">
-      <div class="mx-auto max-w-2xl space-y-4">
+    <main class="px-3 py-12 sm:px-4 sm:py-20 lg:px-6">
+      <div class="mx-auto w-full max-w-7xl space-y-4">
         <.unconfirmed_email_notice current_scope={@current_scope} />
         {render_slot(@inner_block)}
       </div>

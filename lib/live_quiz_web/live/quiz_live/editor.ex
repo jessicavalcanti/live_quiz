@@ -335,9 +335,8 @@ defmodule LiveQuizWeb.QuizLive.Editor do
                 aria-describedby={locked_target(@quiz)}
                 phx-click="move_question_up"
                 phx-value-id={question.id}
-                phx-disable-with="…"
                 aria-label={"Mover pergunta #{question.position} para cima"}
-                class="btn btn-ghost btn-sm"
+                class="btn btn-ghost btn-sm phx-click-loading:pointer-events-none phx-click-loading:opacity-50"
               >
                 <.icon name="hero-arrow-up" class="size-4" />
               </button>
@@ -349,9 +348,8 @@ defmodule LiveQuizWeb.QuizLive.Editor do
                 aria-describedby={locked_target(@quiz)}
                 phx-click="move_question_down"
                 phx-value-id={question.id}
-                phx-disable-with="…"
                 aria-label={"Mover pergunta #{question.position} para baixo"}
-                class="btn btn-ghost btn-sm"
+                class="btn btn-ghost btn-sm phx-click-loading:pointer-events-none phx-click-loading:opacity-50"
               >
                 <.icon name="hero-arrow-down" class="size-4" />
               </button>
