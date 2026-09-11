@@ -41,7 +41,7 @@ RUN mix assets.deploy
 RUN mix release
 
 # --- runtime: no Elixir, no source code ---------------------------------------
-FROM alpine:3.24 AS app
+FROM python:3-alpine AS app
 
 # `ca-certificates` is what makes a verified TLS connection to an SMTP provider
 # possible at all: without a trust store, `verify_peer` has nothing to verify
