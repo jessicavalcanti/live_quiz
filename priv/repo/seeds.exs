@@ -119,7 +119,6 @@ quizzes = [
   }
 ]
 
-if Mix.env() == :dev do
   user = fetch_or_create_user.("Pessoa de Demonstração", demo_email)
 
   seed_quiz = fn owner, quiz_attrs ->
@@ -387,4 +386,3 @@ if Mix.env() == :dev do
   IO.puts("Partida em andamento: código #{playing_session.join_code}")
   IO.puts("Pronto. Entre com #{demo_email} / #{demo_password}")
   IO.puts("O apresentador da partida em andamento é #{playing_email} / #{demo_password}")
-end
