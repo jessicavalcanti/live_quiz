@@ -33,6 +33,7 @@ services:
       PORT: "4000"
       SMTP_HOST: mailpit
       SMTP_PORT: "1025"
+      TRUSTED_PROXY_HOPS: "0"
     ports: ["${DEMO_PORT:-4000}:4000"]
     command: >
       sh -c "bin/live_quiz eval 'LiveQuiz.Release.migrate(); LiveQuiz.Release.seed()' &&

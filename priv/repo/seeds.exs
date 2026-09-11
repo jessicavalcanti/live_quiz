@@ -106,7 +106,6 @@ quizzes = [
   }
 ]
 
-if Mix.env() == :dev do
   user = fetch_or_create_user.()
 
   for {quiz_attrs, quiz_index} <- Enum.with_index(quizzes) do
@@ -186,4 +185,3 @@ if Mix.env() == :dev do
 
   IO.puts("Sala de demonstração aguardando participantes: código #{session.join_code}")
   IO.puts("Pronto. Entre com #{demo_email} / #{demo_password}")
-end
