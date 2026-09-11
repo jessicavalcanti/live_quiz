@@ -579,6 +579,13 @@ defmodule LiveQuizWeb.QuizLive.EditorTest do
                lv,
                ~s{#move-question-down-#{second.id}[aria-label="Mover pergunta 2 para baixo"]}
              )
+
+      for {direction, icon} <- [{"up", "arrow-up"}, {"down", "arrow-down"}] do
+        selector = "#move-question-#{direction}-#{second.id}"
+
+        assert has_element?(lv, "#{selector} .hero-#{icon}")
+        refute has_element?(lv, "#{selector}[phx-disable-with]")
+      end
     end
 
     test "the new order survives a reload", %{

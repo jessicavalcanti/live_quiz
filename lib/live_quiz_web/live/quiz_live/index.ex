@@ -322,53 +322,79 @@ defmodule LiveQuizWeb.QuizLive.Index do
         </div>
       </div>
 
-      <div :if={@page.entries != []} class="mt-6 overflow-x-auto">
-        <table class="table">
+      <div :if={@page.entries != []} id="quiz-list" class="mt-6">
+        <table class="table w-full">
           <thead>
             <tr>
               <th scope="col">Título</th>
-              <th scope="col" class="hidden md:table-cell">Descrição</th>
-              <th scope="col">Perguntas</th>
-              <th scope="col" class="hidden sm:table-cell">Criado em</th>
-              <th scope="col">Situação</th>
+              <th scope="col" class="hidden lg:table-cell">Descrição</th>
+              <th scope="col" class="hidden sm:table-cell">Perguntas</th>
+              <th scope="col" class="hidden xl:table-cell">Criado em</th>
+              <th scope="col" class="hidden md:table-cell">Situação</th>
               <th scope="col"><span class="sr-only">Ações</span></th>
             </tr>
           </thead>
 
           <tbody id="quizzes">
             <tr :for={quiz <- @page.entries} id={"quiz-#{quiz.id}"}>
-              <td class="font-medium">{quiz.title}</td>
-              <td class="hidden md:table-cell text-base-content/70">
+              <td class="min-w-0 align-top font-medium">
+                <span class="break-words">{quiz.title}</span>
+                <p class="mt-1 break-words text-sm font-normal text-base-content/70 lg:hidden">
+                  {description(quiz)}
+                </p>
+                <div class="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 font-normal">
+                  <span class="text-xs text-base-content/70 sm:hidden">{question_count(quiz)}</span>
+                  <span class="text-xs text-base-content/70 xl:hidden">
+                    {Formatters.format_date(quiz.inserted_at)}
+                  </span>
+                  <span class={[
+                    "badge badge-sm whitespace-nowrap md:hidden",
+                    status_class(quiz)
+                  ]}>
+                    {status(quiz)}
+                  </span>
+                </div>
+              </td>
+              <td class="hidden break-words text-base-content/70 lg:table-cell">
                 {description(quiz)}
               </td>
-              <td>{question_count(quiz)}</td>
-              <td class="hidden sm:table-cell whitespace-nowrap">
+              <td class="hidden sm:table-cell">{question_count(quiz)}</td>
+              <td class="hidden whitespace-nowrap xl:table-cell">
                 {Formatters.format_date(quiz.inserted_at)}
               </td>
-              <td>
-                <span class={["badge", status_class(quiz)]}>{status(quiz)}</span>
+              <td class="hidden md:table-cell">
+                <span class={["badge whitespace-nowrap", status_class(quiz)]}>{status(quiz)}</span>
               </td>
-              <td class="w-0">
+              <td class="w-0 align-top">
                 <div class="flex flex-col items-end gap-1">
-                  <div class="flex items-center gap-2">
+                  <div class="flex min-w-max items-center gap-2">
                     <button
                       type="button"
                       id={"start-game-button-#{quiz.id}"}
                       disabled={not startable?(quiz)}
                       aria-disabled={to_string(not startable?(quiz))}
                       aria-describedby={hint_target(quiz)}
+                      aria-label="Iniciar partida"
+                      title="Iniciar partida"
                       phx-click={JS.push_focus() |> JS.push("start_game", value: %{id: quiz.id})}
-                      class={["btn btn-primary btn-sm", not startable?(quiz) && "btn-disabled"]}
+                      class={[
+                        "btn btn-square btn-primary btn-sm",
+                        not startable?(quiz) && "btn-disabled"
+                      ]}
                     >
-                      Iniciar partida
+                      <.icon name="hero-play" class="size-4" />
+                      <span class="sr-only">Iniciar partida</span>
                     </button>
 
                     <.link
                       :if={not quiz.locked?}
                       navigate={~p"/quizzes/#{quiz}/edit"}
-                      class="btn btn-ghost btn-sm"
+                      aria-label="Editar quiz"
+                      title="Editar quiz"
+                      class="btn btn-square btn-ghost btn-sm"
                     >
-                      Editar
+                      <.icon name="hero-pencil-square" class="size-4" />
+                      <span class="sr-only">Editar</span>
                     </.link>
 
                     <button
@@ -378,9 +404,12 @@ defmodule LiveQuizWeb.QuizLive.Index do
                       disabled
                       aria-disabled="true"
                       aria-describedby={hint_target(quiz)}
-                      class="btn btn-ghost btn-sm btn-disabled"
+                      aria-label="Editar quiz"
+                      title="Editar quiz"
+                      class="btn btn-square btn-ghost btn-sm btn-disabled"
                     >
-                      Editar
+                      <.icon name="hero-pencil-square" class="size-4" />
+                      <span class="sr-only">Editar</span>
                     </button>
 
                     <button
@@ -389,17 +418,23 @@ defmodule LiveQuizWeb.QuizLive.Index do
                       disabled={quiz.locked?}
                       aria-disabled={to_string(quiz.locked?)}
                       aria-describedby={hint_target(quiz)}
+                      aria-label="Excluir quiz"
+                      title="Excluir quiz"
                       phx-click={JS.push_focus() |> JS.push("delete_quiz", value: %{id: quiz.id})}
-                      class={["btn btn-ghost btn-sm text-error", quiz.locked? && "btn-disabled"]}
+                      class={[
+                        "btn btn-square btn-ghost btn-sm text-error",
+                        quiz.locked? && "btn-disabled"
+                      ]}
                     >
-                      Excluir
+                      <.icon name="hero-trash" class="size-4" />
+                      <span class="sr-only">Excluir</span>
                     </button>
                   </div>
 
                   <p
                     :if={hint(quiz)}
                     id={"quiz-hint-#{quiz.id}"}
-                    class="text-xs whitespace-normal text-warning"
+                    class="max-w-48 text-right text-xs whitespace-normal text-warning"
                   >
                     {hint(quiz)}
                   </p>
