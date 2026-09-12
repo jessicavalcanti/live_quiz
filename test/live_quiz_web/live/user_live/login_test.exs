@@ -12,6 +12,9 @@ defmodule LiveQuizWeb.UserLive.LoginTest do
       assert html =~ "Cadastre-se"
       assert html =~ "Senha"
       assert html =~ "Esqueci minha senha"
+      assert html =~ "Mostrar senha"
+      assert html =~ "data-password-toggle"
+      assert html =~ ~s(aria-controls="login_form_password")
     end
   end
 

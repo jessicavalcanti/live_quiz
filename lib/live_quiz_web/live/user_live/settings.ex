@@ -53,6 +53,7 @@ defmodule LiveQuizWeb.UserLive.Settings do
           label="Nova senha"
           autocomplete="new-password"
           spellcheck="false"
+          reveal_password
           required
         />
         <.input
@@ -61,6 +62,7 @@ defmodule LiveQuizWeb.UserLive.Settings do
           label="Confirmação da nova senha"
           autocomplete="new-password"
           spellcheck="false"
+          reveal_password
         />
         <.button variant="primary" phx-disable-with="Salvando...">
           Salvar senha

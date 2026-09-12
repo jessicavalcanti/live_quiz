@@ -25,6 +25,8 @@ defmodule LiveQuizWeb.UserLive.ResetPasswordTest do
 
       assert html =~ "Redefinir senha"
       assert html =~ "Nova senha"
+      assert html |> String.split("data-password-toggle") |> length() == 3
+      assert html |> String.split(~s(aria-label="Mostrar senha")) |> length() == 3
     end
 
     test "does not render the form with an invalid token", %{conn: conn} do

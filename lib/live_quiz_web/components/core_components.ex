@@ -189,6 +189,7 @@ defmodule LiveQuizWeb.CoreComponents do
   attr :multiple, :boolean, default: false, doc: "the multiple flag for select inputs"
   attr :class, :any, default: nil, doc: "the input class to use over defaults"
   attr :error_class, :any, default: nil, doc: "the input error class to use over defaults"
+  attr :reveal_password, :boolean, default: false, doc: "adds a password visibility toggle"
 
   attr :rest, :global,
     include: ~w(accept autocomplete capture cols disabled form list max maxlength min minlength
@@ -310,6 +311,69 @@ defmodule LiveQuizWeb.CoreComponents do
       </div>
       <.error :for={msg <- @errors}>{msg}</.error>
     </fieldset>
+    """
+  end
+
+  def input(%{type: "password", reveal_password: true} = assigns) do
+    ~H"""
+    <div class="fieldset mb-2">
+      <label for={@id}>
+        <span :if={@label} class="label mb-1">{@label}</span>
+      </label>
+      <div id={"#{@id}-visibility"} class="relative" phx-hook=".PasswordVisibility">
+        <input
+          type="password"
+          name={@name}
+          id={@id}
+          value={Phoenix.HTML.Form.normalize_value(@type, @value)}
+          class={[
+            @class || "w-full input pr-12",
+            @errors != [] && (@error_class || "input-error")
+          ]}
+          {@rest}
+        />
+        <button
+          type="button"
+          data-password-toggle
+          aria-controls={@id}
+          aria-label="Mostrar senha"
+          aria-pressed="false"
+          class="btn btn-ghost btn-sm btn-square absolute top-1/2 right-1 -translate-y-1/2"
+        >
+          <span data-password-show><.icon name="hero-eye" class="size-5" /></span>
+          <span data-password-hide class="hidden">
+            <.icon name="hero-eye-slash" class="size-5" />
+          </span>
+        </button>
+      </div>
+      <.error :for={msg <- @errors}>{msg}</.error>
+    </div>
+
+    <script :type={Phoenix.LiveView.ColocatedHook} name=".PasswordVisibility">
+      export default {
+        mounted() {
+          this.visible = false
+          this.el.addEventListener("click", event => {
+            if (event.target.closest("[data-password-toggle]")) {
+              this.visible = !this.visible
+              this.sync()
+            }
+          })
+          this.sync()
+        },
+        updated() { this.sync() },
+        sync() {
+          const input = this.el.querySelector("input")
+          const button = this.el.querySelector("[data-password-toggle]")
+
+          input.type = this.visible ? "text" : "password"
+          button.setAttribute("aria-label", this.visible ? "Ocultar senha" : "Mostrar senha")
+          button.setAttribute("aria-pressed", String(this.visible))
+          this.el.querySelector("[data-password-show]").classList.toggle("hidden", this.visible)
+          this.el.querySelector("[data-password-hide]").classList.toggle("hidden", !this.visible)
+        }
+      }
+    </script>
     """
   end
 

@@ -28,6 +28,7 @@ defmodule LiveQuizWeb.UserLive.ResetPassword do
             label="Nova senha"
             autocomplete="new-password"
             spellcheck="false"
+            reveal_password
             required
             phx-mounted={JS.focus()}
           />
@@ -37,6 +38,7 @@ defmodule LiveQuizWeb.UserLive.ResetPassword do
             label="Confirmação da nova senha"
             autocomplete="new-password"
             spellcheck="false"
+            reveal_password
             required
           />
           <.button phx-disable-with="Redefinindo..." class="btn btn-primary w-full">
