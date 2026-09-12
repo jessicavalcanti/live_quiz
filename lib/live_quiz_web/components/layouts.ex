@@ -37,8 +37,12 @@ defmodule LiveQuizWeb.Layouts do
     ~H"""
     <header class="navbar gap-2 px-3 sm:px-4 lg:px-6">
       <div class="flex-1">
-        <.link navigate={home_path(@current_scope)} class="text-lg font-semibold">
-          LiveQuiz
+        <.link
+          id="app-brand"
+          navigate={home_path(@current_scope)}
+          class="inline-flex items-center text-lg font-semibold"
+        >
+          <.brand />
         </.link>
       </div>
 
@@ -90,6 +94,20 @@ defmodule LiveQuizWeb.Layouts do
 
   defp home_path(%{user: %{}}), do: ~p"/quizzes"
   defp home_path(_current_scope), do: ~p"/"
+
+  @doc """
+  Renders the application brand consistently across screens.
+  """
+  attr :class, :any, default: nil
+
+  def brand(assigns) do
+    ~H"""
+    <span class={["inline-flex items-center gap-2", @class]}>
+      <span aria-hidden="true">⚡</span>
+      <span>LiveQuiz</span>
+    </span>
+    """
+  end
 
   @doc """
   Reminds the user to confirm their e-mail address.
