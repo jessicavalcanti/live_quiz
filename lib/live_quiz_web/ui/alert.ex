@@ -42,7 +42,10 @@ defmodule LiveQuizWeb.UI.Alert do
 
   * `:variant` - The visual style of the alert. Available variants:
     * `"default"` - Standard alert styling (default)
-    * `"destructive"` - Red-tinted styling for errors and warnings
+    * `"destructive"` - Red-tinted styling for errors
+    * `"info"` - Blue-tinted styling for neutral notices
+    * `"success"` - Green-tinted styling for confirmations
+    * `"warning"` - Amber-tinted styling for conditions that block an action
   * `:class` - Additional CSS classes to apply to the alert container.
 
   ## Examples
@@ -57,7 +60,10 @@ defmodule LiveQuizWeb.UI.Alert do
         <.alert_description>This action cannot be undone.</.alert_description>
       </.alert>
   """
-  attr :variant, :string, default: "default", values: ~w(default destructive)
+  attr :variant, :string,
+    default: "default",
+    values: ~w(default destructive info success warning)
+
   attr :class, :string, default: nil
   slot :inner_block, required: true
   attr :rest, :global, default: %{}
@@ -153,11 +159,19 @@ defmodule LiveQuizWeb.UI.Alert do
     """
   end
 
+  # shadcn ships `default` and `destructive`. The other three are ours, for the
+  # states this application actually renders: a room notice, a correct answer,
+  # a quiz that cannot start yet. Each tints its own border and icon and leaves
+  # the body text at `foreground`, so the message stays legible in both themes
+  # instead of relying on a coloured paragraph.
   @variants %{
     variant: %{
       "default" => "bg-background text-foreground",
       "destructive" =>
-        "bg-background border-destructive/50 text-destructive dark:border-destructive [&>span]:text-destructive"
+        "bg-background border-destructive/50 text-destructive dark:border-destructive [&>span]:text-destructive",
+      "info" => "border-info/40 bg-info/10 text-foreground [&>span]:text-info",
+      "success" => "border-success/40 bg-success/10 text-foreground [&>span]:text-success",
+      "warning" => "border-warning/40 bg-warning/10 text-foreground [&>span]:text-warning"
     }
   }
 

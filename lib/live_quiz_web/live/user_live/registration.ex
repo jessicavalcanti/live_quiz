@@ -11,65 +11,70 @@ defmodule LiveQuizWeb.UserLive.Registration do
       <div class="mx-auto max-w-sm">
         <.back_button id="back-to-home" navigate={~p"/"} label="Voltar ao início" class="mb-4" />
 
-        <div class="text-center">
-          <.header>
-            Criar uma conta
-            <:subtitle>
+        <.card>
+          <.card_header class="text-center">
+            <.card_title>Criar uma conta</.card_title>
+            <.card_description>
               Já tem cadastro?
-              <.link navigate={~p"/users/log-in"} class="font-semibold text-brand hover:underline">
+              <.link
+                navigate={~p"/users/log-in"}
+                class="font-medium text-foreground underline underline-offset-4"
+              >
                 Entre
               </.link>
               na sua conta agora.
-            </:subtitle>
-          </.header>
-        </div>
+            </.card_description>
+          </.card_header>
 
-        <.form
-          for={@form}
-          id="registration_form"
-          action={~p"/users/log-in?_action=registered"}
-          method="post"
-          phx-submit="save"
-          phx-change="validate"
-          phx-trigger-action={@trigger_submit}
-        >
-          <.input
-            field={@form[:name]}
-            type="text"
-            label="Nome"
-            autocomplete="name"
-            required
-            phx-mounted={JS.focus()}
-          />
-          <.input
-            field={@form[:email]}
-            type="email"
-            label="E-mail"
-            autocomplete="username"
-            spellcheck="false"
-            required
-          />
-          <.input
-            field={@form[:password]}
-            type="password"
-            label="Senha"
-            autocomplete="new-password"
-            spellcheck="false"
-            required
-          />
-          <.input
-            field={@form[:password_confirmation]}
-            type="password"
-            label="Confirmação de senha"
-            autocomplete="new-password"
-            spellcheck="false"
-            required
-          />
+          <.card_content>
+            <.form
+              for={@form}
+              id="registration_form"
+              action={~p"/users/log-in?_action=registered"}
+              method="post"
+              phx-submit="save"
+              phx-change="validate"
+              phx-trigger-action={@trigger_submit}
+            >
+              <.input
+                field={@form[:name]}
+                type="text"
+                label="Nome"
+                autocomplete="name"
+                required
+                phx-mounted={JS.focus()}
+              />
+              <.input
+                field={@form[:email]}
+                type="email"
+                label="E-mail"
+                autocomplete="username"
+                spellcheck="false"
+                required
+              />
+              <.input
+                field={@form[:password]}
+                type="password"
+                label="Senha"
+                autocomplete="new-password"
+                spellcheck="false"
+                required
+              />
+              <.input
+                field={@form[:password_confirmation]}
+                type="password"
+                label="Confirmação de senha"
+                autocomplete="new-password"
+                spellcheck="false"
+                required
+              />
 
-          <.button phx-disable-with="Criando conta..." class="btn btn-primary w-full">
-            Criar conta
-          </.button>
-        </.form>
+              <.button phx-disable-with="Criando conta..." class="w-full">
+                Criar conta
+              </.button>
+            </.form>
+          </.card_content>
+        </.card>
       </div>
     </Layouts.app>
     """

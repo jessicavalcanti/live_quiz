@@ -16,42 +16,44 @@ defmodule LiveQuizWeb.UserLive.ResetPassword do
           class="mb-4"
         />
 
-        <div class="text-center">
-          <.header>
-            Redefinir senha
-            <:subtitle>Escolha uma nova senha para a sua conta.</:subtitle>
-          </.header>
-        </div>
+        <.card>
+          <.card_header class="text-center">
+            <.card_title>Redefinir senha</.card_title>
+            <.card_description>Escolha uma nova senha para a sua conta.</.card_description>
+          </.card_header>
 
-        <.form
-          for={@form}
-          id="reset_password_form"
-          phx-submit="reset_password"
-          phx-change="validate"
-        >
-          <.input
-            field={@form[:password]}
-            type="password"
-            label="Nova senha"
-            autocomplete="new-password"
-            spellcheck="false"
-            reveal_password
-            required
-            phx-mounted={JS.focus()}
-          />
-          <.input
-            field={@form[:password_confirmation]}
-            type="password"
-            label="Confirmação da nova senha"
-            autocomplete="new-password"
-            spellcheck="false"
-            reveal_password
-            required
-          />
-          <.button phx-disable-with="Redefinindo..." class="btn btn-primary w-full">
-            Redefinir senha
-          </.button>
-        </.form>
+          <.card_content>
+            <.form
+              for={@form}
+              id="reset_password_form"
+              phx-submit="reset_password"
+              phx-change="validate"
+            >
+              <.input
+                field={@form[:password]}
+                type="password"
+                label="Nova senha"
+                autocomplete="new-password"
+                spellcheck="false"
+                reveal_password
+                required
+                phx-mounted={JS.focus()}
+              />
+              <.input
+                field={@form[:password_confirmation]}
+                type="password"
+                label="Confirmação da nova senha"
+                autocomplete="new-password"
+                spellcheck="false"
+                reveal_password
+                required
+              />
+              <.button phx-disable-with="Redefinindo..." class="w-full">
+                Redefinir senha
+              </.button>
+            </.form>
+          </.card_content>
+        </.card>
       </div>
     </Layouts.app>
     """

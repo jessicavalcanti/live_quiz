@@ -31,35 +31,47 @@ defmodule LiveQuizWeb.UserLive.ForgotPassword do
           class="mb-4"
         />
 
-        <div class="text-center">
-          <.header>
-            Esqueci minha senha
-            <:subtitle>Enviaremos um link de redefinição para o seu e-mail.</:subtitle>
-          </.header>
-        </div>
+        <.card>
+          <.card_header class="text-center">
+            <.card_title>Esqueci minha senha</.card_title>
+            <.card_description>
+              Enviaremos um link de redefinição para o seu e-mail.
+            </.card_description>
+          </.card_header>
 
-        <.form for={@form} id="forgot_password_form" phx-submit="send_instructions">
-          <.input
-            field={@form[:email]}
-            type="email"
-            label="E-mail"
-            autocomplete="username"
-            spellcheck="false"
-            required
-            phx-mounted={JS.focus()}
-          />
-          <.button phx-disable-with="Enviando..." class="btn btn-primary w-full">
-            Enviar instruções
-          </.button>
-        </.form>
+          <.card_content>
+            <.form for={@form} id="forgot_password_form" phx-submit="send_instructions">
+              <.input
+                field={@form[:email]}
+                type="email"
+                label="E-mail"
+                autocomplete="username"
+                spellcheck="false"
+                required
+                phx-mounted={JS.focus()}
+              />
+              <.button phx-disable-with="Enviando..." class="w-full">
+                Enviar instruções
+              </.button>
+            </.form>
+          </.card_content>
 
-        <p class="text-center text-sm mt-4">
-          <.link navigate={~p"/users/log-in"} class="font-semibold hover:underline">Entrar</.link>
-          |
-          <.link navigate={~p"/users/register"} class="font-semibold hover:underline">
-            Cadastrar-se
-          </.link>
-        </p>
+          <.card_footer class="justify-center gap-4">
+            <.link
+              navigate={~p"/users/log-in"}
+              class="text-sm font-medium text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+            >
+              Entrar
+            </.link>
+            <.separator orientation="vertical" class="h-4" />
+            <.link
+              navigate={~p"/users/register"}
+              class="text-sm font-medium text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+            >
+              Cadastrar-se
+            </.link>
+          </.card_footer>
+        </.card>
       </div>
     </Layouts.app>
     """
