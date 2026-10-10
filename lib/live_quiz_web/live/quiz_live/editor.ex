@@ -254,7 +254,6 @@ defmodule LiveQuizWeb.QuizLive.Editor do
         <div class="mt-4">
           <.button
             id="save-quiz-button"
-            variant="primary"
             phx-disable-with="Salvando..."
             disabled={@quiz.locked?}
             aria-disabled={to_string(@quiz.locked?)}
@@ -276,7 +275,6 @@ defmodule LiveQuizWeb.QuizLive.Editor do
             <.button
               :if={not blocked?(@quiz)}
               id="add-question-button"
-              variant="primary"
               patch={~p"/quizzes/#{@quiz}/questions/new"}
               phx-click={JS.push_focus()}
             >
@@ -308,7 +306,6 @@ defmodule LiveQuizWeb.QuizLive.Editor do
             <.button
               :if={not @quiz.locked?}
               id="first-question-button"
-              variant="primary"
               patch={~p"/quizzes/#{@quiz}/questions/new"}
               phx-click={JS.push_focus()}
             >

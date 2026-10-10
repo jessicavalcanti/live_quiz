@@ -229,7 +229,7 @@ defmodule LiveQuizWeb.QuizLive.QuestionFormComponent do
             Cancelar
           </.link>
 
-          <.button variant="primary" phx-disable-with="Salvando...">
+          <.button phx-disable-with="Salvando...">
             Salvar pergunta
           </.button>
         </div>

@@ -107,13 +107,12 @@ defmodule LiveQuizWeb.GameOver do
         <.button
           :if={@viewer == :host}
           id="back-to-quizzes"
-          variant="primary"
           navigate={~p"/quizzes"}
         >
           Voltar para Meus quizzes
         </.button>
 
-        <.button :if={@viewer == :player} id="back-to-join" variant="primary" navigate={~p"/join"}>
+        <.button :if={@viewer == :player} id="back-to-join" navigate={~p"/join"}>
           Entrar em outra sala
         </.button>
       </div>

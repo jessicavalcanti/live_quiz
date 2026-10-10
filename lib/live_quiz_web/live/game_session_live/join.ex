@@ -310,7 +310,7 @@ defmodule LiveQuizWeb.GameSessionLive.Join do
             Depois de entrar, o apelido não pode ser trocado.
           </p>
 
-          <.button id="join-submit" variant="primary" phx-disable-with="Entrando..." class="w-full">
+          <.button id="join-submit" phx-disable-with="Entrando..." class="w-full">
             Entrar na sala
           </.button>
         </.form>

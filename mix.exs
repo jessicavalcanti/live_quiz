@@ -58,17 +58,16 @@ defmodule LiveQuiz.MixProject do
       {:phoenix_live_dashboard, "~> 0.8.3"},
       {:esbuild, "~> 0.10", runtime: Mix.env() == :dev},
       {:tailwind, "~> 0.5", runtime: Mix.env() == :dev},
+      # Os componentes do SaladUI vivem em lib/live_quiz_web/components/ui: a
+      # dependência só existe em dev, para o gerador `mix salad.install`. O que
+      # roda em produção é o `tw_merge`, que os componentes usam para resolver
+      # conflito entre a classe padrão e a passada pelo chamador.
+      {:salad_ui, "~> 1.0", only: :dev, runtime: false},
+      {:tw_merge, "~> 0.1"},
       {:heroicons,
        github: "tailwindlabs/heroicons",
        tag: "v2.2.0",
        sparse: "optimized",
-       app: false,
-       compile: false,
-       depth: 1},
-      {:daisyui,
-       github: "saadeghi/daisyui",
-       tag: "v5.5.20",
-       sparse: "packages/bundle",
        app: false,
        compile: false,
        depth: 1},

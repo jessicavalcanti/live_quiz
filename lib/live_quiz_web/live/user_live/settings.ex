@@ -33,7 +33,7 @@ defmodule LiveQuizWeb.UserLive.Settings do
           spellcheck="false"
           required
         />
-        <.button variant="primary" phx-disable-with="Alterando...">Alterar e-mail</.button>
+        <.button phx-disable-with="Alterando...">Alterar e-mail</.button>
       </.form>
 
       <div class="divider" />
@@ -71,7 +71,7 @@ defmodule LiveQuizWeb.UserLive.Settings do
           spellcheck="false"
           reveal_password
         />
-        <.button variant="primary" phx-disable-with="Salvando...">
+        <.button phx-disable-with="Salvando...">
           Salvar senha
         </.button>
       </.form>

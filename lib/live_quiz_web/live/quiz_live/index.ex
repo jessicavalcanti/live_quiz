@@ -234,7 +234,6 @@ defmodule LiveQuizWeb.QuizLive.Index do
         <:actions>
           <.button
             id="new-quiz-button"
-            variant="primary"
             patch={~p"/quizzes/new"}
             phx-click={JS.push_focus()}
           >
@@ -313,7 +312,6 @@ defmodule LiveQuizWeb.QuizLive.Index do
         <div :if={@search == "" and @page.total_entries == 0}>
           <.button
             id="first-quiz-button"
-            variant="primary"
             patch={~p"/quizzes/new"}
             phx-click={JS.push_focus()}
           >
@@ -509,7 +507,7 @@ defmodule LiveQuizWeb.QuizLive.Index do
               Cancelar
             </.link>
 
-            <.button variant="primary" phx-disable-with="Salvando...">
+            <.button phx-disable-with="Salvando...">
               Criar quiz
             </.button>
           </div>
@@ -544,7 +542,7 @@ defmodule LiveQuizWeb.QuizLive.Index do
               Cancelar
             </button>
 
-            <.button variant="primary" phx-disable-with="Abrindo...">
+            <.button phx-disable-with="Abrindo...">
               Abrir sala
             </.button>
           </div>

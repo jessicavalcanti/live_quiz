@@ -959,7 +959,6 @@ defmodule LiveQuizWeb.GameSessionLive.Player do
         <.button
           :if={@other_room_code}
           id="back-to-other-room"
-          variant="primary"
           navigate={~p"/game-sessions/#{@other_room_code}"}
         >
           Ir para a sala {@other_room_code}
@@ -968,7 +967,6 @@ defmodule LiveQuizWeb.GameSessionLive.Player do
         <.button
           :if={is_nil(@other_room_code)}
           id="back-to-join"
-          variant="primary"
           navigate={~p"/join"}
         >
           Ir para a tela de entrada
@@ -988,7 +986,7 @@ defmodule LiveQuizWeb.GameSessionLive.Player do
       </p>
 
       <div class="mt-6">
-        <.button id="back-home" variant="primary" navigate={~p"/"}>Voltar ao início</.button>
+        <.button id="back-home" navigate={~p"/"}>Voltar ao início</.button>
       </div>
     </section>
     """
