@@ -31,9 +31,11 @@ defmodule LiveQuizWeb.GameResultLive.Show do
     <Layouts.app flash={@flash} current_scope={@current_scope}>
       <.result_detail id="game-result-detail" result={@result} heading="Detalhes por pergunta">
         <:header>
-          <.link navigate={~p"/game-results"} class="link link-primary">
-            ← Voltar para minhas partidas
-          </.link>
+          <.back_button
+            id="back-to-game-results"
+            navigate={~p"/game-results"}
+            label="Voltar para minhas partidas"
+          />
 
           <div>
             <p class="text-sm font-semibold tracking-wider text-primary uppercase">Resultado final</p>

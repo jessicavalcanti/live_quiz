@@ -41,6 +41,12 @@ defmodule LiveQuizWeb.GameHistoryLive.Index do
     ~H"""
     <Layouts.app flash={@flash} current_scope={@current_scope}>
       <div id="host-game-history-page" class="space-y-8">
+        <.back_button
+          id="back-to-quizzes"
+          navigate={~p"/quizzes"}
+          label="Voltar para Meus quizzes"
+        />
+
         <div>
           <p class="text-sm font-semibold uppercase tracking-wider text-primary">Área do host</p>
           <h1 class="mt-2 text-3xl font-bold">Histórico dos quizzes</h1>

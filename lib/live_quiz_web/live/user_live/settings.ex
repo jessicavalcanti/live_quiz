@@ -10,6 +10,13 @@ defmodule LiveQuizWeb.UserLive.Settings do
   def render(assigns) do
     ~H"""
     <Layouts.app flash={@flash} current_scope={@current_scope}>
+      <.back_button
+        id="back-to-quizzes"
+        navigate={~p"/quizzes"}
+        label="Voltar para Meus quizzes"
+        class="mb-4"
+      />
+
       <div class="text-center">
         <.header>
           Configurações da conta

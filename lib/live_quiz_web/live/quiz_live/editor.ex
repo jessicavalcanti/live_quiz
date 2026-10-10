@@ -207,6 +207,13 @@ defmodule LiveQuizWeb.QuizLive.Editor do
         </ol>
       </nav>
 
+      <.back_button
+        id="back-to-quizzes"
+        navigate={~p"/quizzes"}
+        label="Voltar para Meus quizzes"
+        class="mb-4"
+      />
+
       <.header>
         Editar quiz
         <:subtitle>Ajuste o título e a descrição do seu quiz.</:subtitle>

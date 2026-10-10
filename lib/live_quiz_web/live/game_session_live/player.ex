@@ -617,6 +617,8 @@ defmodule LiveQuizWeb.GameSessionLive.Player do
 
   defp lobby(assigns) do
     ~H"""
+    <.leave_form code={@code} leaving?={@leaving?} />
+
     <.header>
       {@session.quiz_title}
       <:subtitle>
@@ -685,8 +687,6 @@ defmodule LiveQuizWeb.GameSessionLive.Player do
         </li>
       </ul>
     </section>
-
-    <.leave_form code={@code} leaving?={@leaving?} />
     """
   end
 
@@ -702,6 +702,8 @@ defmodule LiveQuizWeb.GameSessionLive.Player do
 
   defp match(assigns) do
     ~H"""
+    <.leave_form code={@code} leaving?={@leaving?} />
+
     <div id="notices" aria-live="polite" class="space-y-4">
       <p
         :if={not @host_connected?}
@@ -844,8 +846,6 @@ defmodule LiveQuizWeb.GameSessionLive.Player do
       </p>
     </section>
 
-    <.leave_form code={@code} leaving?={@leaving?} />
-
     <script :type={Phoenix.LiveView.ColocatedHook} name=".Countdown">
       export default {
         mounted() { this.start() },
@@ -921,10 +921,10 @@ defmodule LiveQuizWeb.GameSessionLive.Player do
       method="delete"
       phx-submit="leave"
       phx-trigger-action={@leaving?}
-      class="mt-8 flex justify-end"
+      class="mb-6 flex justify-start"
     >
-      <button type="submit" id="leave-room" class="btn btn-ghost text-error">
-        Sair da sala
+      <button type="submit" id="leave-room" class="btn btn-ghost btn-sm gap-2 text-error">
+        <.icon name="hero-arrow-left" class="size-4" /> Voltar e sair da sala
       </button>
     </.form>
     """

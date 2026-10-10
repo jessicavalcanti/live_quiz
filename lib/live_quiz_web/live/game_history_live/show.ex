@@ -19,7 +19,12 @@ defmodule LiveQuizWeb.GameHistoryLive.Show do
     ~H"""
     <Layouts.app flash={@flash} current_scope={@current_scope}>
       <div id="host-game-history-detail" class="space-y-8">
-        <.link navigate={~p"/game-history"} class="link link-primary">← Voltar para o histórico</.link>
+        <.back_button
+          id="back-to-game-history"
+          navigate={~p"/game-history"}
+          label="Voltar para o histórico"
+        />
+
         <div>
           <p class="text-sm font-semibold uppercase tracking-wider text-primary">
             Partida finalizada

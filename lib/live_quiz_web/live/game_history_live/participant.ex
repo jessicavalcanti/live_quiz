@@ -33,9 +33,11 @@ defmodule LiveQuizWeb.GameHistoryLive.Participant do
         heading="Respostas por pergunta"
       >
         <:header>
-          <.link navigate={~p"/game-history/#{@result.game_session_id}"} class="link link-primary">
-            ← Voltar para o ranking
-          </.link>
+          <.back_button
+            id="back-to-game-history-detail"
+            navigate={~p"/game-history/#{@result.game_session_id}"}
+            label="Voltar para o ranking"
+          />
 
           <div>
             <p class="text-sm font-semibold tracking-wider text-primary uppercase">
