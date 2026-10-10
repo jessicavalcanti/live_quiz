@@ -26,12 +26,8 @@ defmodule LiveQuizWeb.UI.Form do
           <.form_message field={@form[:name]} />
         </.form_item>
 
-        <div class="w-full flex flex-row-reverse">
-          <.button
-            class="btn btn-secondary btn-md"
-            icon="inbox_arrow_down"
-            phx-disable-with="Saving..."
-          >
+        <div class="flex w-full flex-row-reverse">
+          <.button variant="secondary" phx-disable-with="Saving...">
             Save project
           </.button>
         </div>
