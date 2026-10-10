@@ -392,15 +392,17 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
   def render(assigns) do
     ~H"""
     <Layouts.app flash={@flash} current_scope={@current_scope}>
-      <nav aria-label="Trilha de navegação" class="mb-4 text-sm text-base-content/70">
-        <ol class="flex flex-wrap items-center gap-2">
-          <li>
-            <.link navigate={~p"/quizzes"} class="link link-hover">Meus quizzes</.link>
-          </li>
-          <li aria-hidden="true">/</li>
-          <li aria-current="page" class="font-medium text-base-content">{@session.quiz_title}</li>
-        </ol>
-      </nav>
+      <.breadcrumb class="mb-4">
+        <.breadcrumb_list>
+          <.breadcrumb_item>
+            <.breadcrumb_link navigate={~p"/quizzes"}>Meus quizzes</.breadcrumb_link>
+          </.breadcrumb_item>
+          <.breadcrumb_separator />
+          <.breadcrumb_item>
+            <.breadcrumb_page>{@session.quiz_title}</.breadcrumb_page>
+          </.breadcrumb_item>
+        </.breadcrumb_list>
+      </.breadcrumb>
 
       <.back_button
         id="back-from-host"
@@ -414,7 +416,7 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
         <:subtitle>{subtitle(@session)}</:subtitle>
       </.header>
 
-      <p :if={active?(@session)} id="match-setup" class="mt-2 text-base-content/70">
+      <p :if={active?(@session)} id="match-setup" class="mt-2 text-sm text-muted-foreground">
         {Formatters.format_match_setup(@question_count, @session.question_duration_seconds)}
       </p>
 
@@ -422,7 +424,7 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
         :if={@access_lost?}
         id="access-lost-notice"
         role="alert"
-        class="mt-6 rounded-lg border border-warning bg-warning/10 p-4 text-warning-content"
+        class="mt-6 rounded-lg border border-warning/40 bg-warning/10 p-4 text-sm"
       >
         O controle desta sala foi assumido em outro dispositivo. Esta tela deixou de
         aceitar comandos.
@@ -432,7 +434,7 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
         :if={@expires_at && active?(@session)}
         id="expiration-notice"
         role="alert"
-        class="mt-6 rounded-lg border border-warning bg-warning/10 p-4 text-warning-content"
+        class="mt-6 rounded-lg border border-warning/40 bg-warning/10 p-4 text-sm"
       >
         Sua sala ficou sem host e será encerrada por ausência em {Formatters.format_datetime(
           @expires_at
@@ -450,10 +452,10 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
         <div
           :if={pending?(@game_state)}
           id="match-pending"
-          class="rounded-2xl border border-success p-8 text-center"
+          class="rounded-xl border border-success/50 bg-success/5 p-8 text-center"
         >
-          <h2 class="text-4xl font-black">Pronto para começar</h2>
-          <p class="mt-3 text-base-content/70">
+          <h2 class="text-3xl font-semibold tracking-tight sm:text-4xl">Pronto para começar</h2>
+          <p class="mx-auto mt-3 max-w-prose text-pretty text-muted-foreground">
             As inscrições estão encerradas. Avance para abrir a pergunta 1: ela já entra
             no ar aceitando respostas e o tempo começa a correr.
           </p>
@@ -462,15 +464,18 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
         <article
           :if={not pending?(@game_state)}
           id="current-question"
-          class="rounded-2xl border border-base-300 p-6 sm:p-8"
+          class="rounded-xl border border-border bg-card p-6 sm:p-8"
         >
-          <header class="flex flex-wrap items-center justify-between gap-4 border-b border-base-300 pb-4">
-            <h2 id="question-progress" class="text-xl font-semibold">
+          <header class="flex flex-wrap items-center justify-between gap-4 border-b border-border pb-4">
+            <h2
+              id="question-progress"
+              class="text-sm font-medium tracking-wide text-muted-foreground uppercase"
+            >
               Pergunta {@game_state.question_number} de {@game_state.question_count}
             </h2>
 
             <p :if={counting?(@game_state)} class="flex items-center gap-2">
-              <.icon name="hero-clock" class="size-6 text-base-content/70" />
+              <.icon name="hero-clock" class="size-5 text-muted-foreground" />
               <span class="sr-only">Tempo restante desta pergunta:</span>
               <%!-- O id carrega a posição de propósito: a pergunta seguinte monta um
               elemento novo e o hook da anterior é destruído, em vez de seguir
@@ -490,12 +495,20 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
               </span>
             </p>
 
-            <p :if={revealed?(@game_state)} id="question-closed-badge" class="text-lg text-warning">
+            <.badge
+              :if={revealed?(@game_state)}
+              id="question-closed-badge"
+              variant="warning"
+              class="text-sm"
+            >
               Pergunta encerrada
-            </p>
+            </.badge>
           </header>
 
-          <p id="question-text" class="mt-6 text-3xl font-bold break-words sm:text-4xl">
+          <p
+            id="question-text"
+            class="mt-6 text-3xl font-semibold tracking-tight break-words text-balance sm:text-4xl"
+          >
             {@game_state.question_text}
           </p>
 
@@ -504,13 +517,22 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
               :for={option <- @game_state.options}
               id={"option-#{option.id}"}
               class={[
-                "flex items-center gap-4 rounded-xl border p-4 text-xl",
-                if(option.correct, do: "border-success bg-success/10", else: "border-base-300")
+                "flex items-center gap-4 rounded-lg border p-4 text-lg sm:text-xl",
+                if(option.correct,
+                  do: "border-success/50 bg-success/10",
+                  else: "border-border bg-background"
+                )
               ]}
             >
               <span
                 aria-hidden="true"
-                class="flex size-9 shrink-0 items-center justify-center rounded-lg bg-base-200 font-bold"
+                class={[
+                  "flex size-9 shrink-0 items-center justify-center rounded-md font-semibold",
+                  if(option.correct,
+                    do: "bg-success text-success-foreground",
+                    else: "bg-muted text-muted-foreground"
+                  )
+                ]}
               >
                 {Formatters.option_letter(option.position)}
               </span>
@@ -519,7 +541,7 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
 
               <span
                 :if={option.correct}
-                class="ml-auto flex shrink-0 items-center gap-1 text-base font-semibold text-success"
+                class="ml-auto flex shrink-0 items-center gap-1 text-sm font-semibold text-success-strong"
               >
                 <.icon name="hero-check-circle" class="size-5" /> Resposta correta
               </span>
@@ -533,64 +555,71 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
           <p
             id="answers-count"
             aria-live="polite"
-            class="mt-6 border-t border-base-300 pt-4 text-lg"
+            class="mt-6 border-t border-border pt-4 text-muted-foreground"
           >
-            Respostas: <strong>{@answers_count}</strong> / {@participants_count}
+            Respostas:
+            <strong class="text-lg font-semibold text-foreground tabular-nums">{@answers_count}</strong>
+            / {@participants_count}
           </p>
         </article>
 
         <div class="flex flex-col items-center gap-3">
           <div class="flex flex-wrap items-center justify-center gap-4">
-            <button
+            <.button
               type="button"
               id="close-question"
+              variant="secondary"
+              size="lg"
               phx-click="close_question"
               disabled={not closable?(assigns)}
               aria-disabled={to_string(not closable?(assigns))}
-              class={["btn btn-lg", not closable?(assigns) && "btn-disabled"]}
             >
               Encerrar pergunta
-            </button>
+            </.button>
 
-            <button
+            <.button
               type="button"
               id="advance-question"
+              size="lg"
               phx-click="advance_question"
               phx-value-position={@game_state.question_number}
               disabled={not advanceable?(assigns)}
               aria-disabled={to_string(not advanceable?(assigns))}
-              class={["btn btn-primary btn-lg", not advanceable?(assigns) && "btn-disabled"]}
             >
               Próxima pergunta
-            </button>
+            </.button>
           </div>
 
+          <%!--
+            Finishing is a ghost for most of the match and only becomes the
+            prominent green action on the last question, when it stops being an
+            escape hatch and becomes the way the match is supposed to end.
+          --%>
           <div class="flex flex-wrap items-center justify-center gap-4">
-            <button
+            <.button
               type="button"
               id="finish-game"
+              data-last-call={to_string(last_call?(@game_state))}
+              variant={if(last_call?(@game_state), do: "success", else: "ghost")}
+              size={if(last_call?(@game_state), do: "lg", else: "default")}
               phx-click="open_finish"
               disabled={@access_lost?}
               aria-disabled={to_string(@access_lost?)}
-              class={[
-                "btn",
-                if(last_call?(@game_state), do: "btn-success btn-lg", else: "btn-ghost"),
-                @access_lost? && "btn-disabled"
-              ]}
             >
               Finalizar partida
-            </button>
+            </.button>
 
-            <button
+            <.button
               type="button"
               id="cancel-room"
+              variant="ghost"
+              class="text-destructive hover:bg-destructive/10 hover:text-destructive"
               phx-click="open_cancel"
               disabled={@access_lost?}
               aria-disabled={to_string(@access_lost?)}
-              class={["btn btn-ghost text-error", @access_lost? && "btn-disabled"]}
             >
               Cancelar sala
-            </button>
+            </.button>
           </div>
         </div>
 
@@ -632,24 +661,35 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
       </section>
 
       <section :if={waiting?(@session)} class="mt-8 space-y-6">
-        <div class="flex flex-wrap items-center justify-center gap-x-10 gap-y-2 text-lg">
-          <p id="reserved-count">
-            Inscritos: <strong>{@reserved_slots}</strong> de {@max_participants}
-          </p>
-          <p id="connected-count">
-            Conectados agora: <strong>{@connected_count}</strong>
-          </p>
+        <div class="grid gap-3 sm:grid-cols-2">
+          <div id="reserved-count" class="rounded-lg border border-border bg-card p-4">
+            <p class="text-sm text-muted-foreground">Inscritos</p>
+            <p class="mt-1 text-2xl font-semibold tabular-nums">
+              {@reserved_slots}
+              <span class="text-base font-normal text-muted-foreground">
+                de {@max_participants}
+              </span>
+            </p>
+          </div>
+          <div id="connected-count" class="rounded-lg border border-border bg-card p-4">
+            <p class="text-sm text-muted-foreground">Conectados agora</p>
+            <p class="mt-1 text-2xl font-semibold tabular-nums">{@connected_count}</p>
+          </div>
         </div>
 
         <p
           :if={@reserved_slots >= @max_participants}
           id="room-full-notice"
-          class="text-center text-sm text-warning"
+          class="text-center text-sm text-warning-strong"
         >
           Sala lotada: as {@max_participants} vagas já foram ocupadas.
         </p>
 
-        <p :if={@participants_empty?} id="participants-empty" class="text-center text-base-content/70">
+        <p
+          :if={@participants_empty?}
+          id="participants-empty"
+          class="rounded-lg border border-dashed border-border px-6 py-10 text-center text-sm text-muted-foreground"
+        >
           Ninguém entrou ainda. Compartilhe o código da sala.
         </p>
 
@@ -661,19 +701,19 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
           <li
             :for={{dom_id, participant} <- @streams.participants}
             id={dom_id}
-            class="flex items-center gap-3 rounded-lg border border-base-300 p-3"
+            class="flex items-center gap-3 rounded-lg border border-border bg-card p-3"
           >
             <span
               aria-hidden="true"
               class={[
-                "size-3 shrink-0 rounded-full",
-                if(participant.connected, do: "bg-success", else: "bg-base-300")
+                "size-2.5 shrink-0 rounded-full",
+                if(participant.connected, do: "bg-success", else: "bg-muted-foreground/40")
               ]}
             ></span>
 
-            <span class="min-w-0 font-medium break-words">{participant.nickname}</span>
+            <span class="min-w-0 text-sm font-medium break-words">{participant.nickname}</span>
 
-            <span :if={not participant.connected} class="ml-auto text-sm text-warning">
+            <span :if={not participant.connected} class="ml-auto text-xs text-muted-foreground">
               desconectado
             </span>
           </li>
@@ -681,31 +721,34 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
 
         <div class="flex flex-col items-center gap-2">
           <div class="flex flex-wrap items-center justify-center gap-4">
-            <button
+            <.button
               type="button"
               id="start-game"
+              size="lg"
               phx-click="start"
               disabled={not startable?(assigns)}
               aria-disabled={to_string(not startable?(assigns))}
               aria-describedby={hint_target(assigns)}
-              class={["btn btn-primary btn-lg", not startable?(assigns) && "btn-disabled"]}
             >
               Iniciar partida
-            </button>
+            </.button>
 
-            <button
+            <.button
               type="button"
               id="cancel-room"
+              variant="ghost"
+              class="text-destructive hover:bg-destructive/10 hover:text-destructive"
               phx-click="open_cancel"
               disabled={@access_lost?}
               aria-disabled={to_string(@access_lost?)}
-              class={["btn btn-ghost text-error", @access_lost? && "btn-disabled"]}
             >
               Cancelar sala
-            </button>
+            </.button>
           </div>
 
-          <p :if={hint(assigns)} id="start-hint" class="text-sm text-warning">{hint(assigns)}</p>
+          <p :if={hint(assigns)} id="start-hint" class="text-sm text-warning-strong">
+            {hint(assigns)}
+          </p>
         </div>
       </section>
 
@@ -724,25 +767,25 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
         title="Cancelar esta sala?"
         on_cancel={JS.push("close_cancel")}
       >
-        <p class="text-base-content/70">
+        <p class="text-muted-foreground">
           Todos os participantes serão avisados do encerramento. Uma sala cancelada não
           pode ser reaberta: para jogar de novo, abra outra sala, com um novo código.
         </p>
 
         <:actions>
-          <button type="button" phx-click="close_cancel" class="btn btn-ghost">
+          <.button type="button" phx-click="close_cancel" variant="ghost">
             Manter a sala
-          </button>
+          </.button>
 
-          <button
+          <.button
             type="button"
             id="confirm-cancel"
             phx-click="confirm_cancel"
             phx-disable-with="Cancelando..."
-            class="btn btn-error"
+            variant="destructive"
           >
             Sim, cancelar
-          </button>
+          </.button>
         </:actions>
       </.modal>
 
@@ -752,26 +795,26 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
         title="Finalizar esta partida?"
         on_cancel={JS.push("close_finish")}
       >
-        <p class="text-base-content/70">
+        <p class="text-muted-foreground">
           A partida termina para todo mundo agora e não poderá ser retomada: as perguntas
           que ainda não foram aplicadas ficam sem resposta. Tudo o que já foi respondido
           continua registrado.
         </p>
 
         <:actions>
-          <button type="button" phx-click="close_finish" class="btn btn-ghost">
+          <.button type="button" phx-click="close_finish" variant="ghost">
             Continuar jogando
-          </button>
+          </.button>
 
-          <button
+          <.button
             type="button"
             id="confirm-finish"
             phx-click="confirm_finish"
             phx-disable-with="Finalizando..."
-            class="btn btn-success"
+            variant="success"
           >
             Sim, finalizar
-          </button>
+          </.button>
         </:actions>
       </.modal>
     </Layouts.app>

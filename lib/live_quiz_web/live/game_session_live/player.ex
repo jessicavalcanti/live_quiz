@@ -626,7 +626,7 @@ defmodule LiveQuizWeb.GameSessionLive.Player do
       </:subtitle>
     </.header>
 
-    <p id="match-setup" class="mt-2 text-base-content/70">
+    <p id="match-setup" class="mt-2 text-sm text-muted-foreground">
       {Formatters.format_match_setup(@question_count, @session.question_duration_seconds)}
     </p>
 
@@ -634,7 +634,7 @@ defmodule LiveQuizWeb.GameSessionLive.Player do
       <p
         :if={not @host_connected?}
         id="host-away-notice"
-        class="rounded-lg border border-warning bg-warning/10 p-4 text-warning-content"
+        class="rounded-lg border border-warning/40 bg-warning/10 p-4 text-sm"
       >
         O host está desconectado. A sala continua aberta e a partida começa assim que
         ele voltar.
@@ -644,17 +644,18 @@ defmodule LiveQuizWeb.GameSessionLive.Player do
     <p
       :if={@session.status == :waiting}
       id="waiting-notice"
-      class="mt-6 rounded-2xl border border-base-300 p-6 text-center text-lg"
+      class="mt-6 flex items-center justify-center gap-3 rounded-xl border border-border bg-card p-6 text-center"
     >
+      <.icon name="hero-arrow-path" class="size-5 text-muted-foreground motion-safe:animate-spin" />
       Aguardando o host iniciar a partida…
     </p>
 
     <section class="mt-8 space-y-4">
-      <h2 id="participants-title" class="text-lg font-semibold">
+      <h2 id="participants-title" class="text-lg font-semibold tracking-tight">
         Participantes ({@participants_count})
       </h2>
 
-      <p :if={@participants_empty?} id="participants-empty" class="text-base-content/70">
+      <p :if={@participants_empty?} id="participants-empty" class="text-muted-foreground">
         Ninguém mais entrou ainda.
       </p>
 
@@ -667,21 +668,21 @@ defmodule LiveQuizWeb.GameSessionLive.Player do
         <li
           :for={{dom_id, participant} <- @participants}
           id={dom_id}
-          class="flex items-center gap-3 rounded-lg border border-base-300 p-3"
+          class="flex items-center gap-3 rounded-lg border border-border bg-card p-3"
         >
           <span
             aria-hidden="true"
             class={[
-              "size-3 shrink-0 rounded-full",
-              if(participant.connected, do: "bg-success", else: "bg-base-300")
+              "size-2.5 shrink-0 rounded-full",
+              if(participant.connected, do: "bg-success", else: "bg-muted-foreground/40")
             ]}
           ></span>
 
-          <span class="min-w-0 font-medium break-words">
+          <span class="min-w-0 text-sm font-medium break-words">
             {participant.nickname}<span :if={participant.id == @participant.id}>&nbsp;(você)</span>
           </span>
 
-          <span :if={not participant.connected} class="ml-auto text-sm text-warning">
+          <span :if={not participant.connected} class="ml-auto text-xs text-muted-foreground">
             desconectado
           </span>
         </li>
@@ -708,7 +709,7 @@ defmodule LiveQuizWeb.GameSessionLive.Player do
       <p
         :if={not @host_connected?}
         id="host-away-notice"
-        class="rounded-lg border border-warning bg-warning/10 p-4 text-warning-content"
+        class="rounded-lg border border-warning/40 bg-warning/10 p-4 text-sm"
       >
         O host está desconectado. A partida continua e ele volta a qualquer momento.
       </p>
@@ -717,7 +718,7 @@ defmodule LiveQuizWeb.GameSessionLive.Player do
         :if={@notice}
         id="answer-notice"
         role="alert"
-        class="rounded-lg border border-warning bg-warning/10 p-4 text-warning-content"
+        class="rounded-lg border border-warning/40 bg-warning/10 p-4 text-sm"
       >
         {@notice}
       </p>
@@ -726,10 +727,10 @@ defmodule LiveQuizWeb.GameSessionLive.Player do
     <section
       :if={pending?(@game_state)}
       id="match-pending"
-      class="mt-6 rounded-2xl border border-base-300 p-8 text-center"
+      class="mt-6 rounded-xl border border-border bg-card p-8 text-center"
     >
-      <h1 class="text-2xl font-bold">A partida vai começar</h1>
-      <p class="mt-3 text-base-content/70">
+      <h1 class="text-2xl font-semibold tracking-tight">A partida vai começar</h1>
+      <p class="mt-3 text-muted-foreground">
         Fique nesta tela: a primeira pergunta aparece aqui assim que o host abrir.
       </p>
     </section>
@@ -737,15 +738,18 @@ defmodule LiveQuizWeb.GameSessionLive.Player do
     <article
       :if={open?(@game_state)}
       id="current-question"
-      class="mt-6 rounded-2xl border border-base-300 p-4 sm:p-6"
+      class="mt-6 rounded-xl border border-border bg-card p-4 sm:p-6"
     >
-      <header class="flex flex-wrap items-center justify-between gap-4 border-b border-base-300 pb-4">
-        <h1 id="question-progress" class="text-lg font-semibold">
+      <header class="flex flex-wrap items-center justify-between gap-4 border-b border-border pb-4">
+        <h1
+          id="question-progress"
+          class="text-sm font-medium tracking-wide text-muted-foreground uppercase"
+        >
           Pergunta {@game_state.question_number} de {@game_state.question_count}
         </h1>
 
         <p class="flex items-center gap-2">
-          <.icon name="hero-clock" class="size-5 text-base-content/70" />
+          <.icon name="hero-clock" class="size-5 text-muted-foreground" />
           <span class="sr-only">Tempo restante desta pergunta:</span>
           <%!-- O id carrega a posição de propósito: a pergunta seguinte monta um
           elemento novo e o hook da anterior é destruído, em vez de seguir
@@ -766,7 +770,10 @@ defmodule LiveQuizWeb.GameSessionLive.Player do
         </p>
       </header>
 
-      <h2 id="question-text" class="mt-6 text-2xl font-bold break-words sm:text-3xl">
+      <h2
+        id="question-text"
+        class="mt-6 text-2xl font-semibold tracking-tight break-words text-balance sm:text-3xl"
+      >
         {@game_state.question_text}
       </h2>
 
@@ -784,17 +791,24 @@ defmodule LiveQuizWeb.GameSessionLive.Player do
             phx-value-option_id={option.id}
             aria-pressed={to_string(option.id == @selected_option_id)}
             class={[
-              "flex w-full items-center gap-4 rounded-xl border p-4 text-left text-lg",
-              "min-h-16 transition hover:border-primary [&.phx-click-loading]:pointer-events-none",
+              "flex w-full items-center gap-4 rounded-lg border p-4 text-left text-lg",
+              "min-h-16 transition-colors focus-visible:ring-[3px] focus-visible:ring-ring/50",
+              "focus-visible:outline-hidden [&.phx-click-loading]:pointer-events-none",
               if(option.id == @selected_option_id,
-                do: "border-primary bg-primary/10 font-semibold",
-                else: "border-base-300"
+                do: "border-primary bg-primary/10 font-medium",
+                else: "border-border bg-background hover:border-ring hover:bg-accent"
               )
             ]}
           >
             <span
               aria-hidden="true"
-              class="flex size-9 shrink-0 items-center justify-center rounded-lg bg-base-200 font-bold"
+              class={[
+                "flex size-9 shrink-0 items-center justify-center rounded-md font-semibold",
+                if(option.id == @selected_option_id,
+                  do: "bg-primary text-primary-foreground",
+                  else: "bg-muted text-muted-foreground"
+                )
+              ]}
             >
               {Formatters.option_letter(option.position)}
             </span>
@@ -811,7 +825,7 @@ defmodule LiveQuizWeb.GameSessionLive.Player do
         </li>
       </ul>
 
-      <p id="swap-hint" class="mt-6 border-t border-base-300 pt-4 text-base-content/70">
+      <p id="swap-hint" class="mt-6 border-t border-border pt-4 text-sm text-muted-foreground">
         Você pode trocar de alternativa até o tempo acabar.
       </p>
     </article>
@@ -823,13 +837,16 @@ defmodule LiveQuizWeb.GameSessionLive.Player do
     <section
       :if={answers_closed?(@game_state)}
       id="question-waiting"
-      class="mt-6 rounded-2xl border border-base-300 p-6 text-center sm:p-8"
+      class="mt-6 rounded-xl border border-border bg-card p-6 text-center sm:p-8"
     >
-      <h1 id="question-progress" class="text-lg font-semibold">
+      <h1
+        id="question-progress"
+        class="text-sm font-medium tracking-wide text-muted-foreground uppercase"
+      >
         Pergunta {@game_state.question_number} de {@game_state.question_count}
       </h1>
 
-      <p id="question-closed-badge" class="mt-3 text-xl font-bold text-warning">
+      <p id="question-closed-badge" class="mt-3 text-xl font-semibold text-warning-strong">
         Pergunta encerrada
       </p>
 
@@ -841,7 +858,7 @@ defmodule LiveQuizWeb.GameSessionLive.Player do
         current_participant_id={@current_participant_id}
       />
 
-      <p class="mt-6 text-base-content/70">
+      <p class="mt-6 text-sm text-muted-foreground">
         Aguarde: o host abre a próxima pergunta quando quiser.
       </p>
     </section>
@@ -923,9 +940,15 @@ defmodule LiveQuizWeb.GameSessionLive.Player do
       phx-trigger-action={@leaving?}
       class="mb-6 flex justify-start"
     >
-      <button type="submit" id="leave-room" class="btn btn-ghost btn-sm gap-2 text-error">
+      <.button
+        type="submit"
+        id="leave-room"
+        variant="ghost"
+        size="sm"
+        class="-ml-3 gap-2 text-destructive hover:bg-destructive/10 hover:text-destructive"
+      >
         <.icon name="hero-arrow-left" class="size-4" /> Voltar e sair da sala
-      </button>
+      </.button>
     </.form>
     """
   end
@@ -935,8 +958,8 @@ defmodule LiveQuizWeb.GameSessionLive.Player do
   defp connecting_screen(assigns) do
     ~H"""
     <section id="connecting" role="status" aria-live="polite" class="py-16 text-center">
-      <h1 class="text-2xl font-bold">Entrando na sala {@code}…</h1>
-      <p class="mt-3 text-base-content/70">
+      <h1 class="text-2xl font-semibold tracking-tight">Entrando na sala {@code}…</h1>
+      <p class="mt-3 text-muted-foreground">
         Estamos recuperando a sua participação. Isso leva só um instante.
       </p>
     </section>
@@ -949,8 +972,8 @@ defmodule LiveQuizWeb.GameSessionLive.Player do
   defp blocked_screen(assigns) do
     ~H"""
     <section id="another-room-notice" role="alert" class="py-16 text-center">
-      <h1 class="text-2xl font-bold">Você já está em outra sala</h1>
-      <p class="mt-3 text-base-content/70">
+      <h1 class="text-2xl font-semibold tracking-tight">Você já está em outra sala</h1>
+      <p class="mt-3 text-muted-foreground">
         Sua participação na sala {@code} continua reservada. Saia da sala em que você
         está agora para voltar para cá.
       </p>
@@ -979,8 +1002,8 @@ defmodule LiveQuizWeb.GameSessionLive.Player do
   defp access_lost_screen(assigns) do
     ~H"""
     <section id="access-lost-notice" role="alert" class="py-16 text-center">
-      <h1 class="text-2xl font-bold">Você abriu esta sala em outro lugar</h1>
-      <p class="mt-3 text-base-content/70">
+      <h1 class="text-2xl font-semibold tracking-tight">Você abriu esta sala em outro lugar</h1>
+      <p class="mt-3 text-muted-foreground">
         A sua participação continua a mesma, mas agora é a outra aba que está na sala.
         Esta tela parou de acompanhar a partida.
       </p>

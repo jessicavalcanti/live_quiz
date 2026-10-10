@@ -98,7 +98,11 @@ defmodule LiveQuizWeb.UI.Helpers do
         "border border-input bg-background shadow-xs hover:bg-accent hover:text-accent-foreground",
       "secondary" => "bg-secondary text-secondary-foreground shadow-xs hover:bg-secondary/80",
       "ghost" => "hover:bg-accent hover:text-accent-foreground",
-      "link" => "text-primary underline-offset-4 hover:underline"
+      "link" => "text-primary underline-offset-4 hover:underline",
+      # Ours, not shadcn's: the host screen has one button that ends the match
+      # for everyone, and it is neither the neutral primary nor a destructive
+      # act. It is the good outcome, and it should look like one.
+      "success" => "bg-success text-success-foreground shadow-xs hover:bg-success/90"
     },
     size: %{
       "default" => "h-9 px-4 py-2",
@@ -116,7 +120,7 @@ defmodule LiveQuizWeb.UI.Helpers do
   @doc """
   Reusable button variant helper. Supports two variant kinds:
   - size: `default|sm|lg|icon`
-  - variant: `default|destructive|outline|secondary|ghost|link`
+  - variant: `default|destructive|outline|secondary|ghost|link|success`
   """
   def button_variant(props \\ %{}) do
     variants = Map.take(props, ~w(variant size)a)

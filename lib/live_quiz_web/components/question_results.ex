@@ -43,7 +43,7 @@ defmodule LiveQuizWeb.QuestionResults do
         :if={@viewer == :player}
         id="own-result"
         class={[
-          "flex items-center gap-3 rounded-xl border p-4 text-xl font-bold",
+          "flex items-center gap-3 rounded-lg border p-4 text-lg font-semibold",
           own_result_class(@results)
         ]}
       >
@@ -56,23 +56,32 @@ defmodule LiveQuizWeb.QuestionResults do
           :for={option <- @results.options}
           id={"result-option-#{option.id}"}
           class={[
-            "rounded-xl border p-4",
-            if(option.is_correct, do: "border-success bg-success/10", else: "border-base-300")
+            "rounded-lg border p-4",
+            if(option.is_correct,
+              do: "border-success/50 bg-success/10",
+              else: "border-border bg-card"
+            )
           ]}
         >
           <div class="flex flex-wrap items-center gap-3">
             <span
               aria-hidden="true"
-              class="flex size-8 shrink-0 items-center justify-center rounded-lg bg-base-200 font-bold"
+              class={[
+                "flex size-8 shrink-0 items-center justify-center rounded-md font-semibold",
+                if(option.is_correct,
+                  do: "bg-success text-success-foreground",
+                  else: "bg-muted text-muted-foreground"
+                )
+              ]}
             >
               {Formatters.option_letter(option.position)}
             </span>
 
-            <span class="min-w-0 break-words font-medium">{option.text}</span>
+            <span class="min-w-0 font-medium break-words">{option.text}</span>
 
             <span
               :if={option.is_correct}
-              class="flex shrink-0 items-center gap-1 text-sm font-semibold text-success"
+              class="flex shrink-0 items-center gap-1 text-sm font-semibold text-success-strong"
             >
               <.icon name="hero-check-circle" class="size-5" /> Resposta correta
             </span>
@@ -88,17 +97,17 @@ defmodule LiveQuizWeb.QuestionResults do
           <div class="mt-3 flex items-center gap-3">
             <%!-- A barra é só desenho: o valor que ela representa está escrito ao
             lado, porque uma largura em CSS não é lida por ninguém. --%>
-            <span aria-hidden="true" class="h-3 flex-1 rounded-full bg-base-200">
+            <span aria-hidden="true" class="h-2 flex-1 rounded-full bg-muted">
               <span
                 class={[
-                  "block h-3 rounded-full transition-all",
-                  if(option.is_correct, do: "bg-success", else: "bg-base-content/40")
+                  "block h-2 rounded-full transition-all",
+                  if(option.is_correct, do: "bg-success", else: "bg-muted-foreground/50")
                 ]}
                 style={"width: #{Formatters.answer_share(option.count, @results.answers_count)}%"}
               ></span>
             </span>
 
-            <span class="shrink-0 text-sm tabular-nums text-base-content/70">
+            <span class="shrink-0 text-sm tabular-nums text-muted-foreground">
               {Formatters.format_answer_share(option.count, @results.answers_count)}
             </span>
           </div>
@@ -108,7 +117,7 @@ defmodule LiveQuizWeb.QuestionResults do
       <p
         :if={@results.no_answer_count > 0}
         id="no-answer-count"
-        class="text-base-content/70"
+        class="text-sm text-muted-foreground"
       >
         {Formatters.format_absences(@results.no_answer_count)}
       </p>
@@ -132,9 +141,13 @@ defmodule LiveQuizWeb.QuestionResults do
   defp own_result_icon(%{my_answer_correct?: true}), do: "hero-check-circle"
   defp own_result_icon(%{}), do: "hero-x-circle"
 
-  defp own_result_class(%{my_answer_option_id: nil}), do: "border-warning bg-warning/10"
-  defp own_result_class(%{my_answer_correct?: true}), do: "border-success bg-success/10"
-  defp own_result_class(%{}), do: "border-error bg-error/10"
+  defp own_result_class(%{my_answer_option_id: nil}),
+    do: "border-warning/50 bg-warning/10 text-warning-strong"
+
+  defp own_result_class(%{my_answer_correct?: true}),
+    do: "border-success/50 bg-success/10 text-success-strong"
+
+  defp own_result_class(%{}), do: "border-destructive/50 bg-destructive/10 text-destructive"
 
   # A question always freezes exactly four alternatives, so the letters never
   # run past the beginning of the alphabet.

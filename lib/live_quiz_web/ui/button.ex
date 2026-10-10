@@ -26,6 +26,7 @@ defmodule LiveQuizWeb.UI.Button do
       * `"outline"` - Button with outline style
       * `"ghost"` - Button with minimal styling
       * `"link"` - Button that appears as a link
+      * `"success"` - The action that ends something well, such as finishing a match
   * `:size` - Size of the button:
       * `"default"` - Standard size
       * `"sm"` - Small size
@@ -50,7 +51,7 @@ defmodule LiveQuizWeb.UI.Button do
   attr :class, :any, default: nil
 
   attr :variant, :string,
-    values: ~w(default secondary destructive outline ghost link),
+    values: ~w(default secondary destructive outline ghost link success),
     default: "default",
     doc: "the button variant style"
 
