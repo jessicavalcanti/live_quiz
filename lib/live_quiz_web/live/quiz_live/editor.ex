@@ -197,15 +197,17 @@ defmodule LiveQuizWeb.QuizLive.Editor do
   def render(assigns) do
     ~H"""
     <Layouts.app flash={@flash} current_scope={@current_scope}>
-      <nav aria-label="Trilha de navegação" class="mb-4 text-sm text-base-content/70">
-        <ol class="flex flex-wrap items-center gap-2">
-          <li>
-            <.link navigate={~p"/quizzes"} class="link link-hover">Meus quizzes</.link>
-          </li>
-          <li aria-hidden="true">/</li>
-          <li aria-current="page" class="font-medium text-base-content">{@quiz.title}</li>
-        </ol>
-      </nav>
+      <.breadcrumb class="mb-4">
+        <.breadcrumb_list>
+          <.breadcrumb_item>
+            <.breadcrumb_link navigate={~p"/quizzes"}>Meus quizzes</.breadcrumb_link>
+          </.breadcrumb_item>
+          <.breadcrumb_separator />
+          <.breadcrumb_item>
+            <.breadcrumb_page>{@quiz.title}</.breadcrumb_page>
+          </.breadcrumb_item>
+        </.breadcrumb_list>
+      </.breadcrumb>
 
       <.back_button
         id="back-to-quizzes"
@@ -223,7 +225,7 @@ defmodule LiveQuizWeb.QuizLive.Editor do
         :if={@quiz.locked?}
         id="quiz-locked-notice"
         role="status"
-        class="mt-6 rounded-lg border border-warning bg-warning/10 p-4 text-warning-content"
+        class="mt-6 rounded-lg border border-warning/40 bg-warning/10 p-4 text-sm"
       >
         {locked_hint()}. As alterações ficam bloqueadas até a sala ser encerrada.
       </p>
@@ -247,7 +249,7 @@ defmodule LiveQuizWeb.QuizLive.Editor do
           maxlength={@description_limit}
         />
 
-        <p class="-mt-1 text-sm text-base-content/60" aria-live="polite">
+        <p class="-mt-1 text-sm text-muted-foreground" aria-live="polite">
           {remaining_characters(@form)} caracteres restantes
         </p>
 
@@ -267,8 +269,8 @@ defmodule LiveQuizWeb.QuizLive.Editor do
       <section class="mt-10" aria-labelledby="questions-heading">
         <div class="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <h2 id="questions-heading" class="text-lg font-semibold">Perguntas</h2>
-            <p class="text-sm text-base-content/70">{questions_summary(@quiz)}</p>
+            <h2 id="questions-heading" class="text-lg font-semibold tracking-tight">Perguntas</h2>
+            <p class="text-sm text-muted-foreground">{questions_summary(@quiz)}</p>
           </div>
 
           <div class="flex flex-col items-start gap-1 sm:items-end">
@@ -281,115 +283,142 @@ defmodule LiveQuizWeb.QuizLive.Editor do
               Adicionar pergunta
             </.button>
 
-            <button
+            <.button
               :if={blocked?(@quiz)}
               id="add-question-button"
               type="button"
               disabled
               aria-disabled="true"
               aria-describedby={blocked_target(@quiz)}
-              class="btn btn-primary btn-disabled"
             >
               Adicionar pergunta
-            </button>
+            </.button>
 
-            <p :if={limit_reached?(@quiz)} id="question-limit-hint" class="text-sm text-warning">
+            <p
+              :if={limit_reached?(@quiz)}
+              id="question-limit-hint"
+              class="text-sm text-warning-strong"
+            >
               {limit_hint()}
             </p>
           </div>
         </div>
 
-        <div :if={@quiz.questions == []} id="questions-empty" class="mt-6 text-center">
-          <p class="text-base-content/70">Este quiz ainda não tem perguntas</p>
+        <div
+          :if={@quiz.questions == []}
+          id="questions-empty"
+          class="mt-6 flex flex-col items-center gap-4 rounded-lg border border-dashed border-border px-6 py-12 text-center"
+        >
+          <span class="flex size-10 items-center justify-center rounded-full bg-muted">
+            <.icon name="hero-question-mark-circle" class="size-5 text-muted-foreground" />
+          </span>
 
-          <div class="mt-4">
-            <.button
-              :if={not @quiz.locked?}
-              id="first-question-button"
-              patch={~p"/quizzes/#{@quiz}/questions/new"}
-              phx-click={JS.push_focus()}
-            >
-              Adicionar pergunta
-            </.button>
-          </div>
+          <p class="text-sm text-muted-foreground">Este quiz ainda não tem perguntas</p>
+
+          <.button
+            :if={not @quiz.locked?}
+            id="first-question-button"
+            patch={~p"/quizzes/#{@quiz}/questions/new"}
+            phx-click={JS.push_focus()}
+          >
+            Adicionar pergunta
+          </.button>
         </div>
 
         <ol :if={@quiz.questions != []} id="questions" class="mt-6 space-y-3">
           <li
             :for={question <- @quiz.questions}
             id={"question-#{question.id}"}
-            class="flex flex-wrap items-start justify-between gap-3 rounded-lg border border-base-300 p-4"
+            class="flex flex-wrap items-start justify-between gap-3 rounded-lg border border-border bg-card p-4 transition-colors hover:border-ring/40"
           >
             <div class="flex min-w-0 items-start gap-3">
-              <span class="badge badge-neutral shrink-0">{question.position}</span>
+              <%!--
+                `data-question-position` is the seam the reordering tests read
+                the displayed number through, so renumbering stays assertable
+                without a test having to know what the number looks like.
+              --%>
+              <span
+                data-question-position
+                class="flex size-6 shrink-0 items-center justify-center rounded-md bg-muted text-xs font-medium text-muted-foreground"
+              >
+                {question.position}
+              </span>
 
               <div class="min-w-0">
                 <p class="font-medium break-words">{preview(question.text)}</p>
-                <p class="mt-1 text-sm text-success break-words">
+                <p class="mt-1 text-sm break-words text-success-strong">
                   Correta: {correct_answer(question)}
                 </p>
               </div>
             </div>
 
             <div class="flex shrink-0 items-center gap-1">
-              <button
+              <.button
                 type="button"
+                variant="ghost"
+                size="icon"
+                class="size-8 phx-click-loading:pointer-events-none phx-click-loading:opacity-50"
                 id={"move-question-up-#{question.id}"}
                 disabled={question.position == 1 or @quiz.locked?}
                 aria-describedby={locked_target(@quiz)}
                 phx-click="move_question_up"
                 phx-value-id={question.id}
                 aria-label={"Mover pergunta #{question.position} para cima"}
-                class="btn btn-ghost btn-sm phx-click-loading:pointer-events-none phx-click-loading:opacity-50"
               >
                 <.icon name="hero-arrow-up" class="size-4" />
-              </button>
+              </.button>
 
-              <button
+              <.button
                 type="button"
+                variant="ghost"
+                size="icon"
+                class="size-8 phx-click-loading:pointer-events-none phx-click-loading:opacity-50"
                 id={"move-question-down-#{question.id}"}
                 disabled={question.position == last_position(@quiz) or @quiz.locked?}
                 aria-describedby={locked_target(@quiz)}
                 phx-click="move_question_down"
                 phx-value-id={question.id}
                 aria-label={"Mover pergunta #{question.position} para baixo"}
-                class="btn btn-ghost btn-sm phx-click-loading:pointer-events-none phx-click-loading:opacity-50"
               >
                 <.icon name="hero-arrow-down" class="size-4" />
-              </button>
+              </.button>
 
-              <.link
+              <.button
                 :if={not @quiz.locked?}
                 patch={~p"/quizzes/#{@quiz}/questions/#{question}/edit"}
                 phx-click={JS.push_focus()}
-                class="btn btn-ghost btn-sm"
+                variant="ghost"
+                size="sm"
               >
                 Editar
-              </.link>
+              </.button>
 
-              <button
+              <.button
                 :if={@quiz.locked?}
                 type="button"
+                variant="ghost"
+                size="sm"
                 id={"edit-question-#{question.id}"}
                 disabled
                 aria-disabled="true"
                 aria-describedby={locked_target(@quiz)}
-                class="btn btn-ghost btn-sm btn-disabled"
               >
                 Editar
-              </button>
+              </.button>
 
-              <button
+              <.button
                 type="button"
+                variant="ghost"
+                size="sm"
+                class="text-destructive hover:bg-destructive/10 hover:text-destructive"
                 id={"delete-question-#{question.id}"}
                 disabled={@quiz.locked?}
                 aria-disabled={to_string(@quiz.locked?)}
                 aria-describedby={locked_target(@quiz)}
                 phx-click={JS.push_focus() |> JS.push("delete_question", value: %{id: question.id})}
-                class={["btn btn-ghost btn-sm text-error", @quiz.locked? && "btn-disabled"]}
               >
                 Excluir
-              </button>
+              </.button>
             </div>
           </li>
         </ol>
@@ -420,27 +449,27 @@ defmodule LiveQuizWeb.QuizLive.Editor do
       >
         <p class="font-medium break-words">{preview(@question_to_delete.text)}</p>
 
-        <p class="mt-2 text-base-content/70">
+        <p class="mt-2 text-muted-foreground">
           As 4 alternativas também serão removidas. Esta ação não pode ser desfeita.
         </p>
 
         <:actions>
-          <button
+          <.button
             type="button"
             phx-click={JS.push("cancel_delete_question") |> JS.pop_focus()}
-            class="btn btn-ghost"
+            variant="ghost"
           >
             Cancelar
-          </button>
+          </.button>
 
-          <button
+          <.button
             type="button"
             phx-click="confirm_delete_question"
             phx-disable-with="Excluindo..."
-            class="btn btn-error"
+            variant="destructive"
           >
             Excluir pergunta
-          </button>
+          </.button>
         </:actions>
       </.modal>
     </Layouts.app>

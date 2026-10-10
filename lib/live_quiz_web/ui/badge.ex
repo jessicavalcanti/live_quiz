@@ -33,6 +33,13 @@ defmodule LiveQuizWeb.UI.Badge do
     * `"secondary"` - Secondary color with contrasting text
     * `"destructive"` - Typically red, for warning or error states
     * `"outline"` - Bordered style with no background
+    * `"success"` - Tinted green, for a state that is ready or correct
+    * `"warning"` - Tinted amber, for a state that blocks an action
+    * `"info"` - Tinted blue, for a neutral state
+
+  The tinted variants carry the label in a darker tone of their own hue rather
+  than on a solid fill, because a badge sits inside running text: a solid
+  colour at this size reads as a button to click.
 
   ## Examples
 
@@ -43,7 +50,7 @@ defmodule LiveQuizWeb.UI.Badge do
   attr :class, :string, default: nil
 
   attr :variant, :string,
-    values: ~w(default secondary destructive outline),
+    values: ~w(default secondary destructive outline success warning info),
     default: "default",
     doc: "the badge variant style"
 
@@ -76,7 +83,10 @@ defmodule LiveQuizWeb.UI.Badge do
         "border-transparent bg-secondary text-secondary-foreground hover:bg-secondary/80",
       "destructive" =>
         "border-transparent bg-destructive text-destructive-foreground hover:bg-destructive/80",
-      "outline" => "text-foreground"
+      "outline" => "text-foreground",
+      "success" => "border-transparent bg-success/15 text-success-strong",
+      "warning" => "border-transparent bg-warning/15 text-warning-strong",
+      "info" => "border-transparent bg-info/15 text-info-strong"
     }
   }
 

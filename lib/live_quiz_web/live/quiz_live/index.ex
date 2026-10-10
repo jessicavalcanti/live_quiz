@@ -246,128 +246,141 @@ defmodule LiveQuizWeb.QuizLive.Index do
         :if={@active_session}
         id="active-session-notice"
         role="status"
-        class="mt-6 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-info bg-info/10 p-4"
+        class="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-info/40 bg-info/10 p-4 text-sm"
       >
         <p>
-          Você tem uma sala aberta para <strong>{@active_session.quiz_title}</strong>
-          com o código <strong class="font-mono">{@active_session.join_code}</strong>.
+          Você tem uma sala aberta para
+          <strong class="font-medium">{@active_session.quiz_title}</strong>
+          com o código <strong class="rounded bg-background px-1.5 py-0.5 font-mono tracking-wider">
+            {@active_session.join_code}
+          </strong>.
         </p>
 
-        <.link
-          navigate={~p"/game-sessions/#{@active_session.join_code}/host"}
-          class="btn btn-primary btn-sm"
-        >
+        <.button navigate={~p"/game-sessions/#{@active_session.join_code}/host"} size="sm">
           Voltar para a sala
-        </.link>
+        </.button>
       </div>
 
-      <form id="quiz-search" phx-change="search" phx-submit="search" role="search" class="mt-6">
+      <form id="quiz-search" phx-change="search" phx-submit="search" role="search">
         <label for="quiz-search-input" class="sr-only">Buscar por título</label>
 
         <div class="flex gap-2">
-          <input
-            type="text"
-            id="quiz-search-input"
-            name="search"
-            value={@search}
-            placeholder="Buscar por título"
-            phx-debounce="300"
-            autocomplete="off"
-            class="input input-bordered w-full"
-          />
+          <div class="relative flex-1">
+            <.icon
+              name="hero-magnifying-glass"
+              class="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground"
+            />
+            <input
+              type="text"
+              id="quiz-search-input"
+              name="search"
+              value={@search}
+              placeholder="Buscar por título"
+              phx-debounce="300"
+              autocomplete="off"
+              class="flex h-10 w-full rounded-md border border-input bg-background pr-3 pl-9 text-sm placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-hidden"
+            />
+          </div>
 
-          <button
-            :if={@search != ""}
-            type="button"
-            phx-click="clear_search"
-            class="btn btn-ghost"
-          >
+          <.button :if={@search != ""} type="button" phx-click="clear_search" variant="ghost">
             Limpar busca
-          </button>
+          </.button>
         </div>
       </form>
 
-      <div :if={@page.entries == []} class="mt-10 space-y-4 text-center">
-        <p class="text-base-content/70">
+      <div
+        :if={@page.entries == []}
+        class="flex flex-col items-center gap-4 rounded-lg border border-dashed border-border px-6 py-14 text-center"
+      >
+        <span class="flex size-10 items-center justify-center rounded-full bg-muted">
+          <.icon name="hero-rectangle-stack" class="size-5 text-muted-foreground" />
+        </span>
+
+        <p class="text-sm text-muted-foreground">
           {empty_message(@page, @search)}
         </p>
 
-        <button
-          :if={@search != ""}
-          type="button"
-          phx-click="clear_search"
-          class="btn btn-primary btn-soft"
-        >
+        <.button :if={@search != ""} type="button" phx-click="clear_search" variant="secondary">
           Limpar busca
-        </button>
+        </.button>
 
-        <.link
+        <.button
           :if={@search == "" and @page.total_entries > 0}
           patch={~p"/quizzes"}
-          class="btn btn-primary btn-soft"
+          variant="secondary"
         >
           Voltar para a primeira página
-        </.link>
+        </.button>
 
-        <div :if={@search == "" and @page.total_entries == 0}>
-          <.button
-            id="first-quiz-button"
-            patch={~p"/quizzes/new"}
-            phx-click={JS.push_focus()}
-          >
-            Criar quiz
-          </.button>
-        </div>
+        <.button
+          :if={@search == "" and @page.total_entries == 0}
+          id="first-quiz-button"
+          patch={~p"/quizzes/new"}
+          phx-click={JS.push_focus()}
+        >
+          Criar quiz
+        </.button>
       </div>
 
-      <div :if={@page.entries != []} id="quiz-list" class="mt-6">
-        <table class="table w-full">
-          <thead>
-            <tr>
-              <th scope="col">Título</th>
-              <th scope="col" class="hidden lg:table-cell">Descrição</th>
-              <th scope="col" class="hidden sm:table-cell">Perguntas</th>
-              <th scope="col" class="hidden xl:table-cell">Criado em</th>
-              <th scope="col" class="hidden md:table-cell">Situação</th>
-              <th scope="col"><span class="sr-only">Ações</span></th>
+      <div
+        :if={@page.entries != []}
+        id="quiz-list"
+        class="overflow-hidden rounded-lg border border-border"
+      >
+        <table class="w-full text-sm">
+          <thead class="bg-muted/50">
+            <tr class="border-b border-border text-left text-muted-foreground">
+              <th scope="col" class="h-10 px-4 font-medium">Título</th>
+              <th scope="col" class="hidden h-10 px-4 font-medium lg:table-cell">Descrição</th>
+              <th scope="col" class="hidden h-10 px-4 font-medium sm:table-cell">Perguntas</th>
+              <th scope="col" class="hidden h-10 px-4 font-medium xl:table-cell">Criado em</th>
+              <th scope="col" class="hidden h-10 px-4 font-medium md:table-cell">Situação</th>
+              <th scope="col" class="h-10 px-4"><span class="sr-only">Ações</span></th>
             </tr>
           </thead>
 
-          <tbody id="quizzes">
-            <tr :for={quiz <- @page.entries} id={"quiz-#{quiz.id}"}>
-              <td class="min-w-0 align-top font-medium">
+          <tbody id="quizzes" class="[&_tr:last-child]:border-0">
+            <tr
+              :for={quiz <- @page.entries}
+              id={"quiz-#{quiz.id}"}
+              class="border-b border-border transition-colors hover:bg-muted/40"
+            >
+              <td class="min-w-0 px-4 py-3 align-top font-medium">
                 <span class="break-words">{quiz.title}</span>
-                <p class="mt-1 break-words text-sm font-normal text-base-content/70 lg:hidden">
+                <p class="mt-1 break-words text-sm font-normal text-muted-foreground lg:hidden">
                   {description(quiz)}
                 </p>
                 <div class="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 font-normal">
-                  <span class="text-xs text-base-content/70 sm:hidden">{question_count(quiz)}</span>
-                  <span class="text-xs text-base-content/70 xl:hidden">
+                  <span class="text-xs text-muted-foreground sm:hidden">{question_count(quiz)}</span>
+                  <span class="text-xs text-muted-foreground xl:hidden">
                     {Formatters.format_date(quiz.inserted_at)}
                   </span>
-                  <span class={[
-                    "badge badge-sm whitespace-nowrap md:hidden",
-                    status_class(quiz)
-                  ]}>
+                  <.badge variant={status_variant(quiz)} class="whitespace-nowrap md:hidden">
                     {status(quiz)}
-                  </span>
+                  </.badge>
                 </div>
               </td>
-              <td class="hidden break-words text-base-content/70 lg:table-cell">
+              <td class="hidden break-words px-4 py-3 align-top text-muted-foreground lg:table-cell">
                 {description(quiz)}
               </td>
-              <td class="hidden sm:table-cell">{question_count(quiz)}</td>
-              <td class="hidden whitespace-nowrap xl:table-cell">
+              <td class="hidden px-4 py-3 align-top whitespace-nowrap sm:table-cell">
+                {question_count(quiz)}
+              </td>
+              <td class="hidden px-4 py-3 align-top whitespace-nowrap xl:table-cell">
                 {Formatters.format_date(quiz.inserted_at)}
               </td>
-              <td class="hidden md:table-cell">
-                <span class={["badge whitespace-nowrap", status_class(quiz)]}>{status(quiz)}</span>
+              <td class="hidden px-4 py-3 align-top md:table-cell">
+                <.badge variant={status_variant(quiz)} class="whitespace-nowrap">
+                  {status(quiz)}
+                </.badge>
               </td>
-              <td class="w-0 align-top">
+              <td class="w-0 px-4 py-3 align-top">
                 <div class="flex flex-col items-end gap-1">
                   <div class="flex min-w-max items-center gap-2">
-                    <button
+                    <.button
                       type="button"
+                      size="icon"
+                      class="size-8"
                       id={"start-game-button-#{quiz.id}"}
                       disabled={not startable?(quiz)}
                       aria-disabled={to_string(not startable?(quiz))}
@@ -375,43 +388,46 @@ defmodule LiveQuizWeb.QuizLive.Index do
                       aria-label="Iniciar partida"
                       title="Iniciar partida"
                       phx-click={JS.push_focus() |> JS.push("start_game", value: %{id: quiz.id})}
-                      class={[
-                        "btn btn-square btn-primary btn-sm",
-                        not startable?(quiz) && "btn-disabled"
-                      ]}
                     >
                       <.icon name="hero-play" class="size-4" />
                       <span class="sr-only">Iniciar partida</span>
-                    </button>
+                    </.button>
 
-                    <.link
+                    <.button
                       :if={not quiz.locked?}
                       navigate={~p"/quizzes/#{quiz}/edit"}
+                      variant="ghost"
+                      size="icon"
+                      class="size-8"
                       aria-label="Editar quiz"
                       title="Editar quiz"
-                      class="btn btn-square btn-ghost btn-sm"
                     >
                       <.icon name="hero-pencil-square" class="size-4" />
                       <span class="sr-only">Editar</span>
-                    </.link>
+                    </.button>
 
-                    <button
+                    <.button
                       :if={quiz.locked?}
                       type="button"
+                      variant="ghost"
+                      size="icon"
+                      class="size-8"
                       id={"edit-quiz-#{quiz.id}"}
                       disabled
                       aria-disabled="true"
                       aria-describedby={hint_target(quiz)}
                       aria-label="Editar quiz"
                       title="Editar quiz"
-                      class="btn btn-square btn-ghost btn-sm btn-disabled"
                     >
                       <.icon name="hero-pencil-square" class="size-4" />
                       <span class="sr-only">Editar</span>
-                    </button>
+                    </.button>
 
-                    <button
+                    <.button
                       type="button"
+                      variant="ghost"
+                      size="icon"
+                      class="size-8 text-destructive hover:bg-destructive/10 hover:text-destructive"
                       id={"delete-quiz-#{quiz.id}"}
                       disabled={quiz.locked?}
                       aria-disabled={to_string(quiz.locked?)}
@@ -419,20 +435,16 @@ defmodule LiveQuizWeb.QuizLive.Index do
                       aria-label="Excluir quiz"
                       title="Excluir quiz"
                       phx-click={JS.push_focus() |> JS.push("delete_quiz", value: %{id: quiz.id})}
-                      class={[
-                        "btn btn-square btn-ghost btn-sm text-error",
-                        quiz.locked? && "btn-disabled"
-                      ]}
                     >
                       <.icon name="hero-trash" class="size-4" />
                       <span class="sr-only">Excluir</span>
-                    </button>
+                    </.button>
                   </div>
 
                   <p
                     :if={hint(quiz)}
                     id={"quiz-hint-#{quiz.id}"}
-                    class="max-w-48 text-right text-xs whitespace-normal text-warning"
+                    class="max-w-48 text-right text-xs whitespace-normal text-warning-strong"
                   >
                     {hint(quiz)}
                   </p>
@@ -446,37 +458,46 @@ defmodule LiveQuizWeb.QuizLive.Index do
       <nav
         :if={@page.total_pages > 1}
         aria-label="Paginação"
-        class="mt-6 flex items-center justify-between gap-4"
+        class="flex items-center justify-between gap-4"
       >
-        <.link
+        <%!--
+          The edge of the list renders a disabled button rather than dropping the
+          control, so the row keeps its shape and the page number stays put
+          between the first page and the last.
+        --%>
+        <.button
           :if={@page.page > 1}
           patch={~p"/quizzes?#{query(@search, @page.page - 1)}"}
-          class="btn btn-soft btn-sm"
+          variant="outline"
+          size="sm"
         >
           Anterior
-        </.link>
-        <span :if={@page.page <= 1} class="btn btn-soft btn-sm btn-disabled" aria-hidden="true">
+        </.button>
+        <.button :if={@page.page <= 1} variant="outline" size="sm" disabled aria-hidden="true">
           Anterior
-        </span>
+        </.button>
 
-        <span class="text-sm text-base-content/70">
+        <span class="text-sm text-muted-foreground">
           Página {@page.page} de {@page.total_pages}
         </span>
 
-        <.link
+        <.button
           :if={@page.page < @page.total_pages}
           patch={~p"/quizzes?#{query(@search, @page.page + 1)}"}
-          class="btn btn-soft btn-sm"
+          variant="outline"
+          size="sm"
         >
           Próxima
-        </.link>
-        <span
+        </.button>
+        <.button
           :if={@page.page >= @page.total_pages}
-          class="btn btn-soft btn-sm btn-disabled"
+          variant="outline"
+          size="sm"
+          disabled
           aria-hidden="true"
         >
           Próxima
-        </span>
+        </.button>
       </nav>
 
       <.modal
@@ -502,10 +523,10 @@ defmodule LiveQuizWeb.QuizLive.Index do
             rows="3"
           />
 
-          <div class="modal-action">
-            <.link patch={~p"/quizzes"} phx-click={JS.pop_focus()} class="btn btn-ghost">
+          <div class="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+            <.button patch={~p"/quizzes"} phx-click={JS.pop_focus()} variant="ghost">
               Cancelar
-            </.link>
+            </.button>
 
             <.button phx-disable-with="Salvando...">
               Criar quiz
@@ -528,19 +549,19 @@ defmodule LiveQuizWeb.QuizLive.Index do
             options={Enum.map(GameSession.question_durations(), &{"#{&1} segundos", &1})}
           />
 
-          <p class="mt-2 text-sm text-base-content/70">
+          <p class="mt-2 text-sm text-muted-foreground">
             O tempo vale para todas as perguntas e não pode ser alterado depois que a
             sala é aberta.
           </p>
 
-          <div class="modal-action">
-            <button
+          <div class="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+            <.button
               type="button"
               phx-click={JS.push("cancel_start") |> JS.pop_focus()}
-              class="btn btn-ghost"
+              variant="ghost"
             >
               Cancelar
-            </button>
+            </.button>
 
             <.button phx-disable-with="Abrindo...">
               Abrir sala
@@ -555,25 +576,25 @@ defmodule LiveQuizWeb.QuizLive.Index do
         title={~s(Excluir o quiz "#{@quiz_to_delete.title}"?)}
         on_cancel={JS.push("cancel_delete") |> JS.pop_focus()}
       >
-        <p class="text-base-content/70">{deletion_impact(@quiz_to_delete)}</p>
+        <p class="text-muted-foreground">{deletion_impact(@quiz_to_delete)}</p>
 
         <:actions>
-          <button
+          <.button
             type="button"
             phx-click={JS.push("cancel_delete") |> JS.pop_focus()}
-            class="btn btn-ghost"
+            variant="ghost"
           >
             Cancelar
-          </button>
+          </.button>
 
-          <button
+          <.button
             type="button"
             phx-click="confirm_delete"
             phx-disable-with="Excluindo..."
-            class="btn btn-error"
+            variant="destructive"
           >
             Excluir quiz
-          </button>
+          </.button>
         </:actions>
       </.modal>
     </Layouts.app>
@@ -643,7 +664,7 @@ defmodule LiveQuizWeb.QuizLive.Index do
     if Quizzes.playable?(quiz), do: "Pronto para jogar", else: "Incompleto"
   end
 
-  defp status_class(quiz) do
-    if Quizzes.playable?(quiz), do: "badge-success", else: "badge-ghost"
+  defp status_variant(quiz) do
+    if Quizzes.playable?(quiz), do: "success", else: "secondary"
   end
 end

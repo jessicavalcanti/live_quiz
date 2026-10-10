@@ -158,7 +158,12 @@ defmodule LiveQuizWeb.UI.Breadcrumb do
   * Standard HTML link attributes (href, target, etc.) are supported
   """
   attr :class, :string, default: nil
-  attr :rest, :global, include: ~w(download href hreflang ping referrerpolicy rel target type)
+  # `navigate` and `patch` are in the list because the trail inside the app is
+  # live navigation: without them the attribute is dropped and the crumb reloads
+  # the whole page.
+  attr :rest, :global,
+    include: ~w(download href hreflang navigate patch ping referrerpolicy rel target type)
+
   slot :inner_block, required: true
 
   def breadcrumb_link(assigns) do
