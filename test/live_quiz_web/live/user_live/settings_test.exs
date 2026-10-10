@@ -14,6 +14,8 @@ defmodule LiveQuizWeb.UserLive.SettingsTest do
 
       assert html =~ "Alterar e-mail"
       assert html =~ "Salvar senha"
+      assert html |> String.split("data-password-toggle") |> length() == 3
+      assert html |> String.split(~s(aria-label="Mostrar senha")) |> length() == 3
     end
 
     test "redirects if user is not logged in", %{conn: conn} do

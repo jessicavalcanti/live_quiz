@@ -57,6 +57,7 @@ defmodule LiveQuizWeb.UserLive.Login do
             label="Senha"
             autocomplete="current-password"
             spellcheck="false"
+            reveal_password
             required
           />
           <.button class="btn btn-primary w-full" name={f[:remember_me].name} value="true">

@@ -50,6 +50,8 @@ defmodule LiveQuizWeb.CoreComponents do
   attr :flash, :map, default: %{}, doc: "the map of flash messages to display"
   attr :title, :string, default: nil
   attr :kind, :atom, values: [:info, :error], doc: "used for styling and flash lookup"
+  attr :auto_hide, :boolean, default: true, doc: "whether to dismiss the flash automatically"
+  attr :auto_hide_ms, :integer, default: 7_000, doc: "milliseconds before dismissing the flash"
   attr :rest, :global, doc: "the arbitrary HTML attributes to add to the flash container"
 
   slot :inner_block, doc: "the optional inner block that renders the flash message"
@@ -62,15 +64,27 @@ defmodule LiveQuizWeb.CoreComponents do
       :if={msg = render_slot(@inner_block) || Phoenix.Flash.get(@flash, @kind)}
       id={@id}
       phx-click={JS.push("lv:clear-flash", value: %{key: @kind}) |> hide("##{@id}")}
+      phx-hook=".FlashTimer"
+      data-auto-hide-ms={@auto_hide && @auto_hide_ms}
       role="alert"
       class="toast toast-top toast-end z-50"
       {@rest}
     >
       <div class={[
-        "alert w-80 sm:w-96 max-w-80 sm:max-w-96 text-wrap",
+        "alert relative w-80 sm:w-96 max-w-80 sm:max-w-96 overflow-hidden text-wrap",
         @kind == :info && "alert-info",
         @kind == :error && "alert-error"
       ]}>
+        <span
+          :if={@auto_hide}
+          data-flash-progress
+          aria-hidden="true"
+          class={[
+            "absolute inset-x-0 top-0 h-1 origin-left",
+            @kind == :info && "bg-info-content/50",
+            @kind == :error && "bg-error-content/50"
+          ]}
+        />
         <.icon :if={@kind == :info} name="hero-information-circle" class="size-5 shrink-0" />
         <.icon :if={@kind == :error} name="hero-exclamation-circle" class="size-5 shrink-0" />
         <div>
@@ -83,6 +97,64 @@ defmodule LiveQuizWeb.CoreComponents do
         </button>
       </div>
     </div>
+
+    <script :type={Phoenix.LiveView.ColocatedHook} name=".FlashTimer">
+      export default {
+        mounted() {
+          this.hovered = false
+          this.focused = false
+
+          this.el.addEventListener("mouseenter", () => {
+            this.hovered = true
+            this.updatePlayback()
+          })
+          this.el.addEventListener("mouseleave", () => {
+            this.hovered = false
+            this.updatePlayback()
+          })
+          this.el.addEventListener("focusin", () => {
+            this.focused = true
+            this.updatePlayback()
+          })
+          this.el.addEventListener("focusout", event => {
+            if (!this.el.contains(event.relatedTarget)) {
+              this.focused = false
+              this.updatePlayback()
+            }
+          })
+
+          this.start()
+        },
+        updated() { this.start() },
+        destroyed() { this.stop() },
+        start() {
+          this.stop()
+
+          const progress = this.el.querySelector("[data-flash-progress]")
+          const duration = Number(this.el.dataset.autoHideMs)
+
+          if (!progress || !Number.isFinite(duration) || duration <= 0) { return }
+
+          this.animation = progress.animate(
+            [{transform: "scaleX(1)"}, {transform: "scaleX(0)"}],
+            {duration, easing: "linear", fill: "forwards"}
+          )
+          this.animation.onfinish = () => this.el.click()
+          this.updatePlayback()
+        },
+        stop() {
+          if (this.animation) {
+            this.animation.onfinish = null
+            this.animation.cancel()
+            this.animation = null
+          }
+        },
+        updatePlayback() {
+          if (!this.animation) { return }
+          this.hovered || this.focused ? this.animation.pause() : this.animation.play()
+        }
+      }
+    </script>
     """
   end
 
@@ -121,6 +193,27 @@ defmodule LiveQuizWeb.CoreComponents do
       </button>
       """
     end
+  end
+
+  @doc """
+  Renders a consistent button for returning to the previous screen in a flow.
+  """
+  attr :id, :string, required: true
+  attr :navigate, :string, required: true
+  attr :label, :string, default: "Voltar"
+  attr :class, :any, default: nil
+
+  def back_button(assigns) do
+    ~H"""
+    <.link
+      id={@id}
+      navigate={@navigate}
+      class={["btn btn-ghost btn-sm gap-2", @class]}
+    >
+      <.icon name="hero-arrow-left" class="size-4" />
+      <span>{@label}</span>
+    </.link>
+    """
   end
 
   @doc """
@@ -189,6 +282,7 @@ defmodule LiveQuizWeb.CoreComponents do
   attr :multiple, :boolean, default: false, doc: "the multiple flag for select inputs"
   attr :class, :any, default: nil, doc: "the input class to use over defaults"
   attr :error_class, :any, default: nil, doc: "the input error class to use over defaults"
+  attr :reveal_password, :boolean, default: false, doc: "adds a password visibility toggle"
 
   attr :rest, :global,
     include: ~w(accept autocomplete capture cols disabled form list max maxlength min minlength
@@ -310,6 +404,69 @@ defmodule LiveQuizWeb.CoreComponents do
       </div>
       <.error :for={msg <- @errors}>{msg}</.error>
     </fieldset>
+    """
+  end
+
+  def input(%{type: "password", reveal_password: true} = assigns) do
+    ~H"""
+    <div class="fieldset mb-2">
+      <label for={@id}>
+        <span :if={@label} class="label mb-1">{@label}</span>
+      </label>
+      <div id={"#{@id}-visibility"} class="relative" phx-hook=".PasswordVisibility">
+        <input
+          type="password"
+          name={@name}
+          id={@id}
+          value={Phoenix.HTML.Form.normalize_value(@type, @value)}
+          class={[
+            @class || "w-full input pr-12",
+            @errors != [] && (@error_class || "input-error")
+          ]}
+          {@rest}
+        />
+        <button
+          type="button"
+          data-password-toggle
+          aria-controls={@id}
+          aria-label="Mostrar senha"
+          aria-pressed="false"
+          class="btn btn-ghost btn-sm btn-square absolute top-1/2 right-1 -translate-y-1/2"
+        >
+          <span data-password-show><.icon name="hero-eye" class="size-5" /></span>
+          <span data-password-hide class="hidden">
+            <.icon name="hero-eye-slash" class="size-5" />
+          </span>
+        </button>
+      </div>
+      <.error :for={msg <- @errors}>{msg}</.error>
+    </div>
+
+    <script :type={Phoenix.LiveView.ColocatedHook} name=".PasswordVisibility">
+      export default {
+        mounted() {
+          this.visible = false
+          this.el.addEventListener("click", event => {
+            if (event.target.closest("[data-password-toggle]")) {
+              this.visible = !this.visible
+              this.sync()
+            }
+          })
+          this.sync()
+        },
+        updated() { this.sync() },
+        sync() {
+          const input = this.el.querySelector("input")
+          const button = this.el.querySelector("[data-password-toggle]")
+
+          input.type = this.visible ? "text" : "password"
+          button.setAttribute("aria-label", this.visible ? "Ocultar senha" : "Mostrar senha")
+          button.setAttribute("aria-pressed", String(this.visible))
+          this.el.querySelector("[data-password-show]").classList.toggle("hidden", this.visible)
+          this.el.querySelector("[data-password-hide]").classList.toggle("hidden", !this.visible)
+        }
+      }
+    </script>
     """
   end
 

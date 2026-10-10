@@ -35,10 +35,14 @@ defmodule LiveQuizWeb.Layouts do
 
   def app(assigns) do
     ~H"""
-    <header class="navbar gap-2 px-4 sm:px-6 lg:px-8">
+    <header class="navbar gap-2 px-3 sm:px-4 lg:px-6">
       <div class="flex-1">
-        <.link navigate={home_path(@current_scope)} class="text-lg font-semibold">
-          LiveQuiz
+        <.link
+          id="app-brand"
+          navigate={home_path(@current_scope)}
+          class="inline-flex items-center text-lg font-semibold"
+        >
+          <.brand />
         </.link>
       </div>
 
@@ -77,8 +81,8 @@ defmodule LiveQuizWeb.Layouts do
       </nav>
     </header>
 
-    <main class="px-4 py-12 sm:px-6 sm:py-20 lg:px-8">
-      <div class="mx-auto max-w-2xl space-y-4">
+    <main class="px-3 py-12 sm:px-4 sm:py-20 lg:px-6">
+      <div class="mx-auto w-full max-w-7xl space-y-4">
         <.unconfirmed_email_notice current_scope={@current_scope} />
         {render_slot(@inner_block)}
       </div>
@@ -90,6 +94,20 @@ defmodule LiveQuizWeb.Layouts do
 
   defp home_path(%{user: %{}}), do: ~p"/quizzes"
   defp home_path(_current_scope), do: ~p"/"
+
+  @doc """
+  Renders the application brand consistently across screens.
+  """
+  attr :class, :any, default: nil
+
+  def brand(assigns) do
+    ~H"""
+    <span class={["inline-flex items-center gap-2", @class]}>
+      <span aria-hidden="true">⚡</span>
+      <span>LiveQuiz</span>
+    </span>
+    """
+  end
 
   @doc """
   Reminds the user to confirm their e-mail address.
@@ -134,6 +152,7 @@ defmodule LiveQuizWeb.Layouts do
       <.flash
         id="client-error"
         kind={:error}
+        auto_hide={false}
         title={gettext("We can't find the internet")}
         phx-disconnected={
           show(".phx-client-error #client-error")
@@ -149,6 +168,7 @@ defmodule LiveQuizWeb.Layouts do
       <.flash
         id="server-error"
         kind={:error}
+        auto_hide={false}
         title={gettext("Something went wrong!")}
         phx-disconnected={
           show(".phx-server-error #server-error")

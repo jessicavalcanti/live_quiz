@@ -102,8 +102,32 @@ defmodule LiveQuizWeb.QuizLive.IndexTest do
       assert lv |> element("#quiz-#{filled.id}") |> render() =~ "5 perguntas"
       assert lv |> element("#quiz-#{filled.id}") |> render() =~ "Pronto para jogar"
 
+      assert has_element?(
+               lv,
+               "#quiz-#{filled.id} span.badge.whitespace-nowrap",
+               "Pronto para jogar"
+             )
+
+      assert has_element?(
+               lv,
+               ~s{#quiz-#{filled.id} a.btn-square[aria-label="Editar quiz"]},
+               "Editar"
+             )
+
+      assert has_element?(
+               lv,
+               ~s{#quiz-#{filled.id} button.btn-square[aria-label="Iniciar partida"]}
+             )
+
+      assert has_element?(
+               lv,
+               ~s{#quiz-#{filled.id} button.btn-square[aria-label="Excluir quiz"]},
+               "Excluir"
+             )
+
       assert lv |> element("#quiz-#{empty.id}") |> render() =~ "Nenhuma pergunta"
       assert lv |> element("#quiz-#{empty.id}") |> render() =~ "Incompleto"
+      assert has_element?(lv, "#quiz-#{empty.id} span.badge.whitespace-nowrap", "Incompleto")
     end
 
     test "says 1 pergunta in the singular", %{conn: conn, scope: scope} do

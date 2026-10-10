@@ -234,6 +234,8 @@ defmodule LiveQuizWeb.GameSessionLive.Join do
     ~H"""
     <Layouts.app flash={@flash} current_scope={@current_scope}>
       <div class="mx-auto max-w-md space-y-6">
+        <.back_button id="back-to-home" navigate={~p"/"} label="Voltar ao início" />
+
         <.header>
           Entrar em uma sala
           <:subtitle>

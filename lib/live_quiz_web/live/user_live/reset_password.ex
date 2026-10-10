@@ -9,6 +9,13 @@ defmodule LiveQuizWeb.UserLive.ResetPassword do
     ~H"""
     <Layouts.app flash={@flash} current_scope={@current_scope}>
       <div class="mx-auto max-w-sm">
+        <.back_button
+          id="back-to-login"
+          navigate={~p"/users/log-in"}
+          label="Voltar para entrar"
+          class="mb-4"
+        />
+
         <div class="text-center">
           <.header>
             Redefinir senha
@@ -28,6 +35,7 @@ defmodule LiveQuizWeb.UserLive.ResetPassword do
             label="Nova senha"
             autocomplete="new-password"
             spellcheck="false"
+            reveal_password
             required
             phx-mounted={JS.focus()}
           />
@@ -37,6 +45,7 @@ defmodule LiveQuizWeb.UserLive.ResetPassword do
             label="Confirmação da nova senha"
             autocomplete="new-password"
             spellcheck="false"
+            reveal_password
             required
           />
           <.button phx-disable-with="Redefinindo..." class="btn btn-primary w-full">

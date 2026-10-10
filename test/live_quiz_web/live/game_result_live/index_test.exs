@@ -38,18 +38,24 @@ defmodule LiveQuizWeb.GameResultLive.IndexTest do
     assert_patch(lv, ~p"/game-results?page=2")
     assert html =~ "Página 2 de 2"
 
+    # A janela precisa acompanhar o relógio: as fixtures são criadas agora, logo
+    # datas fixas fariam o filtro parar de casar quando o mês virasse.
+    today = Date.utc_today()
+    from = Date.add(today, -1) |> Date.to_iso8601()
+    to = Date.add(today, 1) |> Date.to_iso8601()
+
     html =
       lv
       |> form("#game-results-filters", %{
         "filters" => %{
           "quiz_id" => to_string(quiz.id),
-          "from" => "2026-09-01",
-          "to" => "2026-09-30"
+          "from" => from,
+          "to" => to
         }
       })
       |> render_submit()
 
-    assert_patch(lv, ~p"/game-results?from=2026-09-01&page=1&quiz_id=#{quiz.id}&to=2026-09-30")
+    assert_patch(lv, ~p"/game-results?from=#{from}&page=1&quiz_id=#{quiz.id}&to=#{to}")
     assert html =~ "Filtrado"
   end
 

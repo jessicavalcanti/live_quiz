@@ -8,6 +8,8 @@ defmodule LiveQuizWeb.UserLive.Confirmation do
     ~H"""
     <Layouts.app flash={@flash} current_scope={@current_scope}>
       <div class="mx-auto max-w-sm">
+        <.back_button id="back-to-home" navigate={~p"/"} label="Voltar ao início" class="mb-4" />
+
         <div class="text-center">
           <.header>
             Confirmar conta

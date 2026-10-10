@@ -45,6 +45,12 @@ defmodule LiveQuizWeb.GameResultLive.Index do
     ~H"""
     <Layouts.app flash={@flash} current_scope={@current_scope}>
       <div class="space-y-8" id="game-results-page">
+        <.back_button
+          id="back-to-quizzes"
+          navigate={~p"/quizzes"}
+          label="Voltar para Meus quizzes"
+        />
+
         <div>
           <p class="text-sm font-semibold uppercase tracking-wider text-primary">Seu histórico</p>
           <h1 class="mt-2 text-3xl font-bold">Minhas partidas</h1>

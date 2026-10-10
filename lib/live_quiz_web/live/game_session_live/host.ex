@@ -402,6 +402,13 @@ defmodule LiveQuizWeb.GameSessionLive.Host do
         </ol>
       </nav>
 
+      <.back_button
+        id="back-from-host"
+        navigate={~p"/quizzes"}
+        label="Voltar para Meus quizzes"
+        class="mb-4"
+      />
+
       <.header>
         {@session.quiz_title}
         <:subtitle>{subtitle(@session)}</:subtitle>

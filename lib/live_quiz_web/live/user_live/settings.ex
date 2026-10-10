@@ -10,6 +10,13 @@ defmodule LiveQuizWeb.UserLive.Settings do
   def render(assigns) do
     ~H"""
     <Layouts.app flash={@flash} current_scope={@current_scope}>
+      <.back_button
+        id="back-to-quizzes"
+        navigate={~p"/quizzes"}
+        label="Voltar para Meus quizzes"
+        class="mb-4"
+      />
+
       <div class="text-center">
         <.header>
           Configurações da conta
@@ -53,6 +60,7 @@ defmodule LiveQuizWeb.UserLive.Settings do
           label="Nova senha"
           autocomplete="new-password"
           spellcheck="false"
+          reveal_password
           required
         />
         <.input
@@ -61,6 +69,7 @@ defmodule LiveQuizWeb.UserLive.Settings do
           label="Confirmação da nova senha"
           autocomplete="new-password"
           spellcheck="false"
+          reveal_password
         />
         <.button variant="primary" phx-disable-with="Salvando...">
           Salvar senha
