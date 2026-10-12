@@ -35,54 +35,56 @@ defmodule LiveQuizWeb.Layouts do
 
   def app(assigns) do
     ~H"""
-    <header class="navbar gap-2 px-3 sm:px-4 lg:px-6">
-      <div class="flex-1">
-        <.link
-          id="app-brand"
-          navigate={home_path(@current_scope)}
-          class="inline-flex items-center text-lg font-semibold"
-        >
-          <.brand />
-        </.link>
-      </div>
+    <header class="sticky top-0 z-40 border-b border-border bg-background/80 backdrop-blur-md">
+      <div class="mx-auto flex h-14 w-full max-w-7xl items-center gap-2 px-3 sm:px-4 lg:px-6">
+        <div class="flex-1">
+          <.link
+            id="app-brand"
+            navigate={home_path(@current_scope)}
+            class="inline-flex items-center rounded-md text-base font-semibold tracking-tight focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-hidden"
+          >
+            <.brand />
+          </.link>
+        </div>
 
-      <nav class="flex-none" aria-label="Menu do usuário">
-        <ul class="flex items-center gap-2 sm:gap-4">
-          <%= if @current_scope do %>
-            <li class="hidden text-sm font-medium sm:block">
-              {@current_scope.user.name}
+        <nav class="flex-none" aria-label="Menu do usuário">
+          <ul class="flex items-center gap-1 sm:gap-2">
+            <%= if @current_scope do %>
+              <li class="hidden pr-1 text-sm font-medium text-muted-foreground sm:block">
+                {@current_scope.user.name}
+              </li>
+              <li>
+                <.button navigate={~p"/users/settings"} variant="ghost" size="sm">
+                  Minha conta
+                </.button>
+              </li>
+              <li>
+                <.button href={~p"/users/log-out"} method="delete" variant="ghost" size="sm">
+                  Sair
+                </.button>
+              </li>
+            <% else %>
+              <li>
+                <.button navigate={~p"/users/log-in"} variant="ghost" size="sm">
+                  Entrar
+                </.button>
+              </li>
+              <li>
+                <.button navigate={~p"/users/register"} size="sm">
+                  Criar conta
+                </.button>
+              </li>
+            <% end %>
+            <li class="pl-1">
+              <.theme_toggle />
             </li>
-            <li>
-              <.link navigate={~p"/users/settings"} class="btn btn-ghost btn-sm">
-                Minha conta
-              </.link>
-            </li>
-            <li>
-              <.link href={~p"/users/log-out"} method="delete" class="btn btn-ghost btn-sm">
-                Sair
-              </.link>
-            </li>
-          <% else %>
-            <li>
-              <.link navigate={~p"/users/log-in"} class="btn btn-ghost btn-sm">
-                Entrar
-              </.link>
-            </li>
-            <li>
-              <.link navigate={~p"/users/register"} class="btn btn-primary btn-sm">
-                Criar conta
-              </.link>
-            </li>
-          <% end %>
-          <li>
-            <.theme_toggle />
-          </li>
-        </ul>
-      </nav>
+          </ul>
+        </nav>
+      </div>
     </header>
 
-    <main class="px-3 py-12 sm:px-4 sm:py-20 lg:px-6">
-      <div class="mx-auto w-full max-w-7xl space-y-4">
+    <main class="px-3 py-10 sm:px-4 sm:py-14 lg:px-6">
+      <div class="mx-auto w-full max-w-7xl space-y-6">
         <.unconfirmed_email_notice current_scope={@current_scope} />
         {render_slot(@inner_block)}
       </div>
@@ -103,7 +105,12 @@ defmodule LiveQuizWeb.Layouts do
   def brand(assigns) do
     ~H"""
     <span class={["inline-flex items-center gap-2", @class]}>
-      <span aria-hidden="true">⚡</span>
+      <span
+        aria-hidden="true"
+        class="flex size-6 items-center justify-center rounded-md bg-primary text-xs text-primary-foreground"
+      >
+        ⚡
+      </span>
       <span>LiveQuiz</span>
     </span>
     """
@@ -119,10 +126,13 @@ defmodule LiveQuizWeb.Layouts do
 
   def unconfirmed_email_notice(%{current_scope: %{user: %{confirmed_at: nil}}} = assigns) do
     ~H"""
-    <div class="alert alert-warning" role="status">
-      <.icon name="hero-envelope" class="size-5 shrink-0" />
+    <div
+      class="flex items-start gap-3 rounded-lg border border-warning/40 bg-warning/10 p-4 text-sm"
+      role="status"
+    >
+      <.icon name="hero-envelope" class="mt-0.5 size-5 shrink-0 text-warning" />
       <span>
-        Confirme seu e-mail para manter sua conta segura. Enviamos um link para {@current_scope.user.email}.
+        Confirme seu e-mail para manter sua conta segura. Enviamos um link para <strong class="font-medium">{@current_scope.user.email}</strong>.
       </span>
     </div>
     """
@@ -191,34 +201,40 @@ defmodule LiveQuizWeb.Layouts do
   """
   def theme_toggle(assigns) do
     ~H"""
-    <div class="card relative flex flex-row items-center border-2 border-base-300 bg-base-300 rounded-full">
-      <div class="absolute w-1/3 h-full rounded-full border-1 border-base-200 bg-base-100 brightness-200 left-0 [[data-theme=light]_&]:left-1/3 [[data-theme=dark]_&]:left-2/3 [[data-theme-source=system]_&]:!left-0 transition-[left]" />
+    <div class="relative flex w-fit flex-row items-center rounded-full border border-border bg-muted p-0.5">
+      <%!--
+        The thumb is positioned from the attributes the bootstrap script in
+        root.html.heex stamps on <html>, not from LiveView state: the choice has
+        to survive a full page load, and a reload would otherwise paint the thumb
+        under the wrong icon until the socket connects.
+      --%>
+      <div class="absolute h-[calc(100%-0.25rem)] w-1/3 rounded-full bg-background shadow-sm transition-[left] left-0 [[data-theme=light]_&]:left-1/3 [[data-theme=dark]_&]:left-[calc(2/3*100%)] [[data-theme-source=system]_&]:!left-0" />
 
       <button
-        class="flex p-2 cursor-pointer w-1/3"
+        class="relative z-10 flex w-1/3 cursor-pointer justify-center rounded-full p-1.5 text-muted-foreground transition-colors hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-hidden"
         phx-click={JS.dispatch("phx:set-theme")}
         data-phx-theme="system"
         aria-label="Usar o tema do sistema"
       >
-        <.icon name="hero-computer-desktop-micro" class="size-4 opacity-75 hover:opacity-100" />
+        <.icon name="hero-computer-desktop-micro" class="size-4" />
       </button>
 
       <button
-        class="flex p-2 cursor-pointer w-1/3"
+        class="relative z-10 flex w-1/3 cursor-pointer justify-center rounded-full p-1.5 text-muted-foreground transition-colors hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-hidden"
         phx-click={JS.dispatch("phx:set-theme")}
         data-phx-theme="light"
         aria-label="Usar o tema claro"
       >
-        <.icon name="hero-sun-micro" class="size-4 opacity-75 hover:opacity-100" />
+        <.icon name="hero-sun-micro" class="size-4" />
       </button>
 
       <button
-        class="flex p-2 cursor-pointer w-1/3"
+        class="relative z-10 flex w-1/3 cursor-pointer justify-center rounded-full p-1.5 text-muted-foreground transition-colors hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-hidden"
         phx-click={JS.dispatch("phx:set-theme")}
         data-phx-theme="dark"
         aria-label="Usar o tema escuro"
       >
-        <.icon name="hero-moon-micro" class="size-4 opacity-75 hover:opacity-100" />
+        <.icon name="hero-moon-micro" class="size-4" />
       </button>
     </div>
     """

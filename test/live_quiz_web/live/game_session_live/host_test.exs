@@ -352,10 +352,10 @@ defmodule LiveQuizWeb.GameSessionLive.HostTest do
 
       {:ok, lv, _html} = live(conn, ~p"/game-sessions/#{session.join_code}/host")
 
-      assert lv |> element("#reserved-count") |> render() =~ "Inscritos:"
+      assert lv |> element("#reserved-count") |> render() =~ "Inscritos"
       assert lv |> element("#reserved-count") |> render() =~ "5"
       assert lv |> element("#reserved-count") |> render() =~ "de 25"
-      assert lv |> element("#connected-count") |> render() =~ "Conectados agora:"
+      assert lv |> element("#connected-count") |> render() =~ "Conectados agora"
       assert lv |> element("#connected-count") |> render() =~ "3"
 
       for participant <- [first, second, third, fourth] do
@@ -694,7 +694,7 @@ defmodule LiveQuizWeb.GameSessionLive.HostTest do
       assert has_element?(lv, "#close-question[disabled]")
       refute has_element?(lv, "#advance-question[disabled]")
       refute has_element?(lv, "#finish-game[disabled]")
-      refute has_element?(lv, "#finish-game.btn-success")
+      refute has_element?(lv, ~s{#finish-game[data-last-call="true"]})
     end
 
     test "com a pergunta aberta só encerrar fica habilitado", %{
@@ -740,7 +740,7 @@ defmodule LiveQuizWeb.GameSessionLive.HostTest do
 
       assert has_element?(lv, "#advance-question[disabled]")
       assert has_element?(lv, "#close-question[disabled]")
-      assert has_element?(lv, "#finish-game.btn-success")
+      assert has_element?(lv, ~s{#finish-game[data-last-call="true"]})
     end
 
     test "encerrar pela tela para a contagem e libera o avanço", %{

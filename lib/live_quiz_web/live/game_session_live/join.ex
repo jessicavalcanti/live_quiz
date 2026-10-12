@@ -243,10 +243,14 @@ defmodule LiveQuizWeb.GameSessionLive.Join do
           </:subtitle>
         </.header>
 
-        <div :if={@session_preview} id="session-preview" class="rounded-xl border border-base-300 p-4">
-          <p class="text-xs font-semibold tracking-widest text-base-content/60 uppercase">Quiz</p>
+        <div
+          :if={@session_preview}
+          id="session-preview"
+          class="rounded-lg border border-border bg-card p-4"
+        >
+          <p class="text-xs font-medium tracking-widest text-muted-foreground uppercase">Quiz</p>
 
-          <p id="preview-quiz-title" class="mt-1 text-lg font-bold break-words">
+          <p id="preview-quiz-title" class="mt-1 text-lg font-semibold break-words">
             {@session_preview.quiz_title}
           </p>
 
@@ -254,7 +258,10 @@ defmodule LiveQuizWeb.GameSessionLive.Join do
             id="preview-availability"
             class={[
               "mt-2 text-sm",
-              if(@session_preview.available, do: "text-success", else: "text-warning")
+              if(@session_preview.available,
+                do: "text-success-strong",
+                else: "text-warning-strong"
+              )
             ]}
           >
             {availability_label(@session_preview)}
@@ -265,7 +272,7 @@ defmodule LiveQuizWeb.GameSessionLive.Join do
           :if={@error}
           id="join-error"
           role="alert"
-          class="rounded-lg border border-error bg-error/10 p-4 text-sm text-error"
+          class="rounded-lg border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive"
         >
           {error_message(@error)}
         </p>
@@ -293,6 +300,7 @@ defmodule LiveQuizWeb.GameSessionLive.Join do
             spellcheck="false"
             maxlength={@join_code_length}
             required
+            class="flex h-12 w-full rounded-md border border-input bg-background px-3 text-center font-mono text-2xl tracking-[0.3em] uppercase placeholder:tracking-[0.3em] placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-hidden"
           />
 
           <.input
@@ -306,16 +314,16 @@ defmodule LiveQuizWeb.GameSessionLive.Join do
             required
           />
 
-          <p id="nickname-hint" class="text-sm text-base-content/70">
+          <p id="nickname-hint" class="text-sm text-muted-foreground">
             Depois de entrar, o apelido não pode ser trocado.
           </p>
 
-          <.button id="join-submit" variant="primary" phx-disable-with="Entrando..." class="w-full">
+          <.button id="join-submit" phx-disable-with="Entrando..." class="w-full">
             Entrar na sala
           </.button>
         </.form>
 
-        <p class="text-center text-sm text-base-content/70">
+        <p class="text-center text-sm text-muted-foreground">
           Não é preciso ter conta para participar.
         </p>
       </div>

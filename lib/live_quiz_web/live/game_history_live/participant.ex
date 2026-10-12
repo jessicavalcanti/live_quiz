@@ -40,11 +40,11 @@ defmodule LiveQuizWeb.GameHistoryLive.Participant do
           />
 
           <div>
-            <p class="text-sm font-semibold tracking-wider text-primary uppercase">
+            <p class="text-sm font-medium tracking-wider text-muted-foreground uppercase">
               Desempenho individual
             </p>
-            <h1 class="mt-2 text-3xl font-bold">{@result.nickname}</h1>
-            <p class="mt-2 text-base-content/70">{@result.quiz_title}</p>
+            <h1 class="mt-2 text-3xl font-semibold tracking-tight">{@result.nickname}</h1>
+            <p class="mt-2 text-muted-foreground">{@result.quiz_title}</p>
           </div>
         </:header>
       </.result_detail>

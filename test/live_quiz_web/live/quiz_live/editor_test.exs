@@ -950,7 +950,7 @@ defmodule LiveQuizWeb.QuizLive.EditorTest do
   defp displayed_positions(lv, questions) do
     Enum.map(questions, fn question ->
       lv
-      |> element("#question-#{question.id} span.badge")
+      |> element("#question-#{question.id} [data-question-position]")
       |> render()
       |> LazyHTML.from_fragment()
       |> LazyHTML.text()

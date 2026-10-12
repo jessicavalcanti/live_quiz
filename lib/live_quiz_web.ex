@@ -99,7 +99,11 @@ defmodule LiveQuizWeb do
 
       # HTML escaping functionality
       import Phoenix.HTML
-      # Core UI components
+      # The design system: shadcn/ui components, in lib/live_quiz_web/ui
+      use LiveQuizWeb.UI
+      # Core UI components. Imported after the design system so that the
+      # components Phoenix and our guidelines name — input, table, icon, modal,
+      # flash — are the ones a template resolves to.
       import LiveQuizWeb.CoreComponents
 
       # Common modules used in templates

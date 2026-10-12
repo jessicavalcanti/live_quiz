@@ -831,7 +831,7 @@ defmodule LiveQuizWeb.Api.V1.GamePlayControllerTest do
       assert answer(token, session, option.id) |> json_response(201)
 
       # A tela do host vê a resposta que entrou pela API.
-      assert lv |> element("#answers-count") |> render() =~ "<strong>1</strong>"
+      assert lv |> element("#answers-count") |> render() =~ ">1</strong>"
 
       # Metade web outra vez: o host encerra pela tela.
       render_click(lv, "close_question", %{})
