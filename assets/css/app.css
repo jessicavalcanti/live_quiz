@@ -13,82 +13,242 @@
    The heroicons installation itself is managed by your mix.exs */
 @plugin "../vendor/heroicons";
 
-/* daisyUI Tailwind Plugin. */
-@plugin "daisyui/packages/bundle/daisyui" {
-  themes: false;
+/* Keyframes and utilities the SaladUI components animate with (accordion,
+   dialog, popover, toast). Replaces tailwindcss-animate, which is v3-only. */
+@import "../vendor/tw-animate.css";
+
+/* Rules the SaladUI components need that no utility expresses: the scroll area
+   scrollbar and the indeterminate progress sweep. */
+@import "./salad_ui.css";
+
+/* ---------------------------------------------------------------------------
+   Design tokens
+
+   The palette is the shadcn/ui contract — `background`/`foreground` pairs,
+   named by role instead of by colour — so every component in
+   `lib/live_quiz_web/ui/` reads the same source of truth and a theme change
+   happens here and nowhere else. The neutral is zinc.
+
+   `destructive`, `success`, `warning` and `info` are the four states this app
+   actually renders: a refused answer, a correct one, a quiz that cannot start
+   yet, and a room notice. shadcn ships only `destructive`; the other three are
+   ours and follow the same `--x` / `--x-foreground` shape so they compose with
+   the same utilities, plus an `--x-strong` for the one case the pair cannot
+   cover — a label sitting on a tint of its own hue, as a badge does.
+
+   Lightness is what carries contrast here, and each dark value is picked so
+   text on it clears WCAG AA — which is why dark mode is not the light palette
+   inverted.
+   --------------------------------------------------------------------------- */
+@layer base {
+  :root {
+    --background: oklch(1 0 0);
+    --foreground: oklch(0.141 0.005 285.823);
+
+    --card: oklch(1 0 0);
+    --card-foreground: oklch(0.141 0.005 285.823);
+
+    --popover: oklch(1 0 0);
+    --popover-foreground: oklch(0.141 0.005 285.823);
+
+    --primary: oklch(0.21 0.006 285.885);
+    --primary-foreground: oklch(0.985 0 0);
+
+    --secondary: oklch(0.967 0.001 286.375);
+    --secondary-foreground: oklch(0.21 0.006 285.885);
+
+    --muted: oklch(0.967 0.001 286.375);
+    --muted-foreground: oklch(0.552 0.016 285.938);
+
+    --accent: oklch(0.967 0.001 286.375);
+    --accent-foreground: oklch(0.21 0.006 285.885);
+
+    --destructive: oklch(0.577 0.245 27.325);
+    --destructive-foreground: oklch(0.985 0 0);
+
+    --success: oklch(0.596 0.145 163.225);
+    --success-foreground: oklch(0.985 0 0);
+
+    --warning: oklch(0.666 0.179 58.318);
+    --warning-foreground: oklch(0.141 0.005 285.823);
+
+    --info: oklch(0.588 0.158 241.966);
+    --info-foreground: oklch(0.985 0 0);
+
+    /* The same three hues, dark enough to carry small bold text on their own
+       15% tint — which is what a badge does. The plain token is the fill; the
+       `-strong` one is the label on it. */
+    --success-strong: oklch(0.44 0.12 163.225);
+    --warning-strong: oklch(0.44 0.12 58.318);
+    --info-strong: oklch(0.44 0.14 241.966);
+
+    --border: oklch(0.92 0.004 286.32);
+    --input: oklch(0.92 0.004 286.32);
+    --ring: oklch(0.705 0.015 286.067);
+
+    --radius: 0.625rem;
+
+    --chart-1: oklch(0.21 0.006 285.885);
+    --chart-2: oklch(0.442 0.017 285.786);
+    --chart-3: oklch(0.552 0.016 285.938);
+    --chart-4: oklch(0.705 0.015 286.067);
+    --chart-5: oklch(0.871 0.006 286.286);
+
+    --sidebar-background: oklch(0.985 0 0);
+    --sidebar-foreground: oklch(0.141 0.005 285.823);
+    --sidebar-primary: oklch(0.21 0.006 285.885);
+    --sidebar-primary-foreground: oklch(0.985 0 0);
+    --sidebar-accent: oklch(0.967 0.001 286.375);
+    --sidebar-accent-foreground: oklch(0.21 0.006 285.885);
+    --sidebar-border: oklch(0.92 0.004 286.32);
+    --sidebar-ring: oklch(0.705 0.015 286.067);
+  }
+
+  /* The theme is chosen by the bootstrap script in `root.html.heex`, which
+     stamps `data-theme` on `<html>` before the first paint. Keying the dark
+     palette off the same attribute keeps one switch for the whole page. */
+  [data-theme="dark"] {
+    --background: oklch(0.141 0.005 285.823);
+    --foreground: oklch(0.985 0 0);
+
+    --card: oklch(0.21 0.006 285.885);
+    --card-foreground: oklch(0.985 0 0);
+
+    --popover: oklch(0.21 0.006 285.885);
+    --popover-foreground: oklch(0.985 0 0);
+
+    --primary: oklch(0.92 0.004 286.32);
+    --primary-foreground: oklch(0.21 0.006 285.885);
+
+    --secondary: oklch(0.274 0.006 286.033);
+    --secondary-foreground: oklch(0.985 0 0);
+
+    --muted: oklch(0.274 0.006 286.033);
+    --muted-foreground: oklch(0.705 0.015 286.067);
+
+    --accent: oklch(0.274 0.006 286.033);
+    --accent-foreground: oklch(0.985 0 0);
+
+    --destructive: oklch(0.704 0.191 22.216);
+    --destructive-foreground: oklch(0.141 0.005 285.823);
+
+    --success: oklch(0.723 0.149 163.225);
+    --success-foreground: oklch(0.141 0.005 285.823);
+
+    --warning: oklch(0.769 0.167 70.08);
+    --warning-foreground: oklch(0.141 0.005 285.823);
+
+    --info: oklch(0.707 0.142 241.966);
+    --info-foreground: oklch(0.141 0.005 285.823);
+
+    /* Inverted on purpose: against a dark ground the legible tone is the light
+       one, so `-strong` here is brighter than the fill rather than darker. */
+    --success-strong: oklch(0.84 0.13 163.225);
+    --warning-strong: oklch(0.87 0.14 85.0);
+    --info-strong: oklch(0.84 0.1 241.966);
+
+    --border: oklch(1 0 0 / 12%);
+    --input: oklch(1 0 0 / 16%);
+    --ring: oklch(0.552 0.016 285.938);
+
+    --chart-1: oklch(0.92 0.004 286.32);
+    --chart-2: oklch(0.871 0.006 286.286);
+    --chart-3: oklch(0.705 0.015 286.067);
+    --chart-4: oklch(0.552 0.016 285.938);
+    --chart-5: oklch(0.442 0.017 285.786);
+
+    --sidebar-background: oklch(0.21 0.006 285.885);
+    --sidebar-foreground: oklch(0.985 0 0);
+    --sidebar-primary: oklch(0.92 0.004 286.32);
+    --sidebar-primary-foreground: oklch(0.21 0.006 285.885);
+    --sidebar-accent: oklch(0.274 0.006 286.033);
+    --sidebar-accent-foreground: oklch(0.985 0 0);
+    --sidebar-border: oklch(1 0 0 / 12%);
+    --sidebar-ring: oklch(0.552 0.016 285.938);
+  }
+
+  /* shadcn's default border colour, so `border` alone draws the themed line
+     instead of Tailwind's `currentColor`. The token already holds a colour —
+     wrapping it in `hsl()` would discard it. */
+  *,
+  ::after,
+  ::before,
+  ::backdrop,
+  ::file-selector-button {
+    border-color: var(--color-border);
+  }
+
+  body {
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+    -webkit-font-smoothing: antialiased;
+  }
 }
 
-/* daisyUI theme plugin.
-  We ship with two themes, a light one inspired on Phoenix colors and a dark one inspired
-  on Elixir colors. Build your own at: https://daisyui.com/theme-generator/ */
-@plugin "daisyui/packages/bundle/daisyui-theme" {
-  name: "dark";
-  default: false;
-  prefersdark: true;
-  color-scheme: "dark";
-  --color-base-100: oklch(30.33% 0.016 252.42);
-  --color-base-200: oklch(25.26% 0.014 253.1);
-  --color-base-300: oklch(20.15% 0.012 254.09);
-  --color-base-content: oklch(97.807% 0.029 256.847);
-  --color-primary: oklch(58% 0.233 277.117);
-  --color-primary-content: oklch(96% 0.018 272.314);
-  --color-secondary: oklch(58% 0.233 277.117);
-  --color-secondary-content: oklch(96% 0.018 272.314);
-  --color-accent: oklch(60% 0.25 292.717);
-  --color-accent-content: oklch(96% 0.016 293.756);
-  --color-neutral: oklch(37% 0.044 257.287);
-  --color-neutral-content: oklch(98% 0.003 247.858);
-  --color-info: oklch(58% 0.158 241.966);
-  --color-info-content: oklch(97% 0.013 236.62);
-  --color-success: oklch(60% 0.118 184.704);
-  --color-success-content: oklch(98% 0.014 180.72);
-  --color-warning: oklch(66% 0.179 58.318);
-  --color-warning-content: oklch(98% 0.022 95.277);
-  --color-error: oklch(58% 0.253 17.585);
-  --color-error-content: oklch(96% 0.015 12.422);
-  --radius-selector: 0.25rem;
-  --radius-field: 0.25rem;
-  --radius-box: 0.5rem;
-  --size-selector: 0.21875rem;
-  --size-field: 0.21875rem;
-  --border: 1.5px;
-  --depth: 1;
-  --noise: 0;
-}
+/* Exposes every token above as a Tailwind utility: `bg-background`,
+   `text-muted-foreground`, `ring-ring`, `rounded-lg`. `inline` keeps the
+   generated utilities pointing at the custom properties, so the palette still
+   swaps at runtime when `data-theme` changes. */
+@theme inline {
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
 
-@plugin "daisyui/packages/bundle/daisyui-theme" {
-  name: "light";
-  default: true;
-  prefersdark: false;
-  color-scheme: "light";
-  --color-base-100: oklch(98% 0 0);
-  --color-base-200: oklch(96% 0.001 286.375);
-  --color-base-300: oklch(92% 0.004 286.32);
-  --color-base-content: oklch(21% 0.006 285.885);
-  --color-primary: oklch(70% 0.213 47.604);
-  --color-primary-content: oklch(98% 0.016 73.684);
-  --color-secondary: oklch(55% 0.027 264.364);
-  --color-secondary-content: oklch(98% 0.002 247.839);
-  --color-accent: oklch(0% 0 0);
-  --color-accent-content: oklch(100% 0 0);
-  --color-neutral: oklch(44% 0.017 285.786);
-  --color-neutral-content: oklch(98% 0 0);
-  --color-info: oklch(62% 0.214 259.815);
-  --color-info-content: oklch(97% 0.014 254.604);
-  --color-success: oklch(70% 0.14 182.503);
-  --color-success-content: oklch(98% 0.014 180.72);
-  --color-warning: oklch(66% 0.179 58.318);
-  --color-warning-content: oklch(98% 0.022 95.277);
-  --color-error: oklch(58% 0.253 17.585);
-  --color-error-content: oklch(96% 0.015 12.422);
-  --radius-selector: 0.25rem;
-  --radius-field: 0.25rem;
-  --radius-box: 0.5rem;
-  --size-selector: 0.21875rem;
-  --size-field: 0.21875rem;
-  --border: 1.5px;
-  --depth: 1;
-  --noise: 0;
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-success-strong: var(--success-strong);
+
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-warning-strong: var(--warning-strong);
+
+  --color-info: var(--info);
+  --color-info-foreground: var(--info-foreground);
+  --color-info-strong: var(--info-strong);
+
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+
+  --color-sidebar: var(--sidebar-background);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
 }
 
 /* Add variants based on LiveView classes */

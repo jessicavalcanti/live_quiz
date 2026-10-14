@@ -8,6 +8,7 @@ defmodule LiveQuiz.Application do
   @impl true
   def start(_type, _args) do
     children = [
+      TwMerge.Cache,
       LiveQuizWeb.Telemetry,
       LiveQuiz.Repo,
       {DNSCluster, query: Application.get_env(:live_quiz, :dns_cluster_query) || :ignore},

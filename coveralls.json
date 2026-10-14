@@ -11,6 +11,9 @@
     "lib/live_quiz_web.ex",
     "lib/live_quiz_web/telemetry.ex",
     "lib/live_quiz_web/components/core_components.ex",
-    "lib/live_quiz_web/components/layouts.ex"
-  ]
+    "lib/live_quiz_web/components/layouts.ex",
+    "lib/live_quiz_web/ui.ex",
+    "lib/live_quiz_web/ui/"
+  ],
+  "//ui": "lib/live_quiz_web/ui é o design system gerado pelo `mix salad.install` a partir do SaladUI. É andaime como o do phx.new: o que precisa de teste é a tela que usa o componente, e é lá que ele é exercitado."
 }

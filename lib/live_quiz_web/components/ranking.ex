@@ -18,29 +18,40 @@ defmodule LiveQuizWeb.Ranking do
   def ranking(assigns) do
     ~H"""
     <section id="ranking" aria-live="polite" aria-atomic="false" class="space-y-4">
-      <h2 id="ranking-title" class="text-2xl font-bold">{@title}</h2>
+      <h2 id="ranking-title" class="text-xl font-semibold tracking-tight">{@title}</h2>
 
       <ol id="ranking-list" class="space-y-3" aria-labelledby="ranking-title">
         <li
           :for={entry <- @ranking}
           id={"ranking-participant-#{entry.participant_id}"}
           class={[
-            "flex items-center gap-3 rounded-xl border p-4 transition",
+            "flex items-center gap-3 rounded-lg border p-4 transition-colors",
             if(entry.participant_id == @current_participant_id,
               do: "border-primary bg-primary/10 ring-1 ring-primary",
-              else: "border-base-300"
+              else: "border-border bg-card"
             )
           ]}
         >
+          <%!--
+            The top three are the only positions anyone reads at a glance from
+            across a room, so they get the solid chip; the rest stay muted so
+            the podium is what the eye lands on.
+          --%>
           <span
             id={"ranking-position-#{entry.participant_id}"}
-            class="flex size-9 shrink-0 items-center justify-center rounded-lg bg-base-200 font-black tabular-nums"
+            class={[
+              "flex size-9 shrink-0 items-center justify-center rounded-md font-semibold tabular-nums",
+              if(entry.position <= 3,
+                do: "bg-primary text-primary-foreground",
+                else: "bg-muted text-muted-foreground"
+              )
+            ]}
             aria-label={"posição #{entry.position}"}
           >
             {entry.position}
           </span>
 
-          <span class="min-w-0 flex-1 break-words font-semibold">
+          <span class="min-w-0 flex-1 font-medium break-words">
             {entry.nickname}
             <span
               :if={entry.participant_id == @current_participant_id}
@@ -55,7 +66,7 @@ defmodule LiveQuizWeb.Ranking do
             <strong id={"ranking-score-#{entry.participant_id}"} class="block tabular-nums">
               {Formatters.format_score(entry.score)}
             </strong>
-            <span class="text-xs text-base-content/70">
+            <span class="text-xs text-muted-foreground">
               {Formatters.format_correct_answers(entry.correct_answers)}
             </span>
           </span>

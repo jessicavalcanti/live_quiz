@@ -8,19 +8,28 @@ defmodule LiveQuizWeb.UserLive.Confirmation do
     ~H"""
     <Layouts.app flash={@flash} current_scope={@current_scope}>
       <div class="mx-auto max-w-sm">
-        <div class="text-center">
-          <.header>
-            Confirmar conta
-            <:subtitle>Confirme seu e-mail para concluir o cadastro.</:subtitle>
-          </.header>
-        </div>
+        <.back_button id="back-to-home" navigate={~p"/"} label="Voltar ao início" class="mb-4" />
 
-        <.form for={@form} id="confirmation_form" phx-submit="confirm" phx-mounted={JS.focus_first()}>
-          <input type="hidden" name={@form[:token].name} value={@form[:token].value} />
-          <.button phx-disable-with="Confirmando..." class="btn btn-primary w-full">
-            Confirmar minha conta
-          </.button>
-        </.form>
+        <.card>
+          <.card_header class="text-center">
+            <.card_title>Confirmar conta</.card_title>
+            <.card_description>Confirme seu e-mail para concluir o cadastro.</.card_description>
+          </.card_header>
+
+          <.card_content>
+            <.form
+              for={@form}
+              id="confirmation_form"
+              phx-submit="confirm"
+              phx-mounted={JS.focus_first()}
+            >
+              <input type="hidden" name={@form[:token].name} value={@form[:token].value} />
+              <.button phx-disable-with="Confirmando..." class="w-full">
+                Confirmar minha conta
+              </.button>
+            </.form>
+          </.card_content>
+        </.card>
       </div>
     </Layouts.app>
     """

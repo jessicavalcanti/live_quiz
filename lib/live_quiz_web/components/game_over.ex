@@ -43,15 +43,17 @@ defmodule LiveQuizWeb.GameOver do
   def game_over(assigns) do
     ~H"""
     <section id="room-closed" role="status" class="py-16 text-center">
-      <.dynamic_tag tag_name={heading_tag(@viewer)} class="text-3xl font-bold">
+      <.dynamic_tag tag_name={heading_tag(@viewer)} class="text-3xl font-semibold tracking-tight">
         {title(@reason, @viewer)}
       </.dynamic_tag>
 
-      <p id="room-closed-quiz" class="mt-2 text-base-content/70">{@session.quiz_title}</p>
+      <p id="room-closed-quiz" class="mt-2 text-muted-foreground">{@session.quiz_title}</p>
 
-      <p class="mt-3 text-base-content/70">{message(@reason, @viewer)}</p>
+      <p class="mx-auto mt-3 max-w-prose text-pretty text-muted-foreground">
+        {message(@reason, @viewer)}
+      </p>
 
-      <p :if={played?(@summary)} id="questions-played" class="mt-3 text-lg">
+      <p :if={played?(@summary)} id="questions-played" class="mt-3">
         {Formatters.format_questions_played(@summary.questions_played, @summary.question_count)}
       </p>
 
@@ -66,37 +68,43 @@ defmodule LiveQuizWeb.GameOver do
       <div
         :if={@reason == :finished && @result}
         id="own-result-summary"
-        class="mt-6 space-y-3 rounded-2xl border border-primary bg-primary/5 p-5 text-left"
+        class="mt-6 space-y-3 rounded-xl border border-primary/40 bg-primary/5 p-5 text-left"
       >
-        <h2 class="text-xl font-bold">Seu resultado</h2>
+        <h2 class="text-lg font-semibold tracking-tight">Seu resultado</h2>
         <p id="own-final-position">
           Você terminou em <strong>{@result.final_position}º lugar</strong>
         </p>
-        <p id="own-final-score"><strong>{Formatters.format_score(@result.score)}</strong></p>
+        <p id="own-final-score">
+          <strong class="text-xl font-semibold tabular-nums">
+            {Formatters.format_score(@result.score)}
+          </strong>
+        </p>
         <dl class="grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
           <div>
-            <dt class="text-base-content/70">Acertos</dt><dd class="font-bold">
+            <dt class="text-muted-foreground">Acertos</dt><dd class="font-semibold tabular-nums">
               {@result.correct_answers}
             </dd>
           </div>
           <div>
-            <dt class="text-base-content/70">Erros</dt><dd class="font-bold">
+            <dt class="text-muted-foreground">Erros</dt><dd class="font-semibold tabular-nums">
               {@result.incorrect_answers}
             </dd>
           </div>
           <div>
-            <dt class="text-base-content/70">Sem resposta</dt><dd class="font-bold">
+            <dt class="text-muted-foreground">Sem resposta</dt>
+            <dd class="font-semibold tabular-nums">
               {@result.unanswered_questions}
             </dd>
             <dd
               :if={@result.played_questions < @result.total_questions}
-              class="text-xs text-base-content/60"
+              class="text-xs text-muted-foreground"
             >
               de {@result.played_questions} aplicadas
             </dd>
           </div>
           <div>
-            <dt class="text-base-content/70">Tempo médio</dt><dd class="font-bold">
+            <dt class="text-muted-foreground">Tempo médio</dt>
+            <dd class="font-semibold tabular-nums">
               {Formatters.format_response_time(@result.average_response_time_ms)}
             </dd>
           </div>
@@ -107,13 +115,12 @@ defmodule LiveQuizWeb.GameOver do
         <.button
           :if={@viewer == :host}
           id="back-to-quizzes"
-          variant="primary"
           navigate={~p"/quizzes"}
         >
           Voltar para Meus quizzes
         </.button>
 
-        <.button :if={@viewer == :player} id="back-to-join" variant="primary" navigate={~p"/join"}>
+        <.button :if={@viewer == :player} id="back-to-join" navigate={~p"/join"}>
           Entrar em outra sala
         </.button>
       </div>

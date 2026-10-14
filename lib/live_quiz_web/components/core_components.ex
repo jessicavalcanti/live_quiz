@@ -8,12 +8,22 @@ defmodule LiveQuizWeb.CoreComponents do
   with doc strings and declarative assigns. You may customize and style
   them in any way you want, based on your application growth and needs.
 
-  The foundation for styling is Tailwind CSS, a utility-first CSS framework,
-  augmented with daisyUI, a Tailwind CSS plugin that provides UI components
-  and themes. Here are useful references:
+  The foundation for styling is Tailwind CSS and the design tokens declared in
+  `assets/css/app.css`. These components deliberately keep the contract Phoenix
+  generated — a `Phoenix.HTML.FormField` for `input/1`, a `LiveStream` for
+  `table/1`, `hero-*` names for `icon/1` — and wear the same clothes as the
+  shadcn/ui components in `LiveQuizWeb.UI`. Appearance is therefore a palette
+  question: every colour here is a token (`bg-background`, `text-destructive`,
+  `border-input`), never a literal, which is what makes light and dark one
+  stylesheet.
 
-    * [daisyUI](https://daisyui.com/docs/intro/) - a good place to get
-      started and see the available components.
+  Reach for `LiveQuizWeb.UI` when a screen needs a card, a badge, a dialog, a
+  tooltip or a dropdown. What lives here is what Phoenix points at and what the
+  forms of this application are built from.
+
+  Useful references:
+
+    * `LiveQuizWeb.UI` - the design system, and the tokens it renders with.
 
     * [Tailwind CSS](https://tailwindcss.com) - the foundational framework
       we build on. You will use it for layout, sizing, flexbox, grid, and
@@ -28,6 +38,8 @@ defmodule LiveQuizWeb.CoreComponents do
   """
   use Phoenix.Component
   use Gettext, backend: LiveQuizWeb.Gettext
+
+  import LiveQuizWeb.UI.Button
 
   alias Phoenix.LiveView.JS
 
@@ -50,6 +62,8 @@ defmodule LiveQuizWeb.CoreComponents do
   attr :flash, :map, default: %{}, doc: "the map of flash messages to display"
   attr :title, :string, default: nil
   attr :kind, :atom, values: [:info, :error], doc: "used for styling and flash lookup"
+  attr :auto_hide, :boolean, default: true, doc: "whether to dismiss the flash automatically"
+  attr :auto_hide_ms, :integer, default: 7_000, doc: "milliseconds before dismissing the flash"
   attr :rest, :global, doc: "the arbitrary HTML attributes to add to the flash container"
 
   slot :inner_block, doc: "the optional inner block that renders the flash message"
@@ -62,65 +76,133 @@ defmodule LiveQuizWeb.CoreComponents do
       :if={msg = render_slot(@inner_block) || Phoenix.Flash.get(@flash, @kind)}
       id={@id}
       phx-click={JS.push("lv:clear-flash", value: %{key: @kind}) |> hide("##{@id}")}
+      phx-hook=".FlashTimer"
+      data-auto-hide-ms={@auto_hide && @auto_hide_ms}
       role="alert"
-      class="toast toast-top toast-end z-50"
+      class="fixed top-2 right-2 z-50 w-[calc(100vw-1rem)] sm:top-4 sm:right-4 sm:w-96"
       {@rest}
     >
       <div class={[
-        "alert w-80 sm:w-96 max-w-80 sm:max-w-96 text-wrap",
-        @kind == :info && "alert-info",
-        @kind == :error && "alert-error"
+        "relative flex items-start gap-3 overflow-hidden rounded-lg border p-4 pr-2 text-sm shadow-lg",
+        "text-wrap backdrop-blur-sm",
+        @kind == :info && "border-border bg-popover text-popover-foreground",
+        @kind == :error && "border-destructive/40 bg-destructive text-destructive-foreground"
       ]}>
-        <.icon :if={@kind == :info} name="hero-information-circle" class="size-5 shrink-0" />
-        <.icon :if={@kind == :error} name="hero-exclamation-circle" class="size-5 shrink-0" />
-        <div>
+        <span
+          :if={@auto_hide}
+          data-flash-progress
+          aria-hidden="true"
+          class={[
+            "absolute inset-x-0 top-0 h-0.5 origin-left",
+            @kind == :info && "bg-foreground/30",
+            @kind == :error && "bg-destructive-foreground/40"
+          ]}
+        />
+        <.icon
+          :if={@kind == :info}
+          name="hero-information-circle"
+          class="mt-0.5 size-5 shrink-0 text-muted-foreground"
+        />
+        <.icon
+          :if={@kind == :error}
+          name="hero-exclamation-circle"
+          class="mt-0.5 size-5 shrink-0"
+        />
+        <div class="min-w-0 flex-1">
           <p :if={@title} class="font-semibold">{@title}</p>
-          <p>{msg}</p>
+          <p class="break-words">{msg}</p>
         </div>
-        <div class="flex-1" />
-        <button type="button" class="group self-start cursor-pointer" aria-label={gettext("close")}>
-          <.icon name="hero-x-mark" class="size-5 opacity-40 group-hover:opacity-70" />
+        <button
+          type="button"
+          class="group -mt-1 -mr-1 rounded-md p-1.5 transition-colors hover:bg-foreground/10"
+          aria-label={gettext("close")}
+        >
+          <.icon name="hero-x-mark" class="size-4 opacity-50 group-hover:opacity-100" />
         </button>
       </div>
     </div>
+
+    <script :type={Phoenix.LiveView.ColocatedHook} name=".FlashTimer">
+      export default {
+        mounted() {
+          this.hovered = false
+          this.focused = false
+
+          this.el.addEventListener("mouseenter", () => {
+            this.hovered = true
+            this.updatePlayback()
+          })
+          this.el.addEventListener("mouseleave", () => {
+            this.hovered = false
+            this.updatePlayback()
+          })
+          this.el.addEventListener("focusin", () => {
+            this.focused = true
+            this.updatePlayback()
+          })
+          this.el.addEventListener("focusout", event => {
+            if (!this.el.contains(event.relatedTarget)) {
+              this.focused = false
+              this.updatePlayback()
+            }
+          })
+
+          this.start()
+        },
+        updated() { this.start() },
+        destroyed() { this.stop() },
+        start() {
+          this.stop()
+
+          const progress = this.el.querySelector("[data-flash-progress]")
+          const duration = Number(this.el.dataset.autoHideMs)
+
+          if (!progress || !Number.isFinite(duration) || duration <= 0) { return }
+
+          this.animation = progress.animate(
+            [{transform: "scaleX(1)"}, {transform: "scaleX(0)"}],
+            {duration, easing: "linear", fill: "forwards"}
+          )
+          this.animation.onfinish = () => this.el.click()
+          this.updatePlayback()
+        },
+        stop() {
+          if (this.animation) {
+            this.animation.onfinish = null
+            this.animation.cancel()
+            this.animation = null
+          }
+        },
+        updatePlayback() {
+          if (!this.animation) { return }
+          this.hovered || this.focused ? this.animation.pause() : this.animation.play()
+        }
+      }
+    </script>
     """
   end
 
   @doc """
-  Renders a button with navigation support.
-
-  ## Examples
-
-      <.button>Send!</.button>
-      <.button phx-click="go" variant="primary">Send!</.button>
-      <.button navigate={~p"/"}>Home</.button>
+  Renders a consistent button for returning to the previous screen in a flow.
   """
-  attr :rest, :global, include: ~w(href navigate patch method download name value disabled)
-  attr :class, :any
-  attr :variant, :string, values: ~w(primary)
-  slot :inner_block, required: true
+  attr :id, :string, required: true
+  attr :navigate, :string, required: true
+  attr :label, :string, default: "Voltar"
+  attr :class, :any, default: nil
 
-  def button(%{rest: rest} = assigns) do
-    variants = %{"primary" => "btn-primary", nil => "btn-primary btn-soft"}
-
-    assigns =
-      assign_new(assigns, :class, fn ->
-        ["btn", Map.fetch!(variants, assigns[:variant])]
-      end)
-
-    if rest[:href] || rest[:navigate] || rest[:patch] do
-      ~H"""
-      <.link class={@class} {@rest}>
-        {render_slot(@inner_block)}
-      </.link>
-      """
-    else
-      ~H"""
-      <button class={@class} {@rest}>
-        {render_slot(@inner_block)}
-      </button>
-      """
-    end
+  def back_button(assigns) do
+    ~H"""
+    <.button
+      id={@id}
+      navigate={@navigate}
+      variant="ghost"
+      size="sm"
+      class={["-ml-3 gap-2 text-muted-foreground hover:text-foreground", @class]}
+    >
+      <.icon name="hero-arrow-left" class="size-4" />
+      <span>{@label}</span>
+    </.button>
+    """
   end
 
   @doc """
@@ -189,6 +271,7 @@ defmodule LiveQuizWeb.CoreComponents do
   attr :multiple, :boolean, default: false, doc: "the multiple flag for select inputs"
   attr :class, :any, default: nil, doc: "the input class to use over defaults"
   attr :error_class, :any, default: nil, doc: "the input error class to use over defaults"
+  attr :reveal_password, :boolean, default: false, doc: "adds a password visibility toggle"
 
   attr :rest, :global,
     include: ~w(accept autocomplete capture cols disabled form list max maxlength min minlength
@@ -218,8 +301,8 @@ defmodule LiveQuizWeb.CoreComponents do
       end)
 
     ~H"""
-    <div class="fieldset mb-2">
-      <label for={@id}>
+    <div class="mb-4">
+      <label for={@id} class="flex items-center gap-2.5 text-sm leading-none font-medium">
         <input
           type="hidden"
           name={@name}
@@ -227,17 +310,15 @@ defmodule LiveQuizWeb.CoreComponents do
           disabled={@rest[:disabled]}
           form={@rest[:form]}
         />
-        <span class="label">
-          <input
-            type="checkbox"
-            id={@id}
-            name={@name}
-            value="true"
-            checked={@checked}
-            class={@class || "checkbox checkbox-sm"}
-            {@rest}
-          />{@label}
-        </span>
+        <input
+          type="checkbox"
+          id={@id}
+          name={@name}
+          value="true"
+          checked={@checked}
+          class={@class || checkbox_class()}
+          {@rest}
+        />{@label}
       </label>
       <.error :for={msg <- @errors}>{msg}</.error>
     </div>
@@ -246,13 +327,16 @@ defmodule LiveQuizWeb.CoreComponents do
 
   def input(%{type: "select"} = assigns) do
     ~H"""
-    <div class="fieldset mb-2">
-      <label for={@id}>
-        <span :if={@label} class="label mb-1">{@label}</span>
+    <div class="mb-4">
+      <label for={@id} class="block">
+        <span :if={@label} class={label_class()}>{@label}</span>
         <select
           id={@id}
           name={@name}
-          class={[@class || "w-full select", @errors != [] && (@error_class || "select-error")]}
+          class={[
+            @class || [field_class(), "pr-8"],
+            @errors != [] && (@error_class || error_field_class())
+          ]}
           multiple={@multiple}
           {@rest}
         >
@@ -267,15 +351,15 @@ defmodule LiveQuizWeb.CoreComponents do
 
   def input(%{type: "textarea"} = assigns) do
     ~H"""
-    <div class="fieldset mb-2">
-      <label for={@id}>
-        <span :if={@label} class="label mb-1">{@label}</span>
+    <div class="mb-4">
+      <label for={@id} class="block">
+        <span :if={@label} class={label_class()}>{@label}</span>
         <textarea
           id={@id}
           name={@name}
           class={[
-            @class || "w-full textarea",
-            @errors != [] && (@error_class || "textarea-error")
+            @class || [field_class(), "min-h-20 py-2"],
+            @errors != [] && (@error_class || error_field_class())
           ]}
           {@rest}
         >{Phoenix.HTML.Form.normalize_value("textarea", @value)}</textarea>
@@ -287,14 +371,14 @@ defmodule LiveQuizWeb.CoreComponents do
 
   def input(%{type: "radio-group"} = assigns) do
     ~H"""
-    <fieldset class="fieldset mb-2">
-      <legend :if={@label} class="label mb-1">{@label}</legend>
+    <fieldset class="mb-4">
+      <legend :if={@label} class={label_class()}>{@label}</legend>
       <input type="hidden" name={@name} value="" disabled={@rest[:disabled]} form={@rest[:form]} />
       <div class="flex flex-wrap gap-4">
         <label
           :for={{option_label, option_value} <- @options}
           for={option_id(@id, option_value)}
-          class="flex cursor-pointer items-center gap-2"
+          class="flex cursor-pointer items-center gap-2 text-sm font-medium"
         >
           <input
             type="radio"
@@ -302,7 +386,7 @@ defmodule LiveQuizWeb.CoreComponents do
             name={@name}
             value={to_string(option_value)}
             checked={checked_option?(@value, option_value)}
-            class={@class || "radio radio-sm"}
+            class={@class || radio_class()}
             {@rest}
           />
           <span>{option_label}</span>
@@ -313,20 +397,83 @@ defmodule LiveQuizWeb.CoreComponents do
     """
   end
 
+  def input(%{type: "password", reveal_password: true} = assigns) do
+    ~H"""
+    <div class="mb-4">
+      <label for={@id} class="block">
+        <span :if={@label} class={label_class()}>{@label}</span>
+      </label>
+      <div id={"#{@id}-visibility"} class="relative" phx-hook=".PasswordVisibility">
+        <input
+          type="password"
+          name={@name}
+          id={@id}
+          value={Phoenix.HTML.Form.normalize_value(@type, @value)}
+          class={[
+            @class || [field_class(), "pr-11"],
+            @errors != [] && (@error_class || error_field_class())
+          ]}
+          {@rest}
+        />
+        <button
+          type="button"
+          data-password-toggle
+          aria-controls={@id}
+          aria-label="Mostrar senha"
+          aria-pressed="false"
+          class="absolute top-1/2 right-1 -translate-y-1/2 rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-hidden"
+        >
+          <span data-password-show><.icon name="hero-eye" class="size-5" /></span>
+          <span data-password-hide class="hidden">
+            <.icon name="hero-eye-slash" class="size-5" />
+          </span>
+        </button>
+      </div>
+      <.error :for={msg <- @errors}>{msg}</.error>
+    </div>
+
+    <script :type={Phoenix.LiveView.ColocatedHook} name=".PasswordVisibility">
+      export default {
+        mounted() {
+          this.visible = false
+          this.el.addEventListener("click", event => {
+            if (event.target.closest("[data-password-toggle]")) {
+              this.visible = !this.visible
+              this.sync()
+            }
+          })
+          this.sync()
+        },
+        updated() { this.sync() },
+        sync() {
+          const input = this.el.querySelector("input")
+          const button = this.el.querySelector("[data-password-toggle]")
+
+          input.type = this.visible ? "text" : "password"
+          button.setAttribute("aria-label", this.visible ? "Ocultar senha" : "Mostrar senha")
+          button.setAttribute("aria-pressed", String(this.visible))
+          this.el.querySelector("[data-password-show]").classList.toggle("hidden", this.visible)
+          this.el.querySelector("[data-password-hide]").classList.toggle("hidden", !this.visible)
+        }
+      }
+    </script>
+    """
+  end
+
   # All other inputs text, datetime-local, url, password, etc. are handled here...
   def input(assigns) do
     ~H"""
-    <div class="fieldset mb-2">
-      <label for={@id}>
-        <span :if={@label} class="label mb-1">{@label}</span>
+    <div class="mb-4">
+      <label for={@id} class="block">
+        <span :if={@label} class={label_class()}>{@label}</span>
         <input
           type={@type}
           name={@name}
           id={@id}
           value={Phoenix.HTML.Form.normalize_value(@type, @value)}
           class={[
-            @class || "w-full input",
-            @errors != [] && (@error_class || "input-error")
+            @class || field_class(),
+            @errors != [] && (@error_class || error_field_class())
           ]}
           {@rest}
         />
@@ -345,11 +492,43 @@ defmodule LiveQuizWeb.CoreComponents do
   defp checked_option?(nil, _option_value), do: false
   defp checked_option?(value, option_value), do: to_string(value) == to_string(option_value)
 
+  # The look of a form control, in one place. Every field here renders it, and
+  # `LiveQuizWeb.UI.Input` renders the same recipe for the bare inputs of the
+  # design system — same height, same radius, same focus ring — so a form built
+  # from either reads as one form.
+  defp field_class do
+    "flex h-10 w-full rounded-md border border-input bg-background px-3 text-sm " <>
+      "placeholder:text-muted-foreground focus-visible:border-ring " <>
+      "focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-hidden " <>
+      "disabled:cursor-not-allowed disabled:opacity-50"
+  end
+
+  # A refused field is announced twice: in colour here, and in words by
+  # `error/1` below it. Colour alone would leave the message to whoever can see
+  # red.
+  defp error_field_class do
+    "border-destructive focus-visible:border-destructive focus-visible:ring-destructive/30"
+  end
+
+  defp label_class, do: "mb-1.5 block text-sm leading-none font-medium"
+
+  defp checkbox_class do
+    "size-4 shrink-0 rounded-sm border border-input accent-primary " <>
+      "focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-hidden " <>
+      "disabled:cursor-not-allowed disabled:opacity-50"
+  end
+
+  defp radio_class do
+    "size-4 shrink-0 border-input accent-primary " <>
+      "focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-hidden " <>
+      "disabled:cursor-not-allowed disabled:opacity-50"
+  end
+
   # Helper used by inputs to generate form errors
   defp error(assigns) do
     ~H"""
-    <p class="mt-1.5 flex gap-2 items-center text-sm text-error">
-      <.icon name="hero-exclamation-circle" class="size-5" />
+    <p class="mt-1.5 flex items-center gap-1.5 text-sm text-destructive">
+      <.icon name="hero-exclamation-circle" class="size-4 shrink-0" />
       {render_slot(@inner_block)}
     </p>
     """
@@ -384,30 +563,38 @@ defmodule LiveQuizWeb.CoreComponents do
     ~H"""
     <div
       id={@id}
-      class="modal modal-open"
+      class="fixed inset-0 z-50 flex items-end justify-center overflow-y-auto bg-black/50 p-4 backdrop-blur-sm sm:items-center"
       role="dialog"
       aria-modal="true"
       aria-labelledby={"#{@id}-title"}
       phx-window-keydown={@on_cancel}
       phx-key="escape"
     >
-      <div class="modal-box" phx-mounted={JS.focus_first()} phx-click-away={@on_cancel}>
+      <div
+        class="animate-in fade-in-0 zoom-in-95 w-full max-w-lg rounded-lg border border-border bg-popover p-6 text-popover-foreground shadow-lg duration-200"
+        phx-mounted={JS.focus_first()}
+        phx-click-away={@on_cancel}
+      >
         <div class="flex items-start justify-between gap-4">
-          <h2 id={"#{@id}-title"} class="text-lg font-semibold">{@title}</h2>
+          <h2 id={"#{@id}-title"} class="text-lg leading-none font-semibold tracking-tight">
+            {@title}
+          </h2>
 
           <button
             type="button"
             phx-click={@on_cancel}
-            class="btn btn-ghost btn-sm btn-circle"
+            class="-mt-1 -mr-1 rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-hidden"
             aria-label="Fechar"
           >
             <.icon name="hero-x-mark" class="size-5" />
           </button>
         </div>
 
-        <div class="mt-4">{render_slot(@inner_block)}</div>
+        <div class="mt-4 text-sm">{render_slot(@inner_block)}</div>
 
-        <div :if={@actions != []} class="modal-action">{render_slot(@actions)}</div>
+        <div :if={@actions != []} class="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+          {render_slot(@actions)}
+        </div>
       </div>
     </div>
     """
@@ -447,12 +634,15 @@ defmodule LiveQuizWeb.CoreComponents do
 
   def header(assigns) do
     ~H"""
-    <header class={[@actions != [] && "flex items-center justify-between gap-6", "pb-4"]}>
-      <div>
-        <h1 class="text-lg font-semibold leading-8">
+    <header class={[
+      @actions != [] && "flex flex-wrap items-start justify-between gap-4",
+      "pb-4"
+    ]}>
+      <div class="min-w-0 space-y-1">
+        <h1 class="text-2xl font-semibold tracking-tight text-balance">
           {render_slot(@inner_block)}
         </h1>
-        <p :if={@subtitle != []} class="text-sm text-base-content/70">
+        <p :if={@subtitle != []} class="text-sm text-muted-foreground">
           {render_slot(@subtitle)}
         </p>
       </div>
@@ -497,34 +687,50 @@ defmodule LiveQuizWeb.CoreComponents do
       end
 
     ~H"""
-    <table class="table table-zebra">
-      <thead>
-        <tr>
-          <th :for={col <- @col}>{col[:label]}</th>
-          <th :if={@action != []}>
-            <span class="sr-only">{gettext("Actions")}</span>
-          </th>
-        </tr>
-      </thead>
-      <tbody id={@id} phx-update={is_struct(@rows, Phoenix.LiveView.LiveStream) && "stream"}>
-        <tr :for={row <- @rows} id={@row_id && @row_id.(row)}>
-          <td
-            :for={col <- @col}
-            phx-click={@row_click && @row_click.(row)}
-            class={@row_click && "hover:cursor-pointer"}
+    <div class="w-full overflow-x-auto">
+      <table class="w-full caption-bottom text-sm">
+        <thead>
+          <tr class="border-b border-border">
+            <th
+              :for={col <- @col}
+              scope="col"
+              class="h-10 px-3 text-left align-middle font-medium text-muted-foreground"
+            >
+              {col[:label]}
+            </th>
+            <th :if={@action != []} scope="col" class="h-10 px-3">
+              <span class="sr-only">{gettext("Actions")}</span>
+            </th>
+          </tr>
+        </thead>
+        <tbody
+          id={@id}
+          phx-update={is_struct(@rows, Phoenix.LiveView.LiveStream) && "stream"}
+          class="[&_tr:last-child]:border-0"
+        >
+          <tr
+            :for={row <- @rows}
+            id={@row_id && @row_id.(row)}
+            class="border-b border-border transition-colors hover:bg-muted/50"
           >
-            {render_slot(col, @row_item.(row))}
-          </td>
-          <td :if={@action != []} class="w-0 font-semibold">
-            <div class="flex gap-4">
-              <%= for action <- @action do %>
-                {render_slot(action, @row_item.(row))}
-              <% end %>
-            </div>
-          </td>
-        </tr>
-      </tbody>
-    </table>
+            <td
+              :for={col <- @col}
+              phx-click={@row_click && @row_click.(row)}
+              class={["px-3 py-3 align-middle", @row_click && "hover:cursor-pointer"]}
+            >
+              {render_slot(col, @row_item.(row))}
+            </td>
+            <td :if={@action != []} class="w-0 px-3 py-3 align-middle font-medium">
+              <div class="flex gap-2">
+                <%= for action <- @action do %>
+                  {render_slot(action, @row_item.(row))}
+                <% end %>
+              </div>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
     """
   end
 
@@ -544,12 +750,10 @@ defmodule LiveQuizWeb.CoreComponents do
 
   def list(assigns) do
     ~H"""
-    <ul class="list">
-      <li :for={item <- @item} class="list-row">
-        <div class="list-col-grow">
-          <div class="font-bold">{item.title}</div>
-          <div>{render_slot(item)}</div>
-        </div>
+    <ul class="divide-y divide-border">
+      <li :for={item <- @item} class="flex flex-col gap-0.5 py-3">
+        <div class="text-sm font-medium text-muted-foreground">{item.title}</div>
+        <div class="text-sm">{render_slot(item)}</div>
       </li>
     </ul>
     """

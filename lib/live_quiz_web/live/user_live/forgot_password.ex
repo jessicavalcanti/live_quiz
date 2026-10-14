@@ -24,35 +24,54 @@ defmodule LiveQuizWeb.UserLive.ForgotPassword do
     ~H"""
     <Layouts.app flash={@flash} current_scope={@current_scope}>
       <div class="mx-auto max-w-sm">
-        <div class="text-center">
-          <.header>
-            Esqueci minha senha
-            <:subtitle>Enviaremos um link de redefinição para o seu e-mail.</:subtitle>
-          </.header>
-        </div>
+        <.back_button
+          id="back-to-login"
+          navigate={~p"/users/log-in"}
+          label="Voltar para entrar"
+          class="mb-4"
+        />
 
-        <.form for={@form} id="forgot_password_form" phx-submit="send_instructions">
-          <.input
-            field={@form[:email]}
-            type="email"
-            label="E-mail"
-            autocomplete="username"
-            spellcheck="false"
-            required
-            phx-mounted={JS.focus()}
-          />
-          <.button phx-disable-with="Enviando..." class="btn btn-primary w-full">
-            Enviar instruções
-          </.button>
-        </.form>
+        <.card>
+          <.card_header class="text-center">
+            <.card_title>Esqueci minha senha</.card_title>
+            <.card_description>
+              Enviaremos um link de redefinição para o seu e-mail.
+            </.card_description>
+          </.card_header>
 
-        <p class="text-center text-sm mt-4">
-          <.link navigate={~p"/users/log-in"} class="font-semibold hover:underline">Entrar</.link>
-          |
-          <.link navigate={~p"/users/register"} class="font-semibold hover:underline">
-            Cadastrar-se
-          </.link>
-        </p>
+          <.card_content>
+            <.form for={@form} id="forgot_password_form" phx-submit="send_instructions">
+              <.input
+                field={@form[:email]}
+                type="email"
+                label="E-mail"
+                autocomplete="username"
+                spellcheck="false"
+                required
+                phx-mounted={JS.focus()}
+              />
+              <.button phx-disable-with="Enviando..." class="w-full">
+                Enviar instruções
+              </.button>
+            </.form>
+          </.card_content>
+
+          <.card_footer class="justify-center gap-4">
+            <.link
+              navigate={~p"/users/log-in"}
+              class="text-sm font-medium text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+            >
+              Entrar
+            </.link>
+            <.separator orientation="vertical" class="h-4" />
+            <.link
+              navigate={~p"/users/register"}
+              class="text-sm font-medium text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+            >
+              Cadastrar-se
+            </.link>
+          </.card_footer>
+        </.card>
       </div>
     </Layouts.app>
     """

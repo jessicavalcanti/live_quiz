@@ -9,40 +9,51 @@ defmodule LiveQuizWeb.UserLive.ResetPassword do
     ~H"""
     <Layouts.app flash={@flash} current_scope={@current_scope}>
       <div class="mx-auto max-w-sm">
-        <div class="text-center">
-          <.header>
-            Redefinir senha
-            <:subtitle>Escolha uma nova senha para a sua conta.</:subtitle>
-          </.header>
-        </div>
+        <.back_button
+          id="back-to-login"
+          navigate={~p"/users/log-in"}
+          label="Voltar para entrar"
+          class="mb-4"
+        />
 
-        <.form
-          for={@form}
-          id="reset_password_form"
-          phx-submit="reset_password"
-          phx-change="validate"
-        >
-          <.input
-            field={@form[:password]}
-            type="password"
-            label="Nova senha"
-            autocomplete="new-password"
-            spellcheck="false"
-            required
-            phx-mounted={JS.focus()}
-          />
-          <.input
-            field={@form[:password_confirmation]}
-            type="password"
-            label="Confirmação da nova senha"
-            autocomplete="new-password"
-            spellcheck="false"
-            required
-          />
-          <.button phx-disable-with="Redefinindo..." class="btn btn-primary w-full">
-            Redefinir senha
-          </.button>
-        </.form>
+        <.card>
+          <.card_header class="text-center">
+            <.card_title>Redefinir senha</.card_title>
+            <.card_description>Escolha uma nova senha para a sua conta.</.card_description>
+          </.card_header>
+
+          <.card_content>
+            <.form
+              for={@form}
+              id="reset_password_form"
+              phx-submit="reset_password"
+              phx-change="validate"
+            >
+              <.input
+                field={@form[:password]}
+                type="password"
+                label="Nova senha"
+                autocomplete="new-password"
+                spellcheck="false"
+                reveal_password
+                required
+                phx-mounted={JS.focus()}
+              />
+              <.input
+                field={@form[:password_confirmation]}
+                type="password"
+                label="Confirmação da nova senha"
+                autocomplete="new-password"
+                spellcheck="false"
+                reveal_password
+                required
+              />
+              <.button phx-disable-with="Redefinindo..." class="w-full">
+                Redefinir senha
+              </.button>
+            </.form>
+          </.card_content>
+        </.card>
       </div>
     </Layouts.app>
     """

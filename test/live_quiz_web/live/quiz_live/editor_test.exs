@@ -579,6 +579,13 @@ defmodule LiveQuizWeb.QuizLive.EditorTest do
                lv,
                ~s{#move-question-down-#{second.id}[aria-label="Mover pergunta 2 para baixo"]}
              )
+
+      for {direction, icon} <- [{"up", "arrow-up"}, {"down", "arrow-down"}] do
+        selector = "#move-question-#{direction}-#{second.id}"
+
+        assert has_element?(lv, "#{selector} .hero-#{icon}")
+        refute has_element?(lv, "#{selector}[phx-disable-with]")
+      end
     end
 
     test "the new order survives a reload", %{
@@ -943,7 +950,7 @@ defmodule LiveQuizWeb.QuizLive.EditorTest do
   defp displayed_positions(lv, questions) do
     Enum.map(questions, fn question ->
       lv
-      |> element("#question-#{question.id} span.badge")
+      |> element("#question-#{question.id} [data-question-position]")
       |> render()
       |> LazyHTML.from_fragment()
       |> LazyHTML.text()

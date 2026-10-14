@@ -41,10 +41,18 @@ defmodule LiveQuizWeb.GameHistoryLive.Index do
     ~H"""
     <Layouts.app flash={@flash} current_scope={@current_scope}>
       <div id="host-game-history-page" class="space-y-8">
+        <.back_button
+          id="back-to-quizzes"
+          navigate={~p"/quizzes"}
+          label="Voltar para Meus quizzes"
+        />
+
         <div>
-          <p class="text-sm font-semibold uppercase tracking-wider text-primary">Área do host</p>
-          <h1 class="mt-2 text-3xl font-bold">Histórico dos quizzes</h1>
-          <p class="mt-2 text-base-content/70">
+          <p class="text-sm font-medium tracking-wider text-muted-foreground uppercase">
+            Área do host
+          </p>
+          <h1 class="mt-2 text-3xl font-semibold tracking-tight">Histórico dos quizzes</h1>
+          <p class="mt-2 text-muted-foreground">
             Consulte partidas finalizadas e o desempenho dos participantes.
           </p>
         </div>
@@ -53,7 +61,7 @@ defmodule LiveQuizWeb.GameHistoryLive.Index do
           as={:filters}
           id="host-game-history-filters"
           phx-submit="filter"
-          class="grid gap-4 rounded-box bg-base-200 p-4 sm:grid-cols-4"
+          class="grid items-end gap-4 rounded-lg border border-border bg-muted/40 p-4 sm:grid-cols-4"
         >
           <.input
             name="filters[quiz_id]"
@@ -63,38 +71,45 @@ defmodule LiveQuizWeb.GameHistoryLive.Index do
           />
           <.input name="filters[from]" value={@filters["from"]} type="date" label="De" />
           <.input name="filters[to]" value={@filters["to"]} type="date" label="Até" />
-          <button class="btn btn-primary self-end" type="submit" id="apply-host-history-filters">Filtrar</button>
+          <.button type="submit" id="apply-host-history-filters" class="mb-4">Filtrar</.button>
         </.form>
         <div id="host-game-history" class="space-y-3">
           <%= if @page.entries == [] do %>
             <div
               id="host-game-history-empty"
-              class="rounded-box border border-dashed border-base-300 p-10 text-center"
+              class="rounded-lg border border-dashed border-border p-10 text-center"
             >
-              <h2 class="text-xl font-semibold">Nenhuma partida finalizada encontrada.</h2>
+              <h2 class="text-lg font-semibold tracking-tight">
+                Nenhuma partida finalizada encontrada.
+              </h2>
             </div>
           <% else %>
             <article
               :for={entry <- @page.entries}
               id={"host-game-history-#{entry.session.id}"}
-              class="rounded-box border border-base-300 bg-base-100 p-5 shadow-sm"
+              class="rounded-lg border border-border bg-card p-5 transition-colors hover:border-ring/40"
             >
               <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                 <div>
-                  <h2 class="font-semibold">{entry.quiz_title}</h2>
-                  <p class="text-sm text-base-content/60">
+                  <h2 class="font-medium">{entry.quiz_title}</h2>
+                  <p class="text-sm text-muted-foreground">
                     {Formatters.format_datetime(entry.session.finished_at)}
                   </p>
-                  <p class="mt-2 text-sm">
+                  <p class="mt-2 text-sm text-muted-foreground">
                     {entry.participants_count} participantes · Vencedor: {entry.winner_nickname || "—"}
                   </p>
                 </div>
-                <div class="flex items-center gap-4">
-                  <span class="badge badge-primary">{Formatters.format_score(entry.winner_score || 0)}</span>
-                  <.link
+                <div class="flex items-center gap-3">
+                  <.badge variant="secondary" class="tabular-nums">
+                    {Formatters.format_score(entry.winner_score || 0)}
+                  </.badge>
+                  <.button
                     navigate={~p"/game-history/#{entry.session.id}"}
-                    class="btn btn-outline btn-sm"
-                  >Ver ranking</.link>
+                    variant="outline"
+                    size="sm"
+                  >
+                    Ver ranking
+                  </.button>
                 </div>
               </div>
             </article>
@@ -106,17 +121,25 @@ defmodule LiveQuizWeb.GameHistoryLive.Index do
           class="flex justify-center gap-2"
           aria-label="Paginação"
         >
-          <.link
+          <.button
             :if={@page.page > 1}
             patch={pagination_path(@filters, @page.page - 1)}
-            class="btn btn-sm"
-          >Anterior</.link>
-          <span class="self-center text-sm">Página {@page.page} de {@page.total_pages}</span>
-          <.link
+            variant="outline"
+            size="sm"
+          >
+            Anterior
+          </.button>
+          <span class="self-center text-sm text-muted-foreground">
+            Página {@page.page} de {@page.total_pages}
+          </span>
+          <.button
             :if={@page.page < @page.total_pages}
             patch={pagination_path(@filters, @page.page + 1)}
-            class="btn btn-sm"
-          >Próxima</.link>
+            variant="outline"
+            size="sm"
+          >
+            Próxima
+          </.button>
         </nav>
       </div>
     </Layouts.app>

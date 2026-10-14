@@ -174,7 +174,7 @@ defmodule LiveQuizWeb.QuizLive.QuestionFormComponent do
           :if={set_errors(@form) != []}
           id="question-set-errors"
           role="alert"
-          class="mb-4 rounded-lg border border-error/40 bg-error/10 p-3 text-sm text-error"
+          class="mb-4 rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive"
         >
           <p :for={message <- set_errors(@form)}>{message}</p>
         </div>
@@ -187,17 +187,31 @@ defmodule LiveQuizWeb.QuizLive.QuestionFormComponent do
           required
         />
 
-        <fieldset class="mt-4">
-          <legend class="mb-2 font-medium">Alternativas (marque a correta)</legend>
+        <fieldset class="mt-2">
+          <legend class="mb-2 text-sm leading-none font-medium">
+            Alternativas (marque a correta)
+          </legend>
 
-          <div class="space-y-3">
+          <div class="space-y-2">
+            <%!--
+              The radio and the text field belong to different form keys — the
+              radio carries `correct_position` while the text belongs to the
+              option itself — so each row is one card holding both, which is also
+              what makes the chosen alternative visible as a row rather than as a
+              dot in a column of its own.
+            --%>
             <.inputs_for :let={option} field={@form[:answer_options]}>
-              <div class="flex items-start gap-3">
+              <div class={[
+                "flex items-start gap-3 rounded-lg border p-3 transition-colors",
+                @correct_position == option_position(option) &&
+                  "border-success/50 bg-success/5",
+                @correct_position != option_position(option) && "border-border"
+              ]}>
                 <.input field={option[:position]} type="hidden" />
 
                 <label
                   for={"question-correct-#{option_position(option)}"}
-                  class="mt-9 flex shrink-0 items-center gap-2"
+                  class="mt-8 flex shrink-0 cursor-pointer items-center gap-2"
                 >
                   <input
                     type="radio"
@@ -205,9 +219,9 @@ defmodule LiveQuizWeb.QuizLive.QuestionFormComponent do
                     name="question[correct_position]"
                     value={option_position(option)}
                     checked={@correct_position == option_position(option)}
-                    class="radio radio-primary"
+                    class="size-4 shrink-0 accent-primary focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-hidden"
                   />
-                  <span class="font-semibold">{letter(option_position(option))}</span>
+                  <span class="text-sm font-semibold">{letter(option_position(option))}</span>
                   <span class="sr-only">é a alternativa correta</span>
                 </label>
 
@@ -224,12 +238,12 @@ defmodule LiveQuizWeb.QuizLive.QuestionFormComponent do
           </div>
         </fieldset>
 
-        <div class="modal-action">
-          <.link patch={@patch} phx-click={JS.pop_focus()} class="btn btn-ghost">
+        <div class="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+          <.button patch={@patch} phx-click={JS.pop_focus()} variant="ghost">
             Cancelar
-          </.link>
+          </.button>
 
-          <.button variant="primary" phx-disable-with="Salvando...">
+          <.button phx-disable-with="Salvando...">
             Salvar pergunta
           </.button>
         </div>

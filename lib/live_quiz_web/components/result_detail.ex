@@ -20,6 +20,8 @@ defmodule LiveQuizWeb.ResultDetail do
 
   use Phoenix.Component
 
+  import LiveQuizWeb.UI.Badge, only: [badge: 1]
+
   alias LiveQuizWeb.Formatters
 
   attr :result, :map, required: true
@@ -40,24 +42,28 @@ defmodule LiveQuizWeb.ResultDetail do
       <.metrics result={@result} />
 
       <section aria-labelledby={"#{@id}-questions-heading"}>
-        <h2 id={"#{@id}-questions-heading"} class="text-2xl font-bold">{@heading}</h2>
+        <h2 id={"#{@id}-questions-heading"} class="text-xl font-semibold tracking-tight">
+          {@heading}
+        </h2>
 
         <div id={"#{@id}-questions"} class="mt-4 space-y-4">
           <article
             :for={{position, question} <- by_position(@result.question_results)}
             id={"#{@id}-question-#{position}"}
-            class="rounded-box border border-base-300 p-5"
+            class="rounded-lg border border-border bg-card p-5"
           >
             <div class="flex items-start justify-between gap-4">
-              <h3 class="font-semibold">Pergunta {position}: {question["question"]}</h3>
-              <span class={badge(question["correct"])}>{label(question["correct"])}</span>
+              <h3 class="font-medium">Pergunta {position}: {question["question"]}</h3>
+              <.badge variant={badge_variant(question["correct"])} class="shrink-0">
+                {label(question["correct"])}
+              </.badge>
             </div>
 
-            <p class="mt-3 text-sm text-base-content/70">
+            <p class="mt-3 text-sm text-muted-foreground">
               Resposta: {question["answer"] || "Não respondida"}
             </p>
 
-            <p class="mt-1 text-sm text-base-content/70">
+            <p class="mt-1 text-sm text-muted-foreground">
               Tempo: {Formatters.format_response_time(question["response_time_ms"] || 0)}
             </p>
           </article>
@@ -89,9 +95,9 @@ defmodule LiveQuizWeb.ResultDetail do
 
   defp metric(assigns) do
     ~H"""
-    <div class="rounded-box bg-base-200 p-4">
-      <p class="text-xs uppercase text-base-content/60">{@label}</p>
-      <p class="mt-1 font-bold">{@value}</p>
+    <div class="rounded-lg border border-border bg-card p-4">
+      <p class="text-xs font-medium tracking-wide text-muted-foreground uppercase">{@label}</p>
+      <p class="mt-1 font-semibold tabular-nums">{@value}</p>
     </div>
     """
   end
@@ -108,7 +114,7 @@ defmodule LiveQuizWeb.ResultDetail do
   defp label(false), do: "Incorreta"
   defp label(nil), do: "Sem resposta"
 
-  defp badge(true), do: "badge badge-success"
-  defp badge(false), do: "badge badge-error"
-  defp badge(nil), do: "badge badge-ghost"
+  defp badge_variant(true), do: "success"
+  defp badge_variant(false), do: "destructive"
+  defp badge_variant(nil), do: "secondary"
 end

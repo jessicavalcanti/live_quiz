@@ -10,62 +10,102 @@ defmodule LiveQuizWeb.UserLive.Settings do
   def render(assigns) do
     ~H"""
     <Layouts.app flash={@flash} current_scope={@current_scope}>
-      <div class="text-center">
+      <.back_button
+        id="back-to-quizzes"
+        navigate={~p"/quizzes"}
+        label="Voltar para Meus quizzes"
+        class="mb-4"
+      />
+
+      <div class="mx-auto max-w-2xl space-y-6">
         <.header>
           Configurações da conta
           <:subtitle>Gerencie o e-mail e a senha da sua conta</:subtitle>
         </.header>
+
+        <%!--
+          The two forms post to different places — the e-mail change stays in the
+          LiveView, the password change submits for real so the session cookie is
+          rotated — so each gets its own card instead of a single page of fields
+          with one divider between them.
+        --%>
+        <.card>
+          <.card_header>
+            <.card_title class="text-lg">E-mail</.card_title>
+            <.card_description>
+              Trocar o e-mail pede confirmação no endereço novo antes de valer.
+            </.card_description>
+          </.card_header>
+
+          <.card_content>
+            <.form
+              for={@email_form}
+              id="email_form"
+              phx-submit="update_email"
+              phx-change="validate_email"
+            >
+              <.input
+                field={@email_form[:email]}
+                type="email"
+                label="E-mail"
+                autocomplete="username"
+                spellcheck="false"
+                required
+              />
+              <.button phx-disable-with="Alterando...">Alterar e-mail</.button>
+            </.form>
+          </.card_content>
+        </.card>
+
+        <.card>
+          <.card_header>
+            <.card_title class="text-lg">Senha</.card_title>
+            <.card_description>
+              Ao salvar, você segue conectado neste dispositivo e as outras sessões caem.
+            </.card_description>
+          </.card_header>
+
+          <.card_content>
+            <.form
+              for={@password_form}
+              id="password_form"
+              action={~p"/users/update-password"}
+              method="post"
+              phx-change="validate_password"
+              phx-submit="update_password"
+              phx-trigger-action={@trigger_submit}
+            >
+              <input
+                name={@password_form[:email].name}
+                type="hidden"
+                id="hidden_user_email"
+                spellcheck="false"
+                value={@current_email}
+              />
+              <.input
+                field={@password_form[:password]}
+                type="password"
+                label="Nova senha"
+                autocomplete="new-password"
+                spellcheck="false"
+                reveal_password
+                required
+              />
+              <.input
+                field={@password_form[:password_confirmation]}
+                type="password"
+                label="Confirmação da nova senha"
+                autocomplete="new-password"
+                spellcheck="false"
+                reveal_password
+              />
+              <.button phx-disable-with="Salvando...">
+                Salvar senha
+              </.button>
+            </.form>
+          </.card_content>
+        </.card>
       </div>
-
-      <.form for={@email_form} id="email_form" phx-submit="update_email" phx-change="validate_email">
-        <.input
-          field={@email_form[:email]}
-          type="email"
-          label="E-mail"
-          autocomplete="username"
-          spellcheck="false"
-          required
-        />
-        <.button variant="primary" phx-disable-with="Alterando...">Alterar e-mail</.button>
-      </.form>
-
-      <div class="divider" />
-
-      <.form
-        for={@password_form}
-        id="password_form"
-        action={~p"/users/update-password"}
-        method="post"
-        phx-change="validate_password"
-        phx-submit="update_password"
-        phx-trigger-action={@trigger_submit}
-      >
-        <input
-          name={@password_form[:email].name}
-          type="hidden"
-          id="hidden_user_email"
-          spellcheck="false"
-          value={@current_email}
-        />
-        <.input
-          field={@password_form[:password]}
-          type="password"
-          label="Nova senha"
-          autocomplete="new-password"
-          spellcheck="false"
-          required
-        />
-        <.input
-          field={@password_form[:password_confirmation]}
-          type="password"
-          label="Confirmação da nova senha"
-          autocomplete="new-password"
-          spellcheck="false"
-        />
-        <.button variant="primary" phx-disable-with="Salvando...">
-          Salvar senha
-        </.button>
-      </.form>
     </Layouts.app>
     """
   end

@@ -31,14 +31,18 @@ defmodule LiveQuizWeb.GameResultLive.Show do
     <Layouts.app flash={@flash} current_scope={@current_scope}>
       <.result_detail id="game-result-detail" result={@result} heading="Detalhes por pergunta">
         <:header>
-          <.link navigate={~p"/game-results"} class="link link-primary">
-            ← Voltar para minhas partidas
-          </.link>
+          <.back_button
+            id="back-to-game-results"
+            navigate={~p"/game-results"}
+            label="Voltar para minhas partidas"
+          />
 
           <div>
-            <p class="text-sm font-semibold tracking-wider text-primary uppercase">Resultado final</p>
-            <h1 class="mt-2 text-3xl font-bold">{@result.quiz_title}</h1>
-            <p class="mt-2 text-base-content/70">
+            <p class="text-sm font-medium tracking-wider text-muted-foreground uppercase">
+              Resultado final
+            </p>
+            <h1 class="mt-2 text-3xl font-semibold tracking-tight">{@result.quiz_title}</h1>
+            <p class="mt-2 text-muted-foreground">
               Realizada em {Formatters.format_datetime(@result.inserted_at)}
             </p>
           </div>

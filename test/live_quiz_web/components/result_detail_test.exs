@@ -47,9 +47,13 @@ defmodule LiveQuizWeb.ResultDetailTest do
     assert html =~ "Correta"
     assert html =~ "Incorreta"
     assert html =~ "Sem resposta"
-    assert html =~ "badge badge-success"
-    assert html =~ "badge badge-error"
-    assert html =~ "badge badge-ghost"
+    # Each of the three verdicts has to be visually distinct, which is what a
+    # reader uses to tell them apart without reading. The assertion is on the
+    # tokens the badge paints with rather than on a class name, so restyling
+    # the badge cannot fail this while the distinction holds.
+    assert html =~ "bg-success"
+    assert html =~ "bg-destructive"
+    assert html =~ "bg-secondary"
 
     # Quem não respondeu lê "Não respondida", e não um espaço em branco que
     # parece um erro de renderização.

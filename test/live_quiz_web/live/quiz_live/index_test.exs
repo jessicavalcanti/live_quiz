@@ -102,6 +102,27 @@ defmodule LiveQuizWeb.QuizLive.IndexTest do
       assert lv |> element("#quiz-#{filled.id}") |> render() =~ "5 perguntas"
       assert lv |> element("#quiz-#{filled.id}") |> render() =~ "Pronto para jogar"
 
+      # The row is asserted through its accessible names, not its classes: what
+      # the screen owes the user is an editable quiz, a startable one and a
+      # deletable one, and a design change should not be able to fail this test
+      # while all three still work.
+      assert has_element?(
+               lv,
+               ~s{#quiz-#{filled.id} a[aria-label="Editar quiz"]},
+               "Editar"
+             )
+
+      assert has_element?(
+               lv,
+               ~s{#quiz-#{filled.id} button[aria-label="Iniciar partida"]}
+             )
+
+      assert has_element?(
+               lv,
+               ~s{#quiz-#{filled.id} button[aria-label="Excluir quiz"]},
+               "Excluir"
+             )
+
       assert lv |> element("#quiz-#{empty.id}") |> render() =~ "Nenhuma pergunta"
       assert lv |> element("#quiz-#{empty.id}") |> render() =~ "Incompleto"
     end

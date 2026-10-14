@@ -27,6 +27,7 @@ defmodule LiveQuizWeb.ShareSession do
   use Phoenix.Component
 
   import LiveQuizWeb.CoreComponents, only: [icon: 1]
+  import LiveQuizWeb.UI.Button, only: [button: 1]
 
   alias LiveQuiz.Games.JoinCode
   alias Phoenix.HTML
@@ -49,49 +50,53 @@ defmodule LiveQuizWeb.ShareSession do
     <section
       id="share-session"
       aria-labelledby="share-session-title"
-      class={["rounded-2xl border border-base-300 p-8 text-center", @class]}
+      class={["rounded-xl border border-border bg-card p-8 text-center", @class]}
     >
       <h2
         id="share-session-title"
-        class="text-sm font-semibold tracking-[0.35em] text-base-content/70 uppercase"
+        class="text-xs font-medium tracking-[0.35em] text-muted-foreground uppercase"
       >
         Código da sala
       </h2>
 
       <p
         id="join-code"
-        class="mt-4 font-mono text-6xl font-black tracking-[0.25em] break-all sm:text-8xl"
+        class="mt-4 font-mono text-6xl font-bold tracking-[0.25em] break-all sm:text-8xl"
       >
         {@code}
       </p>
 
       <div class="mt-6 flex flex-col items-center gap-3">
-        <p id="join-url" class="max-w-full text-sm break-all text-base-content/70">{@url}</p>
+        <p id="join-url" class="max-w-full text-sm break-all text-muted-foreground">{@url}</p>
 
         <div class="flex flex-wrap justify-center gap-2">
-          <button
+          <.button
             type="button"
             id="copy-code"
+            variant="secondary"
+            size="sm"
+            class="gap-2"
             phx-hook=".CopyToClipboard"
             data-value={@code}
             data-event="copy_code"
             data-target="join-code"
-            class="btn btn-soft btn-sm"
           >
             <.icon name="hero-clipboard-document" class="size-4" /> Copiar código
-          </button>
+          </.button>
 
-          <button
+          <.button
             type="button"
             id="copy-link"
+            variant="secondary"
+            size="sm"
+            class="gap-2"
             phx-hook=".CopyToClipboard"
             data-value={@url}
             data-event="copy_link"
             data-target="join-url"
-            class="btn btn-soft btn-sm"
           >
             <.icon name="hero-link" class="size-4" /> Copiar link
-          </button>
+          </.button>
         </div>
 
         <script :type={Phoenix.LiveView.ColocatedHook} name=".CopyToClipboard">
@@ -137,12 +142,12 @@ defmodule LiveQuizWeb.ShareSession do
           id="join-qr-code"
           role="img"
           aria-label={"QR code com o link de entrada da sala #{@code}"}
-          class="w-48 rounded-xl bg-white p-3 sm:w-56"
+          class="w-48 rounded-lg border border-border bg-white p-3 sm:w-56"
         >
           {@qr_code}
         </div>
 
-        <figcaption class="text-sm text-base-content/70">
+        <figcaption class="text-sm text-muted-foreground">
           Aponte a câmera para entrar em {@code}.
         </figcaption>
       </figure>
