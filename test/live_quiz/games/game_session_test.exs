@@ -559,17 +559,17 @@ defmodule LiveQuiz.Games.GameSessionTest do
       assert reloaded.quiz_title == "Geografia"
     end
 
-    test "deleting the host deletes the rooms and nullifies the participations" do
+    test "deleting the host preserves closed rooms and removes its participations" do
       host = user_fixture()
-      hosted = game_session_fixture(%{host: host})
+      hosted = game_session_fixture(%{host: host, status: :finished})
 
       other_session = game_session_fixture()
       participation = participant_fixture(other_session, %{user: host})
 
       Repo.delete!(host)
 
-      refute Repo.get(GameSession, hosted.id)
-      assert Repo.get!(Participant, participation.id).user_id == nil
+      assert Repo.get!(GameSession, hosted.id).host_id == nil
+      refute Repo.get(Participant, participation.id)
     end
 
     test "the quiz knows the rooms created from it" do

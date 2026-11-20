@@ -497,6 +497,31 @@ Regras de negócio vivem nos **contextos** (`LiveQuiz.Accounts`, `LiveQuiz.Quizz
 
 ---
 
+## Retenção de histórico
+
+A política da [issue #153](https://github.com/jessicavalcanti/live_quiz/issues/153)
+está documentada em `LiveQuiz.Games.History`:
+
+- Excluir quiz preserva resultados e snapshots.
+- Excluir sala remove suas participações, respostas e resultados.
+- Excluir participação remove apenas seus dados individuais; resultados de terceiros
+  mantêm os valores e posições congelados no fim da partida.
+- Excluir conta remove suas participações e resultados, inclusive apelidos copiados.
+  Salas encerradas que ela hospedou ficam sem anfitrião e preservam o histórico dos
+  outros jogadores, acessível pelas autorizações existentes.
+
+Salas ativas precisam ser encerradas ou canceladas antes da exclusão do anfitrião.
+O banco rejeita atomicamente uma exclusão que deixaria uma sala ativa sem host.
+Ainda não existe tela ou endpoint de exclusão de conta nem purge automático.
+Texto livre e convidados sem vínculo com uma conta não recebem garantia de anonimização.
+
+A migração `20261120154738_enforce_history_retention` altera constraints sem copiar
+dados pessoais nem reescrever resultados. Aplicar na janela de manutenção, com
+backup e ensaio em cópia da base. Conferir contagens de salas, participações e
+resultados antes e depois: migrar não deve alterar nenhuma delas. O rollback é
+explicitamente recusado: identidades excluídas depois da migração não podem ser
+reconstruídas pela reversão do esquema.
+
 ## Documentação
 
 - [Plano das 4 fases](plataforma_quiz_4_fases.md)
