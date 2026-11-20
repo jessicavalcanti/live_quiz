@@ -16,15 +16,25 @@ defmodule LiveQuiz.Games.History do
 
   It is *not* durability against deleting the match or the participation. Those
   two references cascade, so removing a `game_sessions` or a `participants` row
-  removes the results hanging from it — and removing an account removes the
-  rooms it hosted, and with them everybody else's results from those rooms.
+  removes the results hanging from it. Account deletion preserves closed hosted
+  rooms and the results belonging to other players.
 
-  Nothing in the application deletes any of those today: there is no purge and
-  no account deletion. The reason to write it down is that the first feature to
-  do either will decide, by accident, what happens to history — and it should
-  decide it on purpose. Retention and anonymisation are the question, not
-  whether a foreign key cascades, and blocking the deletion of personal data in
-  the name of history is not the answer either.
+  Retention policy (#153): deleting a participation removes its answers and
+  result without changing other players' frozen scores or positions. Deleting
+  an account removes its participations and results, including copied nicknames.
+  Closed hosted matches survive with a null host reference and retain the other
+  players' history and its existing authorization rules.
+
+  Active hosted matches must first finish or cancel through the normal domain
+  flow. A database constraint rejects account deletion until then, atomically.
+  There is no account deletion endpoint or scheduled purge in this issue, and
+  no automatic retention period. A future deletion workflow must coordinate
+  locks and socket disconnection.
+
+  This removes account-linked records; it does not promise that arbitrary quiz
+  text or unlinked guest nicknames are anonymous. No new personal-data snapshots
+  are created. The migration changes constraints without rewriting results;
+  rollback is refused because deleted identities cannot be reconstructed.
 
   Who may read what is decided per row rather than per endpoint, because the
   same result is legitimately readable by three different people: the host of

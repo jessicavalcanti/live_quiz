@@ -6,10 +6,12 @@ defmodule LiveQuiz.Games.GameResult do
   metrics are the historical source of truth, so callers should only insert
   this schema once.
 
-  `quiz_id` and `user_id` are nullified when what they point at is deleted:
+  `quiz_id` is nullified when its quiz is deleted:
   the result outlives the quiz, which is why the title and the statements were
   copied into it. `game_session_id` and `participant_id` cascade instead, so a
-  result does not outlive the match or the participation it belongs to. See
+  result does not outlive the match or the participation it belongs to.
+  Deleting its account removes the result and its copied nickname. Deleting
+  the host preserves closed matches and other players' results. See
   `LiveQuiz.Games.History` for what that means for retention.
   """
 
