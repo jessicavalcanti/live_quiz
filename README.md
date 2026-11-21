@@ -525,6 +525,8 @@ reconstruídas pela reversão do esquema.
 ## Documentação
 
 - [Plano das 4 fases](plataforma_quiz_4_fases.md)
+- [Diagrama de classes](docs/diagramas/diagrama_classes.svg)
+- [Diagrama de casos de uso](docs/diagramas/diagrama_casos_de_uso.svg)
 - [Instruções de trabalho no repositório](AGENTS.md)
 - [Stories da Fase 1](https://github.com/jessicavalcanti/live_quiz/issues/1) — o épico e suas 16 sub-issues
 

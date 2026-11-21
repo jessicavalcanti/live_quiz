@@ -1,0 +1,355 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2600" height="3816" viewBox="0 0 2600 3816"><style>text{font-family:Arial;fill:#183044;font-size:17px}.head{font-size:20px;font-weight:bold}.field{font-family:monospace;font-size:16px}</style><rect width="2600" height="3816" fill="#f4f7fb"/>
+<text x="50" y="50" class="head">Live Quiz — classes persistidas / UML</text>
+<text x="50" y="85" class="">Linhas contínuas: associações UML, com multiplicidades nas extremidades. {PK}: chave primária; {FK}: chave estrangeira.</text>
+<text x="50" y="115" class="">As caixas «reference» repetem classes para evitar cruzamentos. Tipos lógicos Ecto; atributos virtuais omitidos.</text>
+<rect x="50" y="160" width="590" height="441" fill="white" stroke="#698398"/>
+<text x="65" y="190" class="head">Delivery</text>
+<text x="65" y="215" class="">«table» email_deliveries</text>
+<path d="M50 228h590" stroke="#698398"/>
+<text x="65" y="256" class="field">id : Integer {PK}</text>
+<text x="65" y="283" class="field">recipient : String</text>
+<text x="65" y="310" class="field">subject : String</text>
+<text x="65" y="337" class="field">body : String</text>
+<text x="65" y="364" class="field">kind : String</text>
+<text x="65" y="391" class="field">dedupe_key : String</text>
+<text x="65" y="418" class="field">attempts : Integer</text>
+<text x="65" y="445" class="field">deliver_after : DateTime</text>
+<text x="65" y="472" class="field">expires_at : DateTime</text>
+<text x="65" y="499" class="field">last_error : String</text>
+<text x="65" y="526" class="field">user_id : Integer {FK}</text>
+<text x="65" y="553" class="field">inserted_at : DateTime</text>
+<text x="65" y="580" class="field">updated_at : DateTime</text>
+<rect x="960" y="235" width="310" height="80" fill="#e7eff8" stroke="#698398"/>
+<text x="972" y="265" class="head">User</text>
+<text x="972" y="295" class="">«reference» id {PK}</text>
+<path d="M640 275H960" fill="none" stroke="#476980" stroke-width="2"/>
+<text x="648" y="265" class="">0..*</text>
+<text x="915" y="265" class="">0..1</text>
+<text x="650" y="299" class="">user_id</text>
+<rect x="1330" y="160" width="590" height="333" fill="white" stroke="#698398"/>
+<text x="1345" y="190" class="head">RefreshToken</text>
+<text x="1345" y="215" class="">«table» refresh_tokens</text>
+<path d="M1330 228h590" stroke="#698398"/>
+<text x="1345" y="256" class="field">id : Integer {PK}</text>
+<text x="1345" y="283" class="field">family_id : UUID</text>
+<text x="1345" y="310" class="field">token_hash : Binary</text>
+<text x="1345" y="337" class="field">expires_at : DateTime</text>
+<text x="1345" y="364" class="field">used_at : DateTime</text>
+<text x="1345" y="391" class="field">revoked_at : DateTime</text>
+<text x="1345" y="418" class="field">user_id : Integer {FK}</text>
+<text x="1345" y="445" class="field">inserted_at : DateTime</text>
+<text x="1345" y="472" class="field">updated_at : DateTime</text>
+<rect x="2240" y="235" width="310" height="80" fill="#e7eff8" stroke="#698398"/>
+<text x="2252" y="265" class="head">User</text>
+<text x="2252" y="295" class="">«reference» id {PK}</text>
+<path d="M1920 275H2240" fill="none" stroke="#476980" stroke-width="2"/>
+<text x="1928" y="265" class="">0..*</text>
+<text x="2195" y="265" class="">1</text>
+<text x="1930" y="299" class="">user_id</text>
+<rect x="50" y="656" width="590" height="306" fill="white" stroke="#698398"/>
+<text x="65" y="686" class="head">User</text>
+<text x="65" y="711" class="">«table» users</text>
+<path d="M50 724h590" stroke="#698398"/>
+<text x="65" y="752" class="field">id : Integer {PK}</text>
+<text x="65" y="779" class="field">name : String</text>
+<text x="65" y="806" class="field">email : String</text>
+<text x="65" y="833" class="field">hashed_password : String</text>
+<text x="65" y="860" class="field">confirmed_at : DateTime</text>
+<text x="65" y="887" class="field">auth_version : Integer</text>
+<text x="65" y="914" class="field">inserted_at : DateTime</text>
+<text x="65" y="941" class="field">updated_at : DateTime</text>
+<rect x="1330" y="656" width="590" height="279" fill="white" stroke="#698398"/>
+<text x="1345" y="686" class="head">UserToken</text>
+<text x="1345" y="711" class="">«table» users_tokens</text>
+<path d="M1330 724h590" stroke="#698398"/>
+<text x="1345" y="752" class="field">id : Integer {PK}</text>
+<text x="1345" y="779" class="field">token : Binary</text>
+<text x="1345" y="806" class="field">context : String</text>
+<text x="1345" y="833" class="field">sent_to : String</text>
+<text x="1345" y="860" class="field">authenticated_at : DateTime</text>
+<text x="1345" y="887" class="field">user_id : Integer {FK}</text>
+<text x="1345" y="914" class="field">inserted_at : DateTime</text>
+<rect x="2240" y="731" width="310" height="80" fill="#e7eff8" stroke="#698398"/>
+<text x="2252" y="761" class="head">User</text>
+<text x="2252" y="791" class="">«reference» id {PK}</text>
+<path d="M1920 771H2240" fill="none" stroke="#476980" stroke-width="2"/>
+<text x="1928" y="761" class="">0..*</text>
+<text x="2195" y="761" class="">1</text>
+<text x="1930" y="795" class="">user_id</text>
+<rect x="50" y="1017" width="590" height="630" fill="white" stroke="#698398"/>
+<text x="65" y="1047" class="head">GameResult</text>
+<text x="65" y="1072" class="">«table» game_results</text>
+<path d="M50 1085h590" stroke="#698398"/>
+<text x="65" y="1113" class="field">id : Integer {PK}</text>
+<text x="65" y="1140" class="field">quiz_title : String</text>
+<text x="65" y="1167" class="field">nickname : String</text>
+<text x="65" y="1194" class="field">score : Integer</text>
+<text x="65" y="1221" class="field">correct_answers : Integer</text>
+<text x="65" y="1248" class="field">incorrect_answers : Integer</text>
+<text x="65" y="1275" class="field">unanswered_questions : Integer</text>
+<text x="65" y="1302" class="field">answered_questions : Integer</text>
+<text x="65" y="1329" class="field">played_questions : Integer</text>
+<text x="65" y="1356" class="field">total_questions : Integer</text>
+<text x="65" y="1383" class="field">total_response_time_ms : Integer</text>
+<text x="65" y="1410" class="field">average_response_time_ms : Integer</text>
+<text x="65" y="1437" class="field">final_position : Integer</text>
+<text x="65" y="1464" class="field">question_results : Map</text>
+<text x="65" y="1491" class="field">game_session_id : Integer {FK}</text>
+<text x="65" y="1518" class="field">participant_id : Integer {FK}</text>
+<text x="65" y="1545" class="field">user_id : Integer {FK}</text>
+<text x="65" y="1572" class="field">quiz_id : Integer {FK}</text>
+<text x="65" y="1599" class="field">inserted_at : DateTime</text>
+<text x="65" y="1626" class="field">updated_at : DateTime</text>
+<rect x="960" y="1092" width="310" height="80" fill="#e7eff8" stroke="#698398"/>
+<text x="972" y="1122" class="head">GameSession</text>
+<text x="972" y="1152" class="">«reference» id {PK}</text>
+<path d="M640 1132H960" fill="none" stroke="#476980" stroke-width="2"/>
+<text x="648" y="1122" class="">0..*</text>
+<text x="915" y="1122" class="">1</text>
+<text x="650" y="1156" class="">gs_id</text>
+<rect x="960" y="1217" width="310" height="80" fill="#e7eff8" stroke="#698398"/>
+<text x="972" y="1247" class="head">Participant</text>
+<text x="972" y="1277" class="">«reference» id {PK}</text>
+<path d="M640 1257H960" fill="none" stroke="#476980" stroke-width="2"/>
+<text x="648" y="1247" class="">0..1</text>
+<text x="915" y="1247" class="">1</text>
+<text x="650" y="1281" class="">participant_id</text>
+<rect x="960" y="1342" width="310" height="80" fill="#e7eff8" stroke="#698398"/>
+<text x="972" y="1372" class="head">User</text>
+<text x="972" y="1402" class="">«reference» id {PK}</text>
+<path d="M640 1382H960" fill="none" stroke="#476980" stroke-width="2"/>
+<text x="648" y="1372" class="">0..*</text>
+<text x="915" y="1372" class="">0..1</text>
+<text x="650" y="1406" class="">user_id</text>
+<rect x="960" y="1467" width="310" height="80" fill="#e7eff8" stroke="#698398"/>
+<text x="972" y="1497" class="head">Quiz</text>
+<text x="972" y="1527" class="">«reference» id {PK}</text>
+<path d="M640 1507H960" fill="none" stroke="#476980" stroke-width="2"/>
+<text x="648" y="1497" class="">0..*</text>
+<text x="915" y="1497" class="">0..1</text>
+<text x="650" y="1531" class="">quiz_id</text>
+<rect x="1330" y="1017" width="590" height="340" fill="white" stroke="#698398"/>
+<text x="1345" y="1047" class="head">GameSessionAnswerOption</text>
+<text x="1345" y="1072" class="">«table» game_session_answer_options</text>
+<path d="M1330 1085h590" stroke="#698398"/>
+<text x="1345" y="1113" class="field">id : Integer {PK}</text>
+<text x="1345" y="1140" class="field">text : String</text>
+<text x="1345" y="1167" class="field">position : Integer</text>
+<text x="1345" y="1194" class="field">is_correct : Boolean</text>
+<text x="1345" y="1221" class="field">game_session_question_id : Integer {FK}</text>
+<text x="1345" y="1248" class="field">original_answer_option_id : Integer {FK}</text>
+<text x="1345" y="1275" class="field">inserted_at : DateTime</text>
+<text x="1345" y="1302" class="field">updated_at : DateTime</text>
+<rect x="2240" y="1092" width="310" height="80" fill="#e7eff8" stroke="#698398"/>
+<text x="2252" y="1122" class="head">GameSessionQuestion</text>
+<text x="2252" y="1152" class="">«reference» id {PK}</text>
+<path d="M1920 1132H2240" fill="none" stroke="#476980" stroke-width="2"/>
+<text x="1928" y="1122" class="">0..*</text>
+<text x="2195" y="1122" class="">1</text>
+<text x="1930" y="1156" class="">gs_question_id</text>
+<rect x="2240" y="1217" width="310" height="80" fill="#e7eff8" stroke="#698398"/>
+<text x="2252" y="1247" class="head">AnswerOption</text>
+<text x="2252" y="1277" class="">«reference» id {PK}</text>
+<path d="M1920 1257H2240" fill="none" stroke="#476980" stroke-width="2"/>
+<text x="1928" y="1247" class="">0..*</text>
+<text x="2195" y="1247" class="">0..1</text>
+<text x="1930" y="1281" class="">original_answer_option_id</text>
+<rect x="50" y="1702" width="590" height="590" fill="white" stroke="#698398"/>
+<text x="65" y="1732" class="head">Answer</text>
+<text x="65" y="1757" class="">«table» answers</text>
+<path d="M50 1770h590" stroke="#698398"/>
+<text x="65" y="1798" class="field">id : Integer {PK}</text>
+<text x="65" y="1825" class="field">answered_at : DateTime(µs)</text>
+<text x="65" y="1852" class="field">response_time_ms : Integer</text>
+<text x="65" y="1879" class="field">game_session_id : Integer {FK}</text>
+<text x="65" y="1906" class="field">game_session_question_id : Integer {FK}</text>
+<text x="65" y="1933" class="field">participant_id : Integer {FK}</text>
+<text x="65" y="1960" class="field">game_session_answer_option_id : Integer {FK}</text>
+<text x="65" y="1987" class="field">inserted_at : DateTime</text>
+<text x="65" y="2014" class="field">updated_at : DateTime</text>
+<rect x="960" y="1777" width="310" height="80" fill="#e7eff8" stroke="#698398"/>
+<text x="972" y="1807" class="head">GameSession</text>
+<text x="972" y="1837" class="">«reference» id {PK}</text>
+<path d="M640 1817H960" fill="none" stroke="#476980" stroke-width="2"/>
+<text x="648" y="1807" class="">0..*</text>
+<text x="915" y="1807" class="">1</text>
+<text x="650" y="1841" class="">gs_id</text>
+<rect x="960" y="1902" width="310" height="80" fill="#e7eff8" stroke="#698398"/>
+<text x="972" y="1932" class="head">GameSessionQuestion</text>
+<text x="972" y="1962" class="">«reference» id {PK}</text>
+<path d="M640 1942H960" fill="none" stroke="#476980" stroke-width="2"/>
+<text x="648" y="1932" class="">0..*</text>
+<text x="915" y="1932" class="">1</text>
+<text x="650" y="1966" class="">gs_question_id</text>
+<rect x="960" y="2027" width="310" height="80" fill="#e7eff8" stroke="#698398"/>
+<text x="972" y="2057" class="head">Participant</text>
+<text x="972" y="2087" class="">«reference» id {PK}</text>
+<path d="M640 2067H960" fill="none" stroke="#476980" stroke-width="2"/>
+<text x="648" y="2057" class="">0..*</text>
+<text x="915" y="2057" class="">1</text>
+<text x="650" y="2091" class="">participant_id</text>
+<rect x="960" y="2152" width="310" height="80" fill="#e7eff8" stroke="#698398"/>
+<text x="972" y="2182" class="head">GameSessionAnswerOption</text>
+<text x="972" y="2212" class="">«reference» id {PK}</text>
+<path d="M640 2192H960" fill="none" stroke="#476980" stroke-width="2"/>
+<text x="648" y="2182" class="">0..*</text>
+<text x="915" y="2182" class="">1</text>
+<text x="650" y="2216" class="">gs_answer_option_id</text>
+<rect x="1330" y="1702" width="590" height="387" fill="white" stroke="#698398"/>
+<text x="1345" y="1732" class="head">GameSessionQuestion</text>
+<text x="1345" y="1757" class="">«table» game_session_questions</text>
+<path d="M1330 1770h590" stroke="#698398"/>
+<text x="1345" y="1798" class="field">id : Integer {PK}</text>
+<text x="1345" y="1825" class="field">position : Integer</text>
+<text x="1345" y="1852" class="field">text : String</text>
+<text x="1345" y="1879" class="field">started_at : DateTime(µs)</text>
+<text x="1345" y="1906" class="field">ends_at : DateTime(µs)</text>
+<text x="1345" y="1933" class="field">closed_at : DateTime(µs)</text>
+<text x="1345" y="1960" class="field">scored_at : DateTime(µs)</text>
+<text x="1345" y="1987" class="field">game_session_id : Integer {FK}</text>
+<text x="1345" y="2014" class="field">question_id : Integer {FK}</text>
+<text x="1345" y="2041" class="field">inserted_at : DateTime</text>
+<text x="1345" y="2068" class="field">updated_at : DateTime</text>
+<rect x="2240" y="1777" width="310" height="80" fill="#e7eff8" stroke="#698398"/>
+<text x="2252" y="1807" class="head">GameSession</text>
+<text x="2252" y="1837" class="">«reference» id {PK}</text>
+<path d="M1920 1817H2240" fill="none" stroke="#476980" stroke-width="2"/>
+<text x="1928" y="1807" class="">0..*</text>
+<text x="2195" y="1807" class="">1</text>
+<text x="1930" y="1841" class="">gs_id</text>
+<rect x="2240" y="1902" width="310" height="80" fill="#e7eff8" stroke="#698398"/>
+<text x="2252" y="1932" class="head">Question</text>
+<text x="2252" y="1962" class="">«reference» id {PK}</text>
+<path d="M1920 1942H2240" fill="none" stroke="#476980" stroke-width="2"/>
+<text x="1928" y="1932" class="">0..*</text>
+<text x="2195" y="1932" class="">0..1</text>
+<text x="1930" y="1966" class="">question_id</text>
+<rect x="50" y="2347" width="590" height="549" fill="white" stroke="#698398"/>
+<text x="65" y="2377" class="head">Participant</text>
+<text x="65" y="2402" class="">«table» participants</text>
+<path d="M50 2415h590" stroke="#698398"/>
+<text x="65" y="2443" class="field">id : Integer {PK}</text>
+<text x="65" y="2470" class="field">nickname : String</text>
+<text x="65" y="2497" class="field">nickname_normalized : String</text>
+<text x="65" y="2524" class="field">access_token_hash : Binary</text>
+<text x="65" y="2551" class="field">connection_id : UUID</text>
+<text x="65" y="2578" class="field">joined_at : DateTime</text>
+<text x="65" y="2605" class="field">left_at : DateTime</text>
+<text x="65" y="2632" class="field">released_at : DateTime</text>
+<text x="65" y="2659" class="field">score : Integer</text>
+<text x="65" y="2686" class="field">correct_answers : Integer</text>
+<text x="65" y="2713" class="field">incorrect_answers : Integer</text>
+<text x="65" y="2740" class="field">total_response_time_ms : Integer</text>
+<text x="65" y="2767" class="field">final_position : Integer</text>
+<text x="65" y="2794" class="field">game_session_id : Integer {FK}</text>
+<text x="65" y="2821" class="field">user_id : Integer {FK}</text>
+<text x="65" y="2848" class="field">inserted_at : DateTime</text>
+<text x="65" y="2875" class="field">updated_at : DateTime</text>
+<rect x="960" y="2422" width="310" height="80" fill="#e7eff8" stroke="#698398"/>
+<text x="972" y="2452" class="head">GameSession</text>
+<text x="972" y="2482" class="">«reference» id {PK}</text>
+<path d="M640 2462H960" fill="none" stroke="#476980" stroke-width="2"/>
+<text x="648" y="2452" class="">0..*</text>
+<text x="915" y="2452" class="">1</text>
+<text x="650" y="2486" class="">gs_id</text>
+<rect x="960" y="2547" width="310" height="80" fill="#e7eff8" stroke="#698398"/>
+<text x="972" y="2577" class="head">User</text>
+<text x="972" y="2607" class="">«reference» id {PK}</text>
+<path d="M640 2587H960" fill="none" stroke="#476980" stroke-width="2"/>
+<text x="648" y="2577" class="">0..*</text>
+<text x="915" y="2577" class="">0..1</text>
+<text x="650" y="2611" class="">user_id</text>
+<rect x="1330" y="2347" width="590" height="603" fill="white" stroke="#698398"/>
+<text x="1345" y="2377" class="head">GameSession</text>
+<text x="1345" y="2402" class="">«table» game_sessions</text>
+<path d="M1330 2415h590" stroke="#698398"/>
+<text x="1345" y="2443" class="field">id : Integer {PK}</text>
+<text x="1345" y="2470" class="field">public_id : UUID</text>
+<text x="1345" y="2497" class="field">quiz_title : String</text>
+<text x="1345" y="2524" class="field">join_code : String</text>
+<text x="1345" y="2551" class="field">status : Enum</text>
+<text x="1345" y="2578" class="field">started_at : DateTime</text>
+<text x="1345" y="2605" class="field">finished_at : DateTime</text>
+<text x="1345" y="2632" class="field">host_connection_id : UUID</text>
+<text x="1345" y="2659" class="field">host_disconnected_at : DateTime</text>
+<text x="1345" y="2686" class="field">expires_at : DateTime</text>
+<text x="1345" y="2713" class="field">question_duration_seconds : Integer</text>
+<text x="1345" y="2740" class="field">current_question_position : Integer</text>
+<text x="1345" y="2767" class="field">current_question_started_at : DateTime(µs)</text>
+<text x="1345" y="2794" class="field">current_question_ends_at : DateTime(µs)</text>
+<text x="1345" y="2821" class="field">current_question_closed_at : DateTime(µs)</text>
+<text x="1345" y="2848" class="field">quiz_id : Integer {FK}</text>
+<text x="1345" y="2875" class="field">host_id : Integer {FK}</text>
+<text x="1345" y="2902" class="field">inserted_at : DateTime</text>
+<text x="1345" y="2929" class="field">updated_at : DateTime</text>
+<rect x="2240" y="2422" width="310" height="80" fill="#e7eff8" stroke="#698398"/>
+<text x="2252" y="2452" class="head">Quiz</text>
+<text x="2252" y="2482" class="">«reference» id {PK}</text>
+<path d="M1920 2462H2240" fill="none" stroke="#476980" stroke-width="2"/>
+<text x="1928" y="2452" class="">0..*</text>
+<text x="2195" y="2452" class="">0..1</text>
+<text x="1930" y="2486" class="">quiz_id</text>
+<rect x="2240" y="2547" width="310" height="80" fill="#e7eff8" stroke="#698398"/>
+<text x="2252" y="2577" class="head">User</text>
+<text x="2252" y="2607" class="">«reference» id {PK}</text>
+<path d="M1920 2587H2240" fill="none" stroke="#476980" stroke-width="2"/>
+<text x="1928" y="2577" class="">0..*</text>
+<text x="2195" y="2577" class="">1</text>
+<text x="1930" y="2611" class="">host_id</text>
+<rect x="50" y="3005" width="590" height="252" fill="white" stroke="#698398"/>
+<text x="65" y="3035" class="head">Question</text>
+<text x="65" y="3060" class="">«table» questions</text>
+<path d="M50 3073h590" stroke="#698398"/>
+<text x="65" y="3101" class="field">id : Integer {PK}</text>
+<text x="65" y="3128" class="field">text : String</text>
+<text x="65" y="3155" class="field">position : Integer</text>
+<text x="65" y="3182" class="field">quiz_id : Integer {FK}</text>
+<text x="65" y="3209" class="field">inserted_at : DateTime</text>
+<text x="65" y="3236" class="field">updated_at : DateTime</text>
+<rect x="960" y="3080" width="310" height="80" fill="#e7eff8" stroke="#698398"/>
+<text x="972" y="3110" class="head">Quiz</text>
+<text x="972" y="3140" class="">«reference» id {PK}</text>
+<path d="M640 3120H960" fill="none" stroke="#476980" stroke-width="2"/>
+<text x="648" y="3110" class="">0..*</text>
+<text x="915" y="3110" class="">1</text>
+<text x="650" y="3144" class="">quiz_id</text>
+<rect x="1330" y="3005" width="590" height="252" fill="white" stroke="#698398"/>
+<text x="1345" y="3035" class="head">Quiz</text>
+<text x="1345" y="3060" class="">«table» quizzes</text>
+<path d="M1330 3073h590" stroke="#698398"/>
+<text x="1345" y="3101" class="field">id : Integer {PK}</text>
+<text x="1345" y="3128" class="field">title : String</text>
+<text x="1345" y="3155" class="field">description : String</text>
+<text x="1345" y="3182" class="field">owner_id : Integer {FK}</text>
+<text x="1345" y="3209" class="field">inserted_at : DateTime</text>
+<text x="1345" y="3236" class="field">updated_at : DateTime</text>
+<rect x="2240" y="3080" width="310" height="80" fill="#e7eff8" stroke="#698398"/>
+<text x="2252" y="3110" class="head">User</text>
+<text x="2252" y="3140" class="">«reference» id {PK}</text>
+<path d="M1920 3120H2240" fill="none" stroke="#476980" stroke-width="2"/>
+<text x="1928" y="3110" class="">0..*</text>
+<text x="2195" y="3110" class="">1</text>
+<text x="1930" y="3144" class="">owner_id</text>
+<rect x="50" y="3312" width="590" height="279" fill="white" stroke="#698398"/>
+<text x="65" y="3342" class="head">AnswerOption</text>
+<text x="65" y="3367" class="">«table» answer_options</text>
+<path d="M50 3380h590" stroke="#698398"/>
+<text x="65" y="3408" class="field">id : Integer {PK}</text>
+<text x="65" y="3435" class="field">text : String</text>
+<text x="65" y="3462" class="field">position : Integer</text>
+<text x="65" y="3489" class="field">is_correct : Boolean</text>
+<text x="65" y="3516" class="field">question_id : Integer {FK}</text>
+<text x="65" y="3543" class="field">inserted_at : DateTime</text>
+<text x="65" y="3570" class="field">updated_at : DateTime</text>
+<rect x="960" y="3387" width="310" height="80" fill="#e7eff8" stroke="#698398"/>
+<text x="972" y="3417" class="head">Question</text>
+<text x="972" y="3447" class="">«reference» id {PK}</text>
+<path d="M640 3427H960" fill="none" stroke="#476980" stroke-width="2"/>
+<text x="648" y="3417" class="">0..*</text>
+<text x="915" y="3417" class="">1</text>
+<text x="650" y="3451" class="">question_id</text>
+<text x="50" y="3666" class="head">Arquitetura: Web / API → Accounts, Quizzes, Games → Repo / PostgreSQL</text>
+<text x="50" y="3701" class="">Games: Lobby, Match, Room, Scoring e History; apoio de timers, presença, locks e telemetria.</text>
+<text x="50" y="3736" class="">gs_ nos rótulos abrevia game_session_. As propriedades nas tabelas mantêm o nome completo.</text>
+<text x="50" y="3771" class="">FK opcional: 0..1 na referência. Cascata de exclusão não implica composição UML. Não são representados índices e constraints compostas.</text>
+</svg>
