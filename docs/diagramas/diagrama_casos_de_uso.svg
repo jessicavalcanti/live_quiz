@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="2170" viewBox="0 0 1400 2170">
+<title>Casos de uso — Live Quiz</title><desc>Diagrama UML de casos de uso do Live Quiz com quatro papéis de usuário, atores externos e funcionalidades dentro da fronteira do sistema.</desc>
+<style>text{font-family:Arial,sans-serif;fill:#172c40;font-size:20px}.title{font-size:30px;font-weight:bold}.actor{font-size:22px;font-weight:bold}.note{font-size:17px;fill:#476177}.association{stroke:#45647b;stroke-width:1.8;fill:none}.stick{stroke:#172c40;stroke-width:2.5;fill:none;stroke-linecap:round}.usecase{fill:#e7f2ff;stroke:#45647b;stroke-width:1.8}</style>
+<rect x="1" y="1" width="1398" height="2168" fill="#fff" stroke="#45647b"/><path d="M1 58H350L380 30V1" fill="#f0f5fa" stroke="#45647b"/>
+<text x="20" y="37" class="actor">Casos de uso — Live Quiz</text>
+<rect x="420" y="90" width="920" height="1925" fill="#fbfdff" stroke="#45647b" stroke-width="2"/>
+<text x="880" y="135" text-anchor="middle" class="title">Live Quiz</text>
+<circle cx="180" cy="249" r="21" fill="#fff4d6" stroke="#172c40" stroke-width="2.5"/><path d="M180 270V332M143 294H217M180 332L151 377M180 332L209 377" class="stick"/><text x="180" y="412" text-anchor="middle" class="actor">Visitante</text><text x="180" y="441" text-anchor="middle" class="note">Acesso público</text>
+<path d="M230 314L610 185" class="association"/><ellipse cx="950" cy="185" rx="340" ry="36" class="usecase"/><text x="950" y="192" text-anchor="middle">Criar conta</text>
+<path d="M230 314L610 281" class="association"/><ellipse cx="950" cy="281" rx="340" ry="36" class="usecase"/><text x="950" y="288" text-anchor="middle">Confirmar cadastro por e-mail</text>
+<path d="M230 314L610 377" class="association"/><ellipse cx="950" cy="377" rx="340" ry="36" class="usecase"/><text x="950" y="384" text-anchor="middle">Entrar na conta</text>
+<path d="M230 314L610 473" class="association"/><ellipse cx="950" cy="473" rx="340" ry="36" class="usecase"/><text x="950" y="480" text-anchor="middle">Recuperar senha</text>
+<circle cx="180" cy="703" r="21" fill="#fff4d6" stroke="#172c40" stroke-width="2.5"/><path d="M180 724V786M143 748H217M180 786L151 831M180 786L209 831" class="stick"/><text x="180" y="866" text-anchor="middle" class="actor">Usuário autenticado</text><text x="180" y="895" text-anchor="middle" class="note">Conta e histórico</text>
+<path d="M230 768L610 639" class="association"/><ellipse cx="950" cy="639" rx="340" ry="36" class="usecase"/><text x="950" y="646" text-anchor="middle">Alterar e confirmar e-mail</text>
+<path d="M230 768L610 735" class="association"/><ellipse cx="950" cy="735" rx="340" ry="36" class="usecase"/><text x="950" y="742" text-anchor="middle">Alterar senha</text>
+<path d="M230 768L610 831" class="association"/><ellipse cx="950" cy="831" rx="340" ry="36" class="usecase"/><text x="950" y="838" text-anchor="middle">Consultar histórico pessoal e resultados</text>
+<path d="M230 768L610 927" class="association"/><ellipse cx="950" cy="927" rx="340" ry="36" class="usecase"/><text x="950" y="934" text-anchor="middle">Sair da conta</text>
+<circle cx="180" cy="1205" r="21" fill="#fff4d6" stroke="#172c40" stroke-width="2.5"/><path d="M180 1226V1288M143 1250H217M180 1288L151 1333M180 1288L209 1333" class="stick"/><text x="180" y="1368" text-anchor="middle" class="actor">Anfitrião</text><text x="180" y="1397" text-anchor="middle" class="note">Requer conta autenticada</text>
+<path d="M230 1270L610 1093" class="association"/><ellipse cx="950" cy="1093" rx="340" ry="36" class="usecase"/><text x="950" y="1100" text-anchor="middle">Criar, editar e excluir quizzes</text>
+<path d="M230 1270L610 1189" class="association"/><ellipse cx="950" cy="1189" rx="340" ry="36" class="usecase"/><text x="950" y="1196" text-anchor="middle">Gerenciar perguntas e alternativas</text>
+<path d="M230 1270L610 1285" class="association"/><ellipse cx="950" cy="1285" rx="340" ry="36" class="usecase"/><text x="950" y="1292" text-anchor="middle">Criar sala e acompanhar o lobby</text>
+<path d="M230 1270L610 1381" class="association"/><ellipse cx="950" cy="1381" rx="340" ry="36" class="usecase"/><text x="950" y="1388" text-anchor="middle">Iniciar, conduzir e encerrar partida</text>
+<path d="M230 1270L610 1477" class="association"/><ellipse cx="950" cy="1477" rx="340" ry="36" class="usecase"/><text x="950" y="1484" text-anchor="middle">Consultar histórico das salas e resultados</text>
+<circle cx="180" cy="1707" r="21" fill="#fff4d6" stroke="#172c40" stroke-width="2.5"/><path d="M180 1728V1790M143 1752H217M180 1790L151 1835M180 1790L209 1835" class="stick"/><text x="180" y="1870" text-anchor="middle" class="actor">Participante</text><text x="180" y="1899" text-anchor="middle" class="note">Pode jogar sem conta</text>
+<path d="M230 1772L610 1643" class="association"/><ellipse cx="950" cy="1643" rx="340" ry="36" class="usecase"/><text x="950" y="1650" text-anchor="middle">Entrar em sala com código e apelido</text>
+<path d="M230 1772L610 1739" class="association"/><ellipse cx="950" cy="1739" rx="340" ry="36" class="usecase"/><text x="950" y="1746" text-anchor="middle">Responder perguntas</text>
+<path d="M230 1772L610 1835" class="association"/><ellipse cx="950" cy="1835" rx="340" ry="36" class="usecase"/><text x="950" y="1842" text-anchor="middle">Acompanhar resultados e ranking</text>
+<path d="M230 1772L610 1931" class="association"/><ellipse cx="950" cy="1931" rx="340" ry="36" class="usecase"/><text x="950" y="1938" text-anchor="middle">Sair da sala ou retornar à participação</text>
+<text x="50" y="2055" class="note">Associação UML: linha contínua, sem indicar ordem de execução. Atores representam papéis, não pessoas distintas.</text>
+<text x="50" y="2086" class="note">Uma pessoa pode ser usuário autenticado, anfitrião ou participante em contextos diferentes.</text>
+<text x="50" y="2117" class="note">Escopo: acesso, conta e funcionalidades principais. Não há papel administrativo de gestão de usuários nas rotas atuais.</text>
+<text x="50" y="2148" class="note">Fonte: rotas web e API do projeto. Fluxos internos e detalhes técnicos de autenticação foram omitidos.</text></svg>
